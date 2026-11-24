@@ -1,7 +1,8 @@
 use super::*;
+use crate::lifecycle::TestDriver;
 use crate::server::http::tests::{
     assert_sse_wire_parity, assert_status, assert_wire, assert_wire_parity,
-    assert_wire_response_parity, exchange_wire, json_body, json_request, request,
+    assert_wire_response_parity, driver_endpoints, exchange_wire, json_body, json_request, request,
 };
 use crate::tests::internal_events_contract::final_journal;
 use tokio::{
@@ -16,6 +17,10 @@ fn with_candidate(server: ServerHandle, exercise: impl AsyncFnOnce(&ServerHandle
         .build()
         .unwrap()
         .block_on(async {
+            if matches!(server.test_driver, TestDriver::Candidate) {
+                exercise(&server, server.local_addr()).await;
+                return;
+            }
             let listener = AsyncListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
             let address = listener.local_addr().unwrap();
             let candidate = tokio::spawn(crate::server::serve_candidate(
@@ -32,7 +37,7 @@ fn with_candidate(server: ServerHandle, exercise: impl AsyncFnOnce(&ServerHandle
 #[test]
 fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
     let upstream = CatalogUpstream::start(200);
-    let (_directory, server) = catalog_server(&upstream);
+    let (_directory, server) = catalog_server_with_driver(&upstream, TestDriver::reference());
     with_candidate(server, async |server, candidate| {
         let old = server.local_addr();
         let port = old.port();
@@ -179,7 +184,11 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
         200,
         json!({"inputTokenLimit":1024,"outputTokenLimit":128}),
     );
-    let (directory, server) = metadata_server(&upstream);
+    let (directory, server) = metadata_server_at_with_driver(
+        upstream.address,
+        HttpClientPolicy::default(),
+        TestDriver::reference(),
+    );
     with_candidate(server, async |server, candidate| {
         let old = server.local_addr();
         let port = old.port();
@@ -235,27 +244,23 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
             br#"{"provider":"gemini","model":"gemini/alpha beta/preview"}"#,
         );
         for end_input in [true, false] {
-            let (legacy_reply, candidate_reply) = (
-                checked_metadata_reply(
-                    old,
-                    &wire,
-                    end_input,
-                    200,
-                    &upstream,
-                    "/v1beta/models/alpha%20beta%2Fpreview",
-                )
-                .await,
-                checked_metadata_reply(
-                    candidate,
-                    &wire,
-                    end_input,
-                    200,
-                    &upstream,
-                    "/v1beta/models/alpha%20beta%2Fpreview",
-                )
-                .await,
-            );
-            assert_wire_response_parity(&wire, &legacy_reply, &candidate_reply);
+            let mut replies = Vec::new();
+            for (_, address) in driver_endpoints(old, candidate) {
+                replies.push(
+                    checked_metadata_reply(
+                        address,
+                        &wire,
+                        end_input,
+                        200,
+                        &upstream,
+                        "/v1beta/models/alpha%20beta%2Fpreview",
+                    )
+                    .await,
+                );
+            }
+            for pair in replies.windows(2) {
+                assert_wire_response_parity(&wire, &pair[0], &pair[1]);
+            }
         }
         assert!(!directory.path().join("provider-model-lists").exists());
     });
@@ -264,7 +269,11 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
 #[test]
 fn metadata_upstream_rejection_matches_legacy_wire_on_the_candidate_listener() {
     let upstream = CatalogUpstream::start(429);
-    let (_directory, server) = metadata_server(&upstream);
+    let (_directory, server) = metadata_server_at_with_driver(
+        upstream.address,
+        HttpClientPolicy::default(),
+        TestDriver::reference(),
+    );
     with_candidate(server, async |server, candidate| {
         let old = server.local_addr();
         let wire = json_request(
@@ -273,25 +282,23 @@ fn metadata_upstream_rejection_matches_legacy_wire_on_the_candidate_listener() {
             &[&session_header(server)],
             br#"{"provider":"gemini","model":"rate-limited"}"#,
         );
-        let legacy_reply = checked_metadata_reply(
-            old,
-            &wire,
-            false,
-            429,
-            &upstream,
-            "/v1beta/models/rate-limited",
-        )
-        .await;
-        let candidate_reply = checked_metadata_reply(
-            candidate,
-            &wire,
-            false,
-            429,
-            &upstream,
-            "/v1beta/models/rate-limited",
-        )
-        .await;
-        assert_wire_response_parity(&wire, &legacy_reply, &candidate_reply);
+        let mut replies = Vec::new();
+        for (_, address) in driver_endpoints(old, candidate) {
+            replies.push(
+                checked_metadata_reply(
+                    address,
+                    &wire,
+                    false,
+                    429,
+                    &upstream,
+                    "/v1beta/models/rate-limited",
+                )
+                .await,
+            );
+        }
+        for pair in replies.windows(2) {
+            assert_wire_response_parity(&wire, &pair[0], &pair[1]);
+        }
     });
 }
 
@@ -324,87 +331,103 @@ async fn checked_metadata_reply(
 
 #[test]
 fn metadata_finishes_admitted_upstream_work_after_the_client_disconnects() {
-    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    upstream.set_nonblocking(true).unwrap();
-    let (directory, server) =
-        metadata_server_at(upstream.local_addr().unwrap(), HttpClientPolicy::default());
-    with_candidate(server, async |server, candidate| {
-        let upstream = AsyncListener::from_std(upstream).unwrap();
-        let old = server.local_addr();
-        let request = json_request(
-            old.port(),
-            "/api/models/metadata",
-            &[&session_header(server)],
-            br#"{"provider":"gemini","model":"disconnect"}"#,
+    for &driver in TestDriver::selected() {
+        let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        upstream.set_nonblocking(true).unwrap();
+        let (directory, server) = metadata_server_at_with_driver(
+            upstream.local_addr().unwrap(),
+            HttpClientPolicy::default(),
+            driver,
         );
-        for address in [old, candidate] {
-            timeout(Duration::from_secs(5), async {
-                let mut client = AsyncStream::connect(address).await.unwrap();
-                client.write_all(&request).await.unwrap();
-                let (peer, _) = upstream.accept().await.unwrap();
-                let mut peer = tokio::io::BufReader::new(peer);
-                let mut line = String::new();
-                peer.read_line(&mut line).await.unwrap();
-                assert_eq!(line, "GET /v1beta/models/disconnect HTTP/1.1\r\n");
-                loop {
-                    line.clear();
-                    assert_ne!(peer.read_line(&mut line).await.unwrap(), 0);
-                    if line == "\r\n" {
-                        break;
+        let address = server.local_addr();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let upstream = AsyncListener::from_std(upstream).unwrap();
+                let request = json_request(
+                    address.port(),
+                    "/api/models/metadata",
+                    &[&session_header(&server)],
+                    br#"{"provider":"gemini","model":"disconnect"}"#,
+                );
+                timeout(Duration::from_secs(5), async {
+                    let mut client = AsyncStream::connect(address).await.unwrap();
+                    client.write_all(&request).await.unwrap();
+                    let (peer, _) = upstream.accept().await.unwrap();
+                    let mut peer = tokio::io::BufReader::new(peer);
+                    let mut line = String::new();
+                    peer.read_line(&mut line).await.unwrap();
+                    assert_eq!(line, "GET /v1beta/models/disconnect HTTP/1.1\r\n");
+                    loop {
+                        line.clear();
+                        assert_ne!(peer.read_line(&mut line).await.unwrap(), 0);
+                        if line == "\r\n" {
+                            break;
+                        }
                     }
-                }
-                client.shutdown().await.unwrap();
-                drop(client);
-                let payload = br#"{"inputTokenLimit":1024,"outputTokenLimit":128}"#;
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    payload.len()
-                );
-                peer.get_mut().write_all(head.as_bytes()).await.unwrap();
-                peer.get_mut().write_all(payload).await.unwrap();
+                    client.shutdown().await.unwrap();
+                    drop(client);
+                    let payload = br#"{"inputTokenLimit":1024,"outputTokenLimit":128}"#;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len()
+                    );
+                    peer.get_mut().write_all(head.as_bytes()).await.unwrap();
+                    peer.get_mut().write_all(payload).await.unwrap();
+                })
+                .await
+                .unwrap();
+                let state = server.state.clone();
+                tokio::task::spawn_blocking(move || {
+                    assert!(
+                        state
+                            .lifecycle
+                            .admission
+                            .quiesce(0, Duration::from_secs(5))
+                            .is_some()
+                    );
+                })
+                .await
+                .unwrap();
+            });
+        server.shutdown().unwrap();
+        let records = final_journal(directory.path());
+        let completed: Vec<_> = records
+            .iter()
+            .filter(|record| {
+                record["event"] == "operation_finished"
+                    && record["fields"]["operation"] == "model_metadata"
             })
-            .await
-            .unwrap();
-            let state = server.state.clone();
-            tokio::task::spawn_blocking(move || {
-                assert!(
-                    state
-                        .lifecycle
-                        .admission
-                        .quiesce(0, Duration::from_secs(5))
-                        .is_some()
-                );
-            })
-            .await
-            .unwrap();
+            .collect();
+        assert_eq!(completed.len(), 1);
+        for record in completed {
+            let fields = &record["fields"];
+            assert_eq!(fields["outcome"], "completed");
+            assert!(
+                fields["request_id"]
+                    .as_str()
+                    .is_some_and(|id| records.iter().any(|record| {
+                        record["event"] == "http_request_completed"
+                            && record["fields"]["request_id"] == id
+                    }))
+            );
         }
-    });
-    let records = final_journal(directory.path());
-    let completed: Vec<_> = records
-        .iter()
-        .filter(|record| {
-            record["event"] == "operation_finished"
-                && record["fields"]["operation"] == "model_metadata"
-        })
-        .collect();
-    assert_eq!(completed.len(), 2);
-    for record in completed {
-        let fields = &record["fields"];
-        assert_eq!(fields["outcome"], "completed");
-        assert!(
-            fields["request_id"]
-                .as_str()
-                .is_some_and(|id| records.iter().any(|record| {
-                    record["event"] == "http_request_completed"
-                        && record["fields"]["request_id"] == id
-                }))
-        );
     }
 }
 
 #[test]
 fn calls_sse_matches_legacy_after_http_framing() {
-    let (_directory, server) = test_server();
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_root(&directory);
+    let server = ServerHandle::start_with_test_driver(
+        Ipv4Addr::LOCALHOST.into(),
+        &root.join("config.json"),
+        root.join("codex/auth.json"),
+        TestDriver::reference(),
+    )
+    .unwrap();
     with_candidate(server, async |server, candidate| {
         let old = server.local_addr();
         let wire = request(

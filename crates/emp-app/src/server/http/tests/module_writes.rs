@@ -83,10 +83,10 @@ fn normalize_clients(reply: Vec<u8>) -> Vec<u8> {
     })
 }
 
-fn fixture_with_decision() -> Fixture {
+fn fixture_with_decision(driver: TestDriver) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     install_panel_fixture(directory.path(), Module::Decision, "fixture panel");
-    Fixture::with_directory(directory)
+    Fixture::with_driver(directory, driver)
 }
 
 fn decision(value: &Value) -> &Value {
@@ -157,8 +157,8 @@ async fn compare_client_lists(pair: &Pair<'_>) -> [Value; 2] {
 
 #[test]
 fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
-    let old = fixture_with_decision();
-    fixture_with_decision().run_candidate(async |new, candidate| {
+    let old = fixture_with_decision(TestDriver::reference());
+    fixture_with_decision(TestDriver::Candidate).run_wire(async |new, candidate| {
         let pair = Pair {
             old: &old,
             new,
@@ -445,7 +445,7 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
 #[test]
 fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
     let old = Fixture::new();
-    Fixture::new().run_candidate(async |new, candidate| {
+    Fixture::new_with_driver(TestDriver::Candidate).run_wire(async |new, candidate| {
         let pair = Pair {
             old: &old,
             new,

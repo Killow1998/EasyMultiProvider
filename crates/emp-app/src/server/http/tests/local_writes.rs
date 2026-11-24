@@ -53,7 +53,7 @@ fn with_temporary_home(test_name: &str, test: impl FnOnce(&Path)) {
     );
 }
 
-fn fixture(home: &Path, executable: &Path) -> Fixture {
+fn fixture(home: &Path, executable: &Path, driver: TestDriver) -> Fixture {
     let directory = tempfile::tempdir_in(home).unwrap();
     let root = directory.path();
     let config = root.join("config.json");
@@ -67,12 +67,13 @@ fn fixture(home: &Path, executable: &Path) -> Fixture {
         .to_string(),
     )
     .unwrap();
-    let legacy = LegacyServer::start_with_config_options(
+    let legacy = LegacyServer::start_with_test_options(
         LOOPBACK.ip(),
-        0,
         &config,
-        executable.to_str().unwrap(),
         root.join("codex/auth.json"),
+        driver,
+        executable.to_str().unwrap(),
+        None,
     )
     .unwrap();
     Fixture {
@@ -214,8 +215,8 @@ fn local_writes_match_legacy_wire_and_read_back_state() {
 
 fn compare_local_writes(home: &Path) {
     let executable = home.join("fixture-runtime");
-    let old = fixture(home, &executable);
-    fixture(home, &executable).run_candidate(async |new, candidate| {
+    let old = fixture(home, &executable, TestDriver::reference());
+    fixture(home, &executable, TestDriver::Candidate).run_wire(async |new, candidate| {
         let pair = Pair { old: &old, new, candidate };
         let oversized = gzip(&vec![b' '; 5 * 1024 * 1024 + 1], Vec::new());
         for path in PATHS {
@@ -366,8 +367,8 @@ fn submitted_app_icon_write_finishes_once_after_disconnect() {
         "submitted_app_icon_write_finishes_once_after_disconnect",
         |home| {
             let executable = home.join("fixture-runtime");
-            let old = fixture(home, &executable);
-            fixture(home, &executable).run_candidate(async |new, candidate| {
+            let old = fixture(home, &executable, TestDriver::reference());
+            fixture(home, &executable, TestDriver::Candidate).run_wire(async |new, candidate| {
                 for (fixture, address) in [(&old, old.legacy.local_addr()), (new, candidate)] {
                     let state = &fixture.legacy.state;
                     let (locked, ready) = tokio::sync::oneshot::channel();

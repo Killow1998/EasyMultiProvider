@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::IO_TIMEOUT;
+use super::{IO_TIMEOUT, sse};
 
 pub struct Response {
     pub status: u16,
@@ -277,33 +277,32 @@ impl SseClient {
     }
 
     pub fn next_event(&mut self, deadline: Instant) -> io::Result<Option<Value>> {
-        let mut data = String::new();
+        let mut frame = String::new();
         loop {
             let mut line = Vec::new();
             loop {
                 match self.byte(deadline)? {
                     Some(b'\n') => break,
                     Some(byte) => line.push(byte),
-                    None if line.is_empty() && data.is_empty() => return Ok(None),
+                    None if line.is_empty() && frame.is_empty() => return Ok(None),
                     None => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
                 }
             }
             let line = String::from_utf8(line)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            let line = line.trim_end_matches('\r');
-            if line.is_empty() && !data.is_empty() {
-                if data.trim() == "[DONE]" {
-                    return Ok(None);
+            if line.trim_end_matches('\r').is_empty() {
+                if let Some(data) = sse::data(&frame).filter(|data| !data.is_empty()) {
+                    if data.trim() == "[DONE]" {
+                        return Ok(None);
+                    }
+                    return serde_json::from_str(&data)
+                        .map(Some)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
                 }
-                return serde_json::from_str(&data)
-                    .map(Some)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
-            }
-            if let Some(value) = line.strip_prefix("data:") {
-                if !data.is_empty() {
-                    data.push('\n');
-                }
-                data.push_str(value.strip_prefix(' ').unwrap_or(value));
+                frame.clear();
+            } else {
+                frame.push_str(&line);
+                frame.push('\n');
             }
         }
     }

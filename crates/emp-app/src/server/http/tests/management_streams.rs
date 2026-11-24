@@ -136,36 +136,45 @@ fn account_stream_snapshot_heartbeat_and_quit_match_while_updates_drain() {
         let state = &fixture.legacy.state;
         let session = fixture.session();
         let wire = request(fixture.port(), "GET", ACCOUNT_EVENTS, &[&session], b"");
-        let (mut old, mut new) = tokio::join!(
-            Stream::open(fixture.legacy.local_addr(), &wire, false, "no-store"),
-            Stream::open(candidate, &wire, true, "no-store"),
-        );
-        assert_eq!(old.headers, new.headers);
-        let (old_snapshot, new_snapshot) =
-            tokio::join!(account_snapshot(&mut old), account_snapshot(&mut new));
-        assert_eq!(old_snapshot, new_snapshot);
+        let mut streams = Vec::new();
+        let mut snapshots = Vec::new();
+        for (driver, address) in driver_endpoints(fixture.legacy.local_addr(), candidate) {
+            let mut stream = Stream::open(
+                address,
+                &wire,
+                matches!(driver, TestDriver::Candidate),
+                "no-store",
+            )
+            .await;
+            snapshots.push((stream.headers.clone(), account_snapshot(&mut stream).await));
+            streams.push(stream);
+        }
+        for snapshots in snapshots.windows(2) {
+            assert_eq!(snapshots[0], snapshots[1]);
+        }
         assert_eq!(state.lifecycle.admission.active_requests(), 0);
         assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
         state.backend.management_events.publish(Change::Integration);
-        let (first, second) = tokio::join!(old.next(DEADLINE), new.next(DEADLINE));
-        let expected = Some("event: integration-updated\ndata: {}\n\n".to_owned());
-        assert_eq!(first, expected);
-        assert_eq!(second, expected);
+        for stream in &mut streams {
+            assert_eq!(
+                stream.next(DEADLINE).await.as_deref(),
+                Some("event: integration-updated\ndata: {}\n\n")
+            );
+        }
 
         let started = Instant::now();
-        let heartbeat = async |stream: &mut Stream| {
+        for stream in &mut streams {
             let frame = stream.next(Duration::from_secs(22)).await;
             assert_eq!(frame.as_deref(), Some(": keep-alive\n\n"));
             assert!(
                 (Duration::from_millis(14_500)..Duration::from_secs(22))
                     .contains(&started.elapsed())
             );
-        };
-        tokio::join!(heartbeat(&mut old), heartbeat(&mut new));
+        }
 
         state.backend.management_events.publish(Change::Quit);
         state.backend.management_events.close();
-        for stream in [&mut old, &mut new] {
+        for stream in &mut streams {
             assert_eq!(
                 stream.next(DEADLINE).await.as_deref(),
                 Some("event: emp-exiting\ndata: {}\n\n")
@@ -290,7 +299,8 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                 b"",
             );
             let mut results = Vec::new();
-            for (endpoint, candidate) in [(fixture.legacy.local_addr(), false), (address, true)] {
+            for (driver, endpoint) in driver_endpoints(fixture.legacy.local_addr(), address) {
+                let candidate = matches!(driver, TestDriver::Candidate);
                 let (reached, release) = report_gate(fixture);
                 let mut stream = Stream::open(endpoint, &wire, candidate, "no-cache").await;
                 let first = stream.next(DEADLINE).await.unwrap();
@@ -328,7 +338,9 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                 .await
                 .unwrap();
             }
-            assert_eq!(results[0], results[1], "{path}");
+            for pair in results.windows(2) {
+                assert_eq!(pair[0], pair[1], "{path}");
+            }
         }
     });
 }
@@ -344,7 +356,8 @@ fn report_disconnect_cancels_query_and_releases_admission() {
                 &[&fixture.session(), ACCEPT],
                 b"",
             );
-            for (endpoint, candidate) in [(fixture.legacy.local_addr(), false), (address, true)] {
+            for (driver, endpoint) in driver_endpoints(fixture.legacy.local_addr(), address) {
+                let candidate = matches!(driver, TestDriver::Candidate);
                 let (reached, release) = report_gate(fixture);
                 let mut stream = Stream::open(endpoint, &wire, candidate, "no-cache").await;
                 let first = stream.next(DEADLINE).await.unwrap();
@@ -464,18 +477,28 @@ fn management_stream_access_and_selection_match_during_update_drain() {
             &[&session, "Accept: application/json"],
             b"",
         );
-        let (mut old, mut new) = tokio::join!(
-            Stream::open(fixture.legacy.local_addr(), &wire, false, "no-store"),
-            Stream::open(address, &wire, true, "no-store"),
-        );
-        let (old_snapshot, new_snapshot) =
-            tokio::join!(account_snapshot(&mut old), account_snapshot(&mut new));
-        assert_eq!(old_snapshot, new_snapshot);
+        let mut streams = Vec::new();
+        let mut snapshots = Vec::new();
+        for (driver, endpoint) in driver_endpoints(fixture.legacy.local_addr(), address) {
+            let mut stream = Stream::open(
+                endpoint,
+                &wire,
+                matches!(driver, TestDriver::Candidate),
+                "no-store",
+            )
+            .await;
+            snapshots.push(account_snapshot(&mut stream).await);
+            streams.push(stream);
+        }
+        for snapshots in snapshots.windows(2) {
+            assert_eq!(snapshots[0], snapshots[1]);
+        }
         let state = &fixture.legacy.state;
         state.sessions.rotate(system_now()).unwrap();
         state.backend.management_events.publish(Change::Quota);
-        assert!(old.next(DEADLINE).await.is_none());
-        assert!(new.next(DEADLINE).await.is_none());
+        for stream in &mut streams {
+            assert!(stream.next(DEADLINE).await.is_none());
+        }
     });
 }
 
@@ -497,18 +520,26 @@ fn report_query_failures_match_legacy_error_terminator() {
                 &[&fixture.session(), ACCEPT],
                 b"",
             );
-            let (mut old, mut new) = tokio::join!(
-                Stream::open(fixture.legacy.local_addr(), &wire, false, "no-cache"),
-                Stream::open(address, &wire, true, "no-cache"),
-            );
-            let error = old.next(DEADLINE).await.unwrap();
-            assert_eq!(
-                event(&error),
-                ("error", json!({"error":{"message":message}}))
-            );
-            assert_eq!(new.next(DEADLINE).await.as_deref(), Some(error.as_str()));
-            assert!(old.next(DEADLINE).await.is_none());
-            assert!(new.next(DEADLINE).await.is_none());
+            let mut frames = Vec::new();
+            for (driver, endpoint) in driver_endpoints(fixture.legacy.local_addr(), address) {
+                let mut stream = Stream::open(
+                    endpoint,
+                    &wire,
+                    matches!(driver, TestDriver::Candidate),
+                    "no-cache",
+                )
+                .await;
+                let error = stream.next(DEADLINE).await.unwrap();
+                assert_eq!(
+                    event(&error),
+                    ("error", json!({"error":{"message":message}}))
+                );
+                assert!(stream.next(DEADLINE).await.is_none());
+                frames.push(error);
+            }
+            for frames in frames.windows(2) {
+                assert_eq!(frames[0], frames[1]);
+            }
         }
     });
 }

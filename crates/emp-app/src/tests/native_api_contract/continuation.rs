@@ -455,16 +455,11 @@ fn prefill_disconnect_waits_for_the_client_to_retry_on_both_listeners() {
     use crate::server::raw_tcp::{RawClient, read_websocket_frame, websocket_frame};
     use tokio::io::AsyncWriteExt;
 
-    for candidate in [false, true] {
+    for &driver in crate::lifecycle::TestDriver::selected() {
         let upstream = Upstream::with_fault(10 * 1024 * 1024, Fault::SilentPrefill);
-        let (_directory, server, model) = server(&upstream, true);
+        let (_directory, server, model) = fixture::server_with_driver(&upstream, true, driver);
+        let address = server.local_addr();
         let runtime = &server.state.backend.transport.runtime;
-        let (address, worker) = if candidate {
-            let (address, worker) = crate::server::http::tests::spawn_candidate(&server);
-            (address, Some(worker))
-        } else {
-            (server.local_addr(), None)
-        };
         let thread_id = "11111111-1111-4111-8111-111111111111";
         let request = json!({"type":"response.create","model":model,"input":initial_input()});
         let wire = format!(
@@ -519,10 +514,6 @@ fn prefill_disconnect_waits_for_the_client_to_retry_on_both_listeners() {
             retry.io.shutdown().await.unwrap();
             assert_eq!(retry.rest().await, b"\x88\x00");
         });
-        if let Some(worker) = worker {
-            server.state.request_shutdown();
-            runtime.block_on(worker).unwrap().unwrap();
-        }
         server.shutdown().unwrap();
         let stats = upstream.traffic.lock().unwrap();
         let mut expected = Sha256::new();

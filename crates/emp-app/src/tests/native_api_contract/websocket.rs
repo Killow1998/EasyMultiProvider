@@ -137,16 +137,16 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
 
 #[test]
 fn responses_websocket_disconnect_cancels_external_http_stream() {
-    external_http_stream_cancels_on_disconnect(false);
+    external_http_stream_cancels_on_disconnect(crate::lifecycle::TestDriver::reference());
 }
 
 #[cfg(unix)]
 #[test]
 fn candidate_websocket_streams_the_first_external_event_and_cancels_on_disconnect() {
-    external_http_stream_cancels_on_disconnect(true);
+    external_http_stream_cancels_on_disconnect(crate::lifecycle::TestDriver::Candidate);
 }
 
-fn external_http_stream_cancels_on_disconnect(candidate: bool) {
+fn external_http_stream_cancels_on_disconnect(driver: crate::lifecycle::TestDriver) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let (request_sender, request_ready) = mpsc::sync_channel::<()>(1);
@@ -204,15 +204,15 @@ fn external_http_stream_cancels_on_disconnect(candidate: bool) {
         .unwrap(),
     )
     .unwrap();
-    let server =
-        ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();
+    let server = ServerHandle::start_with_test_driver(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        &config,
+        root.join("codex/auth.json"),
+        driver,
+    )
+    .unwrap();
     let cookie = session_header(&server);
-    let (address, candidate) = if candidate {
-        let (address, worker) = crate::server::http::tests::spawn_candidate(&server);
-        (address, Some(worker))
-    } else {
-        (server.local_addr(), None)
-    };
+    let address = server.local_addr();
     let mut stream = TcpStream::connect(address).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -248,17 +248,6 @@ fn external_http_stream_cancels_on_disconnect(candidate: bool) {
         closed.recv_timeout(Duration::from_secs(5)).unwrap(),
         "EMP retained the external HTTP stream after the websocket client disconnected"
     );
-    if let Some(candidate) = candidate {
-        server.state.request_shutdown();
-        server
-            .state
-            .backend
-            .transport
-            .runtime
-            .block_on(candidate)
-            .unwrap()
-            .unwrap();
-    }
     server.shutdown().unwrap();
     worker.join().unwrap();
 }

@@ -92,7 +92,13 @@ impl RealtimeUpstream {
             .expect("upstream call received")
     }
 
-    pub(super) fn no_request(&self) -> bool {
+    #[cfg(unix)]
+    pub(crate) fn assert_only_call(&self) {
+        assert_eq!(self.observed().method, "POST");
+        assert!(self.request.try_recv().is_err());
+    }
+
+    pub(crate) fn no_request(&self) -> bool {
         matches!(self.request.try_recv(), Err(mpsc::TryRecvError::Empty))
     }
 }

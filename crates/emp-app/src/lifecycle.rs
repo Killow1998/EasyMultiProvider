@@ -20,6 +20,8 @@ use std::thread::{self, JoinHandle};
 
 pub(crate) struct ServerHandle {
     local_addr: SocketAddr,
+    #[cfg(test)]
+    pub(crate) test_driver: TestDriver,
     pub(crate) state: Arc<ServerState>,
     workers: Vec<JoinHandle<()>>,
     _service_owner: emp_state::IntegrationFileLock,

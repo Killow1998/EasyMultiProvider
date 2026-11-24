@@ -25,6 +25,9 @@ pub(crate) fn serve_for_test(
 use std::path::{Path, PathBuf};
 
 pub(crate) fn external_key() -> bool {
+    if cfg!(test) {
+        return false;
+    }
     [
         emp_state::filesystem::MASTER_KEY_ENV,
         emp_state::filesystem::MASTER_KEY_FILE_ENV,

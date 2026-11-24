@@ -69,7 +69,9 @@ async fn connect_submitted_write(
 ) -> (TcpStream, Option<tokio::task::JoinHandle<()>>) {
     use crate::server::{candidate_router, connection::drive_candidate};
 
-    if address == fixture.legacy.local_addr() {
+    if matches!(fixture.legacy.test_driver, TestDriver::Legacy)
+        && address == fixture.legacy.local_addr()
+    {
         return (TcpStream::connect(address).await.unwrap(), None);
     }
     let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
@@ -136,6 +138,9 @@ mod migration_writes;
 #[cfg(unix)]
 mod module_writes;
 #[cfg(unix)]
+#[path = "../../../tests/support/sse.rs"]
+mod sse;
+#[cfg(unix)]
 mod team_writes;
 #[cfg(unix)]
 mod websocket;
@@ -173,9 +178,20 @@ pub(crate) async fn assert_sse_wire_parity(
     new: SocketAddr,
     request: &[u8],
 ) -> Vec<u8> {
-    let (old, new) = tokio::join!(assert_sse_wire(old, request), assert_sse_wire(new, request));
-    assert_wire_response_parity(request, &old, &new);
-    new
+    let (old_reply, new_reply) = tokio::join!(
+        async {
+            if TestDriver::compares_drivers() {
+                Some(assert_sse_wire(old, request).await)
+            } else {
+                None
+            }
+        },
+        assert_sse_wire(new, request),
+    );
+    if let Some(old_reply) = old_reply {
+        assert_wire_response_parity(request, &old_reply, &new_reply);
+    }
+    new_reply
 }
 
 pub(crate) async fn assert_sse_wire(address: SocketAddr, request: &[u8]) -> Vec<u8> {
@@ -233,12 +249,35 @@ async fn assert_wire_parity_with(
     status: u16,
     check_reply: impl Fn(Vec<u8>) -> Vec<u8>,
 ) -> Vec<u8> {
-    let (old, new) = tokio::join!(
-        assert_wire_with(old, old_request, end_input, status, &check_reply),
+    let (old_reply, new_reply) = tokio::join!(
+        async {
+            if TestDriver::compares_drivers() {
+                Some(assert_wire_with(old, old_request, end_input, status, &check_reply).await)
+            } else {
+                None
+            }
+        },
         assert_wire_with(new, new_request, end_input, status, &check_reply),
     );
-    assert_wire_response_parity(old_request, &old, &new);
-    new
+    if let Some(old_reply) = old_reply {
+        assert_wire_response_parity(old_request, &old_reply, &new_reply);
+    }
+    new_reply
+}
+
+pub(crate) fn driver_endpoints<T: Copy>(
+    legacy: T,
+    candidate: T,
+) -> impl Iterator<Item = (TestDriver, T)> {
+    TestDriver::selected().iter().copied().map(move |driver| {
+        (
+            driver,
+            match driver {
+                TestDriver::Legacy => legacy,
+                TestDriver::Candidate => candidate,
+            },
+        )
+    })
 }
 
 pub(crate) fn assert_wire_response_parity(old_request: &[u8], old: &[u8], new: &[u8]) {
@@ -296,24 +335,6 @@ pub(crate) fn json_request(port: u16, path: &str, headers: &[&str], body: &[u8])
     request(port, "POST", path, &headers, body)
 }
 
-pub(crate) fn spawn_candidate(
-    legacy: &LegacyServer,
-) -> (
-    SocketAddr,
-    tokio::task::JoinHandle<Result<(), crate::server::ServeError>>,
-) {
-    let state = &legacy.state;
-    let runtime = &state.backend.transport.runtime;
-    let listener = runtime
-        .block_on(tokio::net::TcpListener::bind(LOOPBACK))
-        .unwrap();
-    let address = listener.local_addr().unwrap();
-    (
-        address,
-        runtime.spawn(crate::server::serve_candidate(listener, state.clone())),
-    )
-}
-
 struct Fixture {
     directory: tempfile::TempDir,
     legacy: LegacyServer,
@@ -322,11 +343,15 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        Self::with_directory(tempfile::tempdir().unwrap())
+        Self::new_with_driver(TestDriver::reference())
+    }
+
+    fn new_with_driver(driver: TestDriver) -> Self {
+        Self::with_driver(tempfile::tempdir().unwrap(), driver)
     }
 
     fn with_directory(directory: tempfile::TempDir) -> Self {
-        Self::with_driver(directory, TestDriver::Legacy)
+        Self::with_driver(directory, TestDriver::reference())
     }
 
     fn with_driver(directory: tempfile::TempDir, driver: TestDriver) -> Self {
@@ -371,6 +396,9 @@ impl Fixture {
     }
 
     fn run_candidate(self, test: impl AsyncFnOnce(&Self, SocketAddr)) {
+        if matches!(self.legacy.test_driver, TestDriver::Candidate) {
+            return self.run_wire(test);
+        }
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1109,17 +1137,19 @@ fn inspection_reads_match_legacy_wire_on_candidate_listener() {
                 b"",
             );
             let reply = if path == "/api/support-report" {
-                let (old, new) = tokio::join!(
-                    assert_wire_with(
+                let new =
+                    assert_wire_with(address, &wire, false, 200, checked_support_report).await;
+                if TestDriver::compares_drivers() {
+                    let old = assert_wire_with(
                         fixture.legacy.local_addr(),
                         &wire,
                         false,
                         200,
-                        checked_support_report
-                    ),
-                    assert_wire_with(address, &wire, false, 200, checked_support_report),
-                );
-                assert_eq!(old.1, new.1);
+                        checked_support_report,
+                    )
+                    .await;
+                    assert_eq!(old.1, new.1);
+                }
                 new.0
             } else {
                 fixture.parity(address, &wire, 200).await
@@ -1214,7 +1244,7 @@ fn checked_support_report(reply: Vec<u8>) -> (Vec<u8>, String) {
 
 #[test]
 fn legacy_account_event_stream_has_unframed_wire_prefix() {
-    Fixture::new().run(async |fixture, _| {
+    Fixture::new_with_driver(TestDriver::Legacy).run(async |fixture, _| {
         let wire = request(fixture.port(), "GET", "/api/accounts/events", &[&fixture.session(), "Accept: text/event-stream"], b"");
         let expected = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\n{}Connection: close\r\n\r\nevent: quota-updated\ndata: {{}}\n\n",
@@ -1252,69 +1282,59 @@ fn account_reads_match_legacy_wire_on_the_candidate_listener() {
     )
     .unwrap();
 
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async {
-            let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
-            let address = listener.local_addr().unwrap();
-            let candidate = tokio::spawn(crate::server::serve_candidate(listener, state.clone()));
-            let session = fixture.session();
-            let port = fixture.port();
-            for (path, field, missing, missing_status) in [
-                ("/api/accounts", "accounts", "/api/accounts/absent", 404),
+    fixture.run_candidate(async |fixture, address| {
+        let session = fixture.session();
+        let port = fixture.port();
+        for (path, field, missing, missing_status) in [
+            ("/api/accounts", "accounts", "/api/accounts/absent", 404),
+            (
+                "/api/accounts/%40native/models",
+                "models",
+                "/api/accounts/absent/models",
+                400,
+            ),
+            (
+                "/api/accounts/%40native/quota-history?range=all",
+                "series",
+                "/api/accounts/absent/quota-history",
+                404,
+            ),
+        ] {
+            let reply = fixture
+                .parity(address, &request(port, "GET", path, &[&session], b""), 200)
+                .await;
+            assert!(json_body(&reply)[field].is_array());
+            for (method, path, headers, status) in [
+                ("GET", path, [].as_slice(), 401),
+                ("GET", path, [&*session, &*session].as_slice(), 401),
                 (
-                    "/api/accounts/%40native/models",
-                    "models",
-                    "/api/accounts/absent/models",
-                    400,
+                    "GET",
+                    path,
+                    [&*session, "Origin: https://other.invalid"].as_slice(),
+                    403,
                 ),
-                (
-                    "/api/accounts/%40native/quota-history?range=all",
-                    "series",
-                    "/api/accounts/absent/quota-history",
-                    404,
-                ),
-            ] {
-                let reply = fixture
-                    .parity(address, &request(port, "GET", path, &[&session], b""), 200)
-                    .await;
-                assert!(json_body(&reply)[field].is_array());
-                for (method, path, headers, status) in [
-                    ("GET", path, [].as_slice(), 401),
-                    ("GET", path, [&*session, &*session].as_slice(), 401),
-                    (
-                        "GET",
-                        path,
-                        [&*session, "Origin: https://other.invalid"].as_slice(),
-                        403,
-                    ),
-                    ("GET", missing, [&*session].as_slice(), missing_status),
-                    ("HEAD", path, [&*session].as_slice(), 404),
-                ] {
-                    fixture
-                        .parity(address, &request(port, method, path, headers, b""), status)
-                        .await;
-                }
-            }
-            for (path, status) in [
-                ("/api/accounts/models", 400),
-                ("/api/accounts//quota-history", 404),
-                ("/api/accounts/%40native/quota-history?range=invalid", 400),
+                ("GET", missing, [&*session].as_slice(), missing_status),
+                ("HEAD", path, [&*session].as_slice(), 404),
             ] {
                 fixture
-                    .parity(
-                        address,
-                        &request(port, "GET", path, &[&session], b""),
-                        status,
-                    )
+                    .parity(address, &request(port, method, path, headers, b""), status)
                     .await;
             }
-            state.request_shutdown();
-            candidate.await.unwrap().unwrap();
-        });
-    fixture.legacy.shutdown().unwrap();
+        }
+        for (path, status) in [
+            ("/api/accounts/models", 400),
+            ("/api/accounts//quota-history", 404),
+            ("/api/accounts/%40native/quota-history?range=invalid", 400),
+        ] {
+            fixture
+                .parity(
+                    address,
+                    &request(port, "GET", path, &[&session], b""),
+                    status,
+                )
+                .await;
+        }
+    });
 }
 
 #[test]
@@ -1915,21 +1935,28 @@ fn insufficient_body_budget_matches_legacy_before_read() {
             "H03-memory",
         )
         .unwrap();
-        let legacy = TcpListener::bind(LOOPBACK).unwrap();
-        let legacy_address = legacy.local_addr().unwrap();
-        let legacy_limits = limits.clone();
-        let presentation = ErrorPresentation::new(&fixture.legacy.state);
-        let worker = tokio::task::spawn_blocking(move || {
-            let (mut stream, _) = legacy.accept().unwrap();
-            let raw = read_request_head(&mut stream).unwrap();
-            let parsed = parse_request(&raw.head).unwrap();
-            let error =
-                read_json_body_with_limits(&mut stream, parsed, raw.body_prefix, &legacy_limits)
-                    .expect_err("body budget rejects request");
-            let wire = body_error_response(error);
-            stream
-                .write_all(&presentation.http(&wire).unwrap_or(wire))
-                .unwrap();
+        let reference = TestDriver::compares_drivers().then(|| {
+            let legacy = TcpListener::bind(LOOPBACK).unwrap();
+            let legacy_address = legacy.local_addr().unwrap();
+            let legacy_limits = limits.clone();
+            let presentation = ErrorPresentation::new(&fixture.legacy.state);
+            let worker = tokio::task::spawn_blocking(move || {
+                let (mut stream, _) = legacy.accept().unwrap();
+                let raw = read_request_head(&mut stream).unwrap();
+                let parsed = parse_request(&raw.head).unwrap();
+                let error = read_json_body_with_limits(
+                    &mut stream,
+                    parsed,
+                    raw.body_prefix,
+                    &legacy_limits,
+                )
+                .expect_err("body budget rejects request");
+                let wire = body_error_response(error);
+                stream
+                    .write_all(&presentation.http(&wire).unwrap_or(wire))
+                    .unwrap();
+            });
+            (legacy_address, worker)
         });
         let router = with_entry_state(
             Router::new().route(
@@ -1956,11 +1983,15 @@ fn insufficient_body_budget_matches_legacy_before_read() {
             ],
             b"",
         );
-        let reply =
-            assert_wire_parity(legacy_address, runtime.local_addr(), &wire, false, 503).await;
+        let address = runtime.local_addr();
+        let reply = assert_wire(address, &wire, false, 503).await;
+        if let Some((legacy_address, worker)) = reference {
+            let old = assert_wire(legacy_address, &wire, false, 503).await;
+            assert_wire_response_parity(&wire, &old, &reply);
+            worker.await.unwrap();
+        }
         assert!(String::from_utf8_lossy(&reply).contains("\r\nRetry-After: 2\r\n"));
         assert_eq!(json_body(&reply)["error"]["memory"]["available_bytes"], 0);
-        worker.await.unwrap();
         runtime.shutdown().await.unwrap();
     });
 }
@@ -2082,13 +2113,19 @@ fn realtime_uses_its_own_auth_and_multipart_errors() {
 #[test]
 fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
     Fixture::new().run(async |fixture, _| {
-        let legacy = TcpListener::bind(LOOPBACK).unwrap();
-        let old = legacy.local_addr().unwrap();
-        let config = fixture.directory.path().join("config.json");
-        let worker = std::thread::spawn(move || {
-            crate::startup_recovery::serve_for_test(legacy, &config, "recovery-fixture").unwrap()
+        let reference = TestDriver::compares_drivers().then(|| {
+            let legacy = TcpListener::bind(LOOPBACK).unwrap();
+            let address = legacy.local_addr().unwrap();
+            let config = fixture.directory.path().join("config.json");
+            let worker = std::thread::spawn(move || {
+                crate::startup_recovery::serve_for_test(legacy, &config, "recovery-fixture")
+                    .unwrap()
+            });
+            (address, worker)
         });
-        let port = old.port();
+        let port = reference
+            .as_ref()
+            .map_or(fixture.port(), |(address, _)| address.port());
         let state = RecoveryAccess {
             port,
             token: Arc::from("recovery-fixture"),
@@ -2113,6 +2150,7 @@ fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
         let server = ServerHandle::bind_recovery(LOOPBACK, router, admission())
             .await
             .unwrap();
+        let address = server.local_addr();
         for (method, path, headers, status, code) in [
             (
                 "GET",
@@ -2151,10 +2189,17 @@ fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
             ),
         ] {
             let wire = request(port, method, path, &headers, b"");
-            let reply = assert_wire_parity(old, server.local_addr(), &wire, false, status).await;
+            let reply = assert_wire_parity(
+                reference.as_ref().map_or(address, |entry| entry.0),
+                address,
+                &wire,
+                false,
+                status,
+            )
+            .await;
             assert_eq!(json_body(&reply), json!({"error":code}));
         }
-        for address in [old, server.local_addr()] {
+        for address in reference.iter().map(|entry| entry.0).chain([address]) {
             assert!(
                 exchange_wire(address, b"PUT / HTTP/1.1\r\n\r\n", false)
                     .await
@@ -2168,8 +2213,17 @@ fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
             &["X-EMP-Recovery: recovery-fixture", "Content-Length: 0"],
             b"",
         );
-        assert_wire_parity(old, server.local_addr(), &exit, false, 200).await;
-        assert!(!worker.join().unwrap());
+        assert_wire_parity(
+            reference.as_ref().map_or(address, |entry| entry.0),
+            address,
+            &exit,
+            false,
+            200,
+        )
+        .await;
+        if let Some((_, worker)) = reference {
+            assert!(!worker.join().unwrap());
+        }
         server.shutdown().await.unwrap();
     });
 }
@@ -2236,19 +2290,17 @@ fn candidate_router_receives_original_query() {
 #[test]
 fn hyper_parse_rejection_uses_emp_response_before_dispatch() {
     Fixture::new().run(async |fixture, new| {
-        let legacy_accepts = request(
+        let wire = request(
             fixture.port(),
             "GET",
             "/healthz",
             &["Invalid Header: x"],
             b"",
         );
-        assert_status(
-            &exchange_wire(fixture.legacy.local_addr(), &legacy_accepts, false).await,
-            200,
-        );
-        let reply = exchange_wire(new, &legacy_accepts, false).await;
-        assert_status(&reply, 400);
+        if TestDriver::compares_drivers() {
+            assert_wire(fixture.legacy.local_addr(), &wire, false, 200).await;
+        }
+        let reply = assert_wire(new, &wire, false, 400).await;
         assert_eq!(reply, crate::http::response::bad_request_response());
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 0);
     });

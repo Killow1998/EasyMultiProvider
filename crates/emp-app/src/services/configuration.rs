@@ -13,9 +13,6 @@ pub(crate) mod settings;
 
 pub(crate) fn load_server_configuration(path: &Path) -> Result<Value, ConfigError> {
     let config = load_configuration(Some(path))?;
-    // Test fixtures must not borrow the developer's native credentials,
-    // integration lease or generated model catalog. Explicit integration
-    // fixtures can still provide their own home through the options API.
     #[cfg(test)]
     let config = {
         let mut config = config;

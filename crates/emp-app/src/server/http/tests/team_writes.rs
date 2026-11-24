@@ -52,7 +52,7 @@ fn payload(owner: &str) -> SharePayload {
     }
 }
 
-fn fixture(base: &str) -> Fixture {
+fn fixture(base: &str, driver: TestDriver) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let worker = format!(
         r#"
@@ -107,7 +107,7 @@ done
     )
     .unwrap();
 
-    let fixture = Fixture::with_directory(directory);
+    let fixture = Fixture::with_driver(directory, driver);
     fixture
         .legacy
         .state
@@ -127,8 +127,8 @@ pub(super) fn run_pair(test: impl AsyncFnOnce(&Pair<'_>, &AsyncListener, &str)) 
     let upstream = TcpListener::bind(LOOPBACK).unwrap();
     upstream.set_nonblocking(true).unwrap();
     let base = format!("http://{}", upstream.local_addr().unwrap());
-    let old = fixture(&base);
-    fixture(&base).run_candidate(async |new, candidate| {
+    let old = fixture(&base, TestDriver::reference());
+    fixture(&base, TestDriver::Candidate).run_wire(async |new, candidate| {
         let pair = Pair {
             old: &old,
             new,

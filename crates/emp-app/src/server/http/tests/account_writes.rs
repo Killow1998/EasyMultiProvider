@@ -39,7 +39,7 @@ done
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 
-fn fixture(base: SocketAddr, executable: &Path) -> Fixture {
+fn fixture(base: SocketAddr, executable: &Path, driver: TestDriver) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config = root.join("config.json");
@@ -53,13 +53,13 @@ fn fixture(base: SocketAddr, executable: &Path) -> Fixture {
         .to_string(),
     )
     .unwrap();
-    let legacy = LegacyServer::start_with_config_options_and_http_client(
+    let legacy = LegacyServer::start_with_test_options(
         LOOPBACK.ip(),
-        0,
         &config,
-        executable.to_str().unwrap(),
         root.join("codex/auth.json"),
-        emp_transport::HttpClient::new(emp_transport::HttpClientPolicy::default()).unwrap(),
+        driver,
+        executable.to_str().unwrap(),
+        Some(emp_transport::HttpClient::new(emp_transport::HttpClientPolicy::default()).unwrap()),
     )
     .unwrap();
     Fixture {
@@ -83,14 +83,18 @@ impl Pair<'_> {
         normalize: impl Fn(Vec<u8>) -> Vec<u8>,
     ) -> Value {
         let old = make(self.old.port(), &self.old.session());
-        let new = make(self.new.port(), &self.new.session());
-        let reply = assert_wire_parity_with(
-            [(self.old.legacy.local_addr(), &old), (self.candidate, &new)],
-            false,
-            status,
-            normalize,
-        )
-        .await;
+        let new = make(self.candidate.port(), &self.new.session());
+        let (old_reply, reply) = tokio::join!(
+            assert_wire_with(
+                self.old.legacy.local_addr(),
+                &old,
+                false,
+                status,
+                &normalize
+            ),
+            assert_wire_with(self.candidate, &new, false, status, &normalize),
+        );
+        assert_wire_response_parity(&old, &old_reply, &reply);
         json_body(&reply)
     }
 
@@ -210,8 +214,12 @@ fn normalize_quota_time(reply: Vec<u8>) -> Vec<u8> {
 
 #[test]
 fn login_account_reads_and_delete_match_legacy_wire() {
-    let old = fixture(LOOPBACK, Path::new("missing-test-codex"));
-    fixture(LOOPBACK, Path::new("missing-test-codex")).run_candidate(async |new, candidate| {
+    let old = fixture(
+        LOOPBACK,
+        Path::new("missing-test-codex"),
+        TestDriver::reference(),
+    );
+    fixture(LOOPBACK, Path::new("missing-test-codex"), TestDriver::Candidate).run_wire(async |new, candidate| {
         let pair = Pair { old: &old, new, candidate };
         pair.post(
             IMPORT,
@@ -252,8 +260,12 @@ fn account_writes_match_legacy_wire_and_persist_the_same_state() {
     let executable = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let codex = executable.path().join("codex");
     fake_codex(&codex);
-    let old = fixture(upstream.local_addr().unwrap(), &codex);
-    fixture(upstream.local_addr().unwrap(), &codex).run_candidate(async |new, candidate| {
+    let old = fixture(
+        upstream.local_addr().unwrap(),
+        &codex,
+        TestDriver::reference(),
+    );
+    fixture(upstream.local_addr().unwrap(), &codex, TestDriver::Candidate).run_wire(async |new, candidate| {
         let pair = Pair { old: &old, new, candidate };
         let upstream = AsyncListener::from_std(upstream).unwrap();
 
@@ -375,7 +387,12 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
     let executable = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let codex = executable.path().join("codex");
     fake_codex(&codex);
-    fixture(upstream.local_addr().unwrap(), &codex).run_candidate(async |fixture, candidate| {
+    fixture(
+        upstream.local_addr().unwrap(),
+        &codex,
+        TestDriver::Candidate,
+    )
+    .run_wire(async |fixture, candidate| {
         let upstream = AsyncListener::from_std(upstream).unwrap();
         let session = &fixture.session();
         let port = fixture.port();

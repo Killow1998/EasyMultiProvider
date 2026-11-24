@@ -82,74 +82,80 @@ fn session_exchange_uses_admission_time_while_blocking_worker_is_queued() {
 #[test]
 fn session_exchange_matches_legacy_wire_and_rotates_once() {
     let mut results = Vec::new();
-    for driver in wire_contract::Driver::ALL {
-        let replies = Fixture::with_driver(tempfile::tempdir().unwrap(), driver).run_wire(
-            async |fixture, address| {
-                let port = address.port();
-                let mut replies = Vec::new();
-                for headers in [
-                    vec![],
-                    vec!["X-EMP-Bootstrap: wrong"],
-                    vec!["X-EMP-Bootstrap: wrong", "X-EMP-Bootstrap: wrong"],
-                ] {
-                    let wire = request(port, "POST", SESSION_PATH, &headers, b"");
-                    let reply = assert_wire(address, &wire, false, 401).await;
-                    assert_eq!(
-                        json_body(&reply)["error"]["message"],
-                        "management session is required"
-                    );
-                    replies.push(reply);
-                }
-
-                let previous_session = fixture.session();
-                let header = format!("X-EMP-Bootstrap: {}", fixture.legacy.state.bootstrap.token);
-                let bootstrap = request(
-                    port,
-                    "POST",
-                    "/api/session?unused=1",
-                    &[&header, BODY_LIMIT],
-                    b"{",
+    for &driver in TestDriver::selected() {
+        let replies = Fixture::new_with_driver(driver).run_wire(async |fixture, address| {
+            let port = address.port();
+            let mut replies = Vec::new();
+            for headers in [
+                vec![],
+                vec!["X-EMP-Bootstrap: wrong"],
+                vec!["X-EMP-Bootstrap: wrong", "X-EMP-Bootstrap: wrong"],
+            ] {
+                let wire = request(port, "POST", SESSION_PATH, &headers, b"");
+                let reply = assert_wire(address, &wire, false, 401).await;
+                assert_eq!(
+                    json_body(&reply)["error"]["message"],
+                    "management session is required"
                 );
-                replies.push(
-                    assert_wire_with(address, &bootstrap, false, 200, |reply| {
-                        assert_rotated_session(fixture, reply)
-                    })
-                    .await,
-                );
-                replies.push(assert_wire(address, &bootstrap, false, 401).await);
-                let stale = request(port, "GET", "/api/accounts", &[&previous_session], b"");
-                replies.push(assert_wire(address, &stale, false, 401).await);
-                let accounts = request(port, "GET", "/api/accounts", &[&fixture.session()], b"");
-                let reply = assert_wire(address, &accounts, false, 200).await;
-                assert_eq!(json_body(&reply)["accounts"], json!([]));
                 replies.push(reply);
+            }
 
-                let url = fixture.legacy.state.reopen_url().unwrap();
-                let header = format!(
-                    "X-EMP-Bootstrap: {}",
-                    url.split_once("?bootstrap=").unwrap().1
+            let previous_session = fixture.session();
+            let header = format!("X-EMP-Bootstrap: {}", fixture.legacy.state.bootstrap.token);
+            let bootstrap = request(
+                port,
+                "POST",
+                "/api/session?unused=1",
+                &[&header, BODY_LIMIT],
+                b"{",
+            );
+            replies.push(
+                assert_wire_with(address, &bootstrap, false, 200, |reply| {
+                    assert_rotated_session(fixture, reply)
+                })
+                .await,
+            );
+            let stale = request(port, "GET", "/api/accounts", &[&previous_session], b"");
+            for wire in [&bootstrap, &stale] {
+                let reply = assert_wire(address, wire, false, 401).await;
+                assert_eq!(
+                    json_body(&reply)["error"]["message"],
+                    "management session is required"
                 );
-                drain_updates(fixture).await;
-                let wire = request(port, "POST", SESSION_PATH, &[&header], b"");
-                let reply = assert_wire(address, &wire, false, 503).await;
-                assert_eq!(json_body(&reply)["error"]["code"], "updating");
                 replies.push(reply);
-                assert!(
-                    !fixture
-                        .legacy
-                        .state
-                        .reopen_bootstrap
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .unwrap()
-                        .used
-                        .load(Ordering::Acquire)
-                );
-                replies.push(assert_wire(address, &accounts, false, 200).await);
-                replies
-            },
-        );
+            }
+            let accounts = request(port, "GET", "/api/accounts", &[&fixture.session()], b"");
+            let reply = assert_wire(address, &accounts, false, 200).await;
+            assert_eq!(json_body(&reply)["accounts"], json!([]));
+            replies.push(reply);
+
+            let url = fixture.legacy.state.reopen_url().unwrap();
+            let header = format!(
+                "X-EMP-Bootstrap: {}",
+                url.split_once("?bootstrap=").unwrap().1
+            );
+            drain_updates(fixture).await;
+            let wire = request(port, "POST", SESSION_PATH, &[&header], b"");
+            let reply = assert_wire(address, &wire, false, 503).await;
+            assert_eq!(json_body(&reply)["error"]["code"], "updating");
+            replies.push(reply);
+            assert!(
+                !fixture
+                    .legacy
+                    .state
+                    .reopen_bootstrap
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .used
+                    .load(Ordering::Acquire)
+            );
+            let reply = assert_wire(address, &accounts, false, 200).await;
+            assert_eq!(json_body(&reply)["accounts"], json!([]));
+            replies.push(reply);
+            replies
+        });
         results.push(replies);
     }
     for pair in results.windows(2) {
@@ -184,7 +190,7 @@ async fn drain_updates(fixture: &Fixture) {
     );
 }
 
-fn login_fixture() -> Fixture {
+fn login_fixture(driver: TestDriver) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config = root.join("config.json");
@@ -212,12 +218,13 @@ fn login_fixture() -> Fixture {
     )
     .unwrap();
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let legacy = LegacyServer::start_with_config_options(
+    let legacy = LegacyServer::start_with_test_options(
         LOOPBACK.ip(),
-        0,
         &config,
-        helper.to_str().unwrap(),
         root.join("codex/auth.json"),
+        driver,
+        helper.to_str().unwrap(),
+        None,
     )
     .unwrap();
     Fixture {
@@ -300,8 +307,8 @@ async fn conflict(pair: &Pair<'_>, path: &str, body: &[u8], code: &str) {
 
 #[test]
 fn login_writes_match_legacy_wire_and_switch_native_credentials() {
-    let old = login_fixture();
-    login_fixture().run_candidate(async |new, candidate| {
+    let old = login_fixture(TestDriver::reference());
+    login_fixture(TestDriver::Candidate).run_wire(async |new, candidate| {
         let pair = Pair {
             old: &old,
             new,
@@ -617,8 +624,8 @@ fn pending_wire(reply: Vec<u8>) -> Vec<u8> {
 
 #[test]
 fn submitted_login_survives_disconnect_and_completion_is_applied_once() {
-    let old = login_fixture();
-    login_fixture().run_candidate(async |new, candidate| {
+    let old = login_fixture(TestDriver::reference());
+    login_fixture(TestDriver::Candidate).run_wire(async |new, candidate| {
         let pair = Pair {
             old: &old,
             new,

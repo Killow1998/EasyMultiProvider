@@ -28,9 +28,9 @@ fn endpoints<'a>(pair: &Pair<'a>) -> [(&'a Fixture, SocketAddr); 2] {
     ]
 }
 
-fn pair_with(make: impl Fn() -> Fixture, test: impl AsyncFnOnce(&Pair<'_>)) {
-    let old = make();
-    make().run_candidate(async |new, candidate| {
+fn pair_with(make: impl Fn(TestDriver) -> Fixture, test: impl AsyncFnOnce(&Pair<'_>)) {
+    let old = make(TestDriver::reference());
+    make(TestDriver::Candidate).run_wire(async |new, candidate| {
         test(&Pair {
             old: &old,
             new,
@@ -49,7 +49,7 @@ fn model(id: &str) -> Value {
     json!({"id":format!("{id}/model"),"provider":id,"upstream_id":"model","enabled":true})
 }
 
-fn source() -> Fixture {
+fn source(driver: TestDriver) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let mut service = provider("source");
     service["api_key"] = KEY.into();
@@ -61,7 +61,7 @@ fn source() -> Fixture {
         .to_string(),
     )
     .unwrap();
-    Fixture::with_directory(directory)
+    Fixture::with_driver(directory, driver)
 }
 
 fn selection(id: &str) -> Value {
@@ -108,6 +108,11 @@ fn validate_bundle(bundle: &[u8]) {
         .expect("migration bundle magic");
     assert!(envelope.ends_with(b"\n"));
     let envelope: Value = serde_json::from_slice(envelope).expect("migration envelope");
+    let plaintext = envelope.to_string();
+    assert!(
+        !plaintext.contains(KEY) && !plaintext.contains(PASSWORD),
+        "migration envelope contains fixture credentials"
+    );
     assert_eq!(envelope["schema"], "easy-multi-provider-migration");
     assert_eq!(envelope["version"], 2);
     let salt = URL_SAFE.decode(envelope["salt"].as_str().unwrap()).unwrap();
@@ -366,7 +371,7 @@ fn assert_imported(pair: &Pair<'_>, ids: &[&str]) {
 
 #[test]
 fn migration_previews_match_wire_and_bind_expire_and_consume_tokens() {
-    pair_with(Fixture::new, async |pair| {
+    pair_with(Fixture::new_with_driver, async |pair| {
         let body = json!({"bundle":STANDARD.encode(bundle("direct")),"password":PASSWORD});
         let direct = same(pair, "import", body.clone(), 200).await;
         assert_eq!(direct["status"], "ok");
@@ -636,7 +641,7 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
 
     let body =
         json!({"bundle":STANDARD.encode(bundle("detached")),"password":PASSWORD}).to_string();
-    pair_with(Fixture::new, async |pair| {
+    pair_with(Fixture::new_with_driver, async |pair| {
         for (fixture, address) in endpoints(pair) {
             let state = &fixture.legacy.state;
             let (mut client, task) = connect_submitted_write(fixture, address).await;

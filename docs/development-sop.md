@@ -81,6 +81,13 @@ M04 检查安装握手、planner/executor 接力与回复流、服务用量、�
 check，再全量 clippy、test、build。`check` 跳过最终代码生成，不能替代可执行
 文件或 E2E 验收。
 
+EMP HTTP 测试夹具的认证、集成状态、模型缓存和主密钥放在各自的临时目录。需要测试
+外部主密钥或 Codex 路径时，由专门用例显式指定。隔离子进程把系统 dconf 缓存写入
+专用的临时缓存目录。候选驱动单跑可用 Cargo 的环境配置传入
+`--config 'env.EMP_TEST_HTTP_DRIVER="candidate"'`，同时启用
+`emp-app/server-candidate`，让子进程测试也使用候选驱动。旧驱动专属测试继续用原夹具，
+需要独立状态做写入对照的用例使用两份候选夹具。
+
 ### 确定性规则
 
 `cargo xtask check` 只读检查 crate 依赖、模组版本、黑盒测试边界、文档措辞和 main 工作流。

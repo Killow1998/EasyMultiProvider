@@ -22,6 +22,25 @@ pub(crate) enum TestDriver {
     Candidate,
 }
 
+#[cfg(test)]
+impl TestDriver {
+    pub(crate) fn selected() -> &'static [Self] {
+        match std::env::var("EMP_TEST_HTTP_DRIVER").as_deref() {
+            Err(std::env::VarError::NotPresent) => &[Self::Legacy, Self::Candidate],
+            Ok("candidate") => &[Self::Candidate],
+            _ => panic!("EMP_TEST_HTTP_DRIVER must be unset or candidate"),
+        }
+    }
+
+    pub(crate) fn reference() -> Self {
+        Self::selected()[0]
+    }
+
+    pub(crate) fn compares_drivers() -> bool {
+        Self::selected().len() > 1
+    }
+}
+
 struct StartupContext<'a> {
     #[cfg(test)]
     driver: TestDriver,
@@ -61,16 +80,35 @@ impl ServerHandle {
         native_auth_path: PathBuf,
         driver: TestDriver,
     ) -> Result<Self, AppError> {
+        Self::start_with_test_options(
+            host,
+            config_path,
+            native_auth_path,
+            driver,
+            "missing-test-codex",
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_with_test_options(
+        host: IpAddr,
+        config_path: &Path,
+        native_auth_path: PathBuf,
+        driver: TestDriver,
+        codex_binary: &str,
+        http_client_override: Option<emp_transport::HttpClient>,
+    ) -> Result<Self, AppError> {
         Self::start_with_config_options_inner(StartupContext {
             driver,
             host,
             port: 0,
             config_path,
-            codex_binary: "missing-test-codex",
+            codex_binary,
             native_auth_path,
             open_browser: false,
             markers: UpdateStartupMarkers::default(),
-            http_client_override: None,
+            http_client_override,
             admission: ConnectionAdmissionConfig::default(),
             enable_catalog_refresh_worker: false,
         })
@@ -355,6 +393,8 @@ impl ServerHandle {
         );
         let mut handle = Self {
             local_addr,
+            #[cfg(test)]
+            test_driver: driver,
             state,
             workers: Vec::new(),
             _service_owner: service_owner,

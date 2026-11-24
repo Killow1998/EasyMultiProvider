@@ -19,7 +19,12 @@ const DISCOVER_MODELS: &[u8] = br#"{"data":[{"id":"gpt-6-luna","name":"Fixture m
 const POOL_QUOTA: &[u8] = br#"{"scope":"shared_pool","provider":"claude","accounts":[{"id":"pool-account","enabled":true,"stale":false,"status":"ok","windows":{"five_hour":{"remaining_percent":73}}}]}"#;
 const BALANCE_BODY: &[u8] = br#"{"balance_infos":[{"currency":"USD","total_balance":"7.50"}]}"#;
 
-fn fixture(upstream: SocketAddr, balance: SocketAddr, root_certificate: &[u8]) -> Fixture {
+fn fixture(
+    upstream: SocketAddr,
+    balance: SocketAddr,
+    root_certificate: &[u8],
+    driver: TestDriver,
+) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config = root.join("config.json");
@@ -43,13 +48,13 @@ fn fixture(upstream: SocketAddr, balance: SocketAddr, root_certificate: &[u8]) -
         .unwrap();
     transport.use_only_configured_root_certificates().unwrap();
     transport.add_dns_override(BALANCE_HOST, balance).unwrap();
-    let legacy = LegacyServer::start_with_config_options_and_http_client(
+    let legacy = LegacyServer::start_with_test_options(
         LOOPBACK.ip(),
-        0,
         &config,
-        "missing-test-codex",
         root.join("codex/auth.json"),
-        HttpClient::with_config(HttpClientPolicy::default(), transport).unwrap(),
+        driver,
+        "missing-test-codex",
+        Some(HttpClient::with_config(HttpClientPolicy::default(), transport).unwrap()),
     )
     .unwrap();
     Fixture {
@@ -227,13 +232,15 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
         upstream.local_addr().unwrap(),
         balance.local_addr().unwrap(),
         &root,
+        TestDriver::reference(),
     );
     fixture(
         upstream.local_addr().unwrap(),
         balance.local_addr().unwrap(),
         &root,
+        TestDriver::Candidate,
     )
-    .run_candidate(async |new, candidate| {
+    .run_wire(async |new, candidate| {
         let pair = Pair {
             old: &old,
             new,
@@ -671,13 +678,15 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
         upstream.local_addr().unwrap(),
         balance.local_addr().unwrap(),
         &root,
+        TestDriver::reference(),
     );
     let new = fixture(
         upstream.local_addr().unwrap(),
         balance.local_addr().unwrap(),
         &root,
+        TestDriver::Candidate,
     );
-    new.run_candidate(async |new, candidate| {
+    new.run_wire(async |new, candidate| {
         let upstream = AsyncListener::from_std(upstream).unwrap();
         let balance = AsyncListener::from_std(balance).unwrap();
         let mut histories = Vec::new();

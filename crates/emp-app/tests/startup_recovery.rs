@@ -21,9 +21,7 @@ struct Recovery {
 impl Recovery {
     fn start(workspace: &Workspace) -> Self {
         let mut command = workspace.command();
-        command
-            .args(workspace.serve_arguments())
-            .env_remove("EASY_MULTI_PROVIDER_MASTER_KEY");
+        command.args(workspace.serve_arguments());
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

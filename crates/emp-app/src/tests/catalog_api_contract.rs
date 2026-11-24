@@ -165,6 +165,13 @@ impl Drop for CatalogUpstream {
     }
 }
 pub(super) fn catalog_server(upstream: &CatalogUpstream) -> (TempDir, ServerHandle) {
+    catalog_server_with_driver(upstream, crate::lifecycle::TestDriver::Legacy)
+}
+
+fn catalog_server_with_driver(
+    upstream: &CatalogUpstream,
+    driver: crate::lifecycle::TestDriver,
+) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temp dir");
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
@@ -184,12 +191,13 @@ pub(super) fn catalog_server(upstream: &CatalogUpstream) -> (TempDir, ServerHand
         "providers":[{"id":"demo","base_url":upstream.base_url(),"protocol":"chat_completions","api_key":"synthetic-test-key"}],
         "models":[{"id":"demo/old","provider":"demo","upstream_id":"old","context_window":77777}]
     })).expect("config JSON")).expect("write config");
-    let server = ServerHandle::start_with_config_options(
+    let server = ServerHandle::start_with_test_options(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
-        0,
         &config_path,
-        "codex",
         root.join("codex").join("auth.json"),
+        driver,
+        "codex",
+        None,
     )
     .expect("server");
     (directory, server)
@@ -203,10 +211,18 @@ fn metadata_server_with_policy(
     upstream: &CatalogUpstream,
     policy: HttpClientPolicy,
 ) -> (TempDir, ServerHandle) {
-    metadata_server_at(upstream.address, policy)
+    metadata_server_at_with_driver(
+        upstream.address,
+        policy,
+        crate::lifecycle::TestDriver::Legacy,
+    )
 }
 
-fn metadata_server_at(upstream: SocketAddr, policy: HttpClientPolicy) -> (TempDir, ServerHandle) {
+fn metadata_server_at_with_driver(
+    upstream: SocketAddr,
+    policy: HttpClientPolicy,
+    driver: crate::lifecycle::TestDriver,
+) -> (TempDir, ServerHandle) {
     let mut transport_config = HttpClientConfig::default();
     transport_config
         .add_dns_override("generativelanguage.googleapis.com", upstream)
@@ -232,13 +248,13 @@ fn metadata_server_at(upstream: SocketAddr, policy: HttpClientPolicy) -> (TempDi
         .expect("metadata config JSON"),
     )
     .expect("write metadata config");
-    let server = ServerHandle::start_with_config_options_and_http_client(
+    let server = ServerHandle::start_with_test_options(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
-        0,
         &config_path,
-        "codex",
         root.join("codex").join("auth.json"),
-        client,
+        driver,
+        "codex",
+        Some(client),
     )
     .expect("metadata server");
     // The persisted config validator correctly rejects insecure non-loopback

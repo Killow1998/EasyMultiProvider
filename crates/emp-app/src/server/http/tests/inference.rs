@@ -21,11 +21,11 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
     use crate::services::modules::aero::CallLease;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    for use_candidate in [false, true] {
+    for &driver in TestDriver::selected() {
         let upstream = TcpListener::bind(LOOPBACK).unwrap();
         upstream.set_nonblocking(true).unwrap();
         let base = format!("http://{}/v1", upstream.local_addr().unwrap());
-        fixture(&base).run_candidate(async move |fixture, candidate| {
+        fixture_with_driver(&base, driver).run_wire(async move |fixture, address| {
             let upstream = tokio::net::TcpListener::from_std(upstream).unwrap();
             let sender = tokio::spawn(async move {
                 let mut held = Vec::new();
@@ -66,8 +66,7 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
                     work: Arc::new(state.lifecycle.updates().enter().unwrap()),
                 }),
             ).unwrap();
-            let address = if use_candidate { candidate } else { fixture.legacy.local_addr() };
-            let port = fixture.port();
+            let port = address.port();
             let auth = format!("Authorization: Bearer {}", delegation.key);
             let wire = json_request(port, "/v1/responses", &[&auth], STREAM_REQUEST);
             let mut callbacks = Vec::new();
@@ -79,7 +78,7 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
             for path in ["/healthz", "/"] {
                 let reply = exchange_wire(address, &request(port, "GET", path, &[], b""), false).await;
                 assert!(reply.starts_with(b"HTTP/1.1 200 "),
-                    "{path} blocked by 64 active callbacks (candidate={use_candidate})");
+                    "{path} blocked by 64 active callbacks ({driver:?})");
             }
             let state_for_wait = state.clone();
             tokio::task::spawn_blocking(move || {
@@ -108,7 +107,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
     use crate::services::modules::aero::CallLease;
 
     let (release, released) = mpsc::channel();
-    let upstream = OneShotUpstream::serve(2, move |socket| {
+    let upstream = OneShotUpstream::serve(TestDriver::selected().len(), move |socket| {
         upstream_reply(
             socket,
             200,
@@ -121,8 +120,8 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
         socket.write_all(LAST).unwrap();
     });
     let mut heads = Vec::new();
-    for use_candidate in [false, true] {
-        fixture(&upstream.base_url()).run_candidate(async |fixture, candidate| {
+    for &driver in TestDriver::selected() {
+        fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
             let state = &fixture.legacy.state;
             let admission = &state.lifecycle.admission;
             let updates = state.lifecycle.updates();
@@ -153,11 +152,6 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
             });
             wait_for(DEADLINE, || updates.enter().is_none());
 
-            let address = if use_candidate {
-                candidate
-            } else {
-                fixture.legacy.local_addr()
-            };
             let authorization = format!("Authorization: Bearer {}", parent.key);
             let wire = json_request(
                 fixture.port(),
@@ -223,14 +217,12 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
     }
     assert!(
         heads.iter().all(|head| head.starts_with("HTTP/1.1 200 ")),
-        "callback during drain: legacy={:?}, candidate={:?}",
-        heads[0],
-        heads[1]
+        "callback during drain: {heads:?}"
     );
 }
 
 fn fixture(base: &str) -> Fixture {
-    fixture_with_driver(base, TestDriver::Legacy)
+    fixture_with_driver(base, TestDriver::reference())
 }
 
 pub(super) fn fixture_with_driver(base: &str, driver: TestDriver) -> Fixture {
@@ -302,37 +294,31 @@ fn split_response(wire: &[u8]) -> (ResponseHead, &[u8]) {
     (head, &wire[split + 4..])
 }
 
+async fn assert_buffered(address: SocketAddr, wire: &[u8], status: u16) -> Vec<u8> {
+    let reply = assert_wire(address, wire, false, status).await;
+    let (head, body) = split_response(&reply);
+    head.assert_security();
+    assert_eq!(head.headers["content-length"], [body.len().to_string()]);
+    reply
+}
+
 async fn buffered_parity(
     fixture: &Fixture,
     address: SocketAddr,
     wire: &[u8],
     status: u16,
 ) -> Vec<u8> {
-    let check_reply = |reply: Vec<u8>| {
-        let (head, body) = split_response(&reply);
-        head.assert_security();
-        assert_eq!(head.headers["content-length"], [body.len().to_string()]);
-        let body_offset = reply.len() - body.len();
-        (head, reply, body_offset)
-    };
-    let (old_head, legacy, old_offset) = assert_wire_with(
-        fixture.legacy.local_addr(),
-        wire,
-        false,
-        status,
-        check_reply,
-    )
-    .await;
-    let (new_head, candidate, new_offset) =
-        assert_wire_with(address, wire, false, status, check_reply).await;
-    assert_eq!(old_head, new_head, "{}", String::from_utf8_lossy(wire));
-    assert_eq!(
-        legacy[old_offset..],
-        candidate[new_offset..],
-        "{}",
-        String::from_utf8_lossy(wire)
-    );
-    candidate
+    let reply = assert_buffered(address, wire, status).await;
+    if TestDriver::compares_drivers() {
+        let reference = assert_buffered(fixture.legacy.local_addr(), wire, status).await;
+        assert_eq!(
+            split_response(&reference),
+            split_response(&reply),
+            "{}",
+            String::from_utf8_lossy(wire)
+        );
+    }
+    reply
 }
 
 fn upstream_reply(
@@ -402,41 +388,50 @@ fn inference_buffered_routes_preserve_wire_bytes_and_headers() {
             "",
         ),
     ] {
-        let upstream = OneShotUpstream::serve(2, move |socket| {
-            upstream_reply(socket, 200, "application/json", raw.len(), extra);
-            socket.write_all(raw).unwrap();
-        });
-        fixture(&upstream.base_url()).run_candidate(async |fixture, address| {
-            let session = fixture.session();
-            let mut headers = vec![session.as_str(), "Authorization: Bearer fixture-caller"];
-            if path.contains("/images/") {
-                headers.push("X-EMP-Provider: demo");
-            }
-            let wire = json_request(fixture.port(), path, &headers, request_body);
-            let reply = buffered_parity(fixture, address, &wire, 200).await;
-            let (head, body) = split_response(&reply);
-            assert_eq!(head.headers["content-type"], ["application/json"]);
-            assert_eq!(head.headers["cache-control"], ["no-store"]);
-            assert_eq!(body, raw);
-            if path.starts_with("/v1/responses") {
-                assert_eq!(head.headers["openai-model"], ["native/alias"]);
-                assert_ne!(
-                    head.headers.get("x-models-etag"),
-                    Some(&vec!["stale".to_owned()])
-                );
-            }
-            if path.contains("/images/") {
-                assert_eq!(
-                    head.headers["x-codex-imagegen-request-id"],
-                    ["image-fixture"]
-                );
-            }
-            if matches!(path, "/v1/decisions" | "/v1/systemone") {
-                assert_eq!(head.headers["retry-after"], ["7"]);
-            }
-        });
-        for _ in 0..2 {
+        let mut heads = Vec::new();
+        for &driver in TestDriver::selected() {
+            let upstream = OneShotUpstream::serve(1, move |socket| {
+                upstream_reply(socket, 200, "application/json", raw.len(), extra);
+                socket.write_all(raw).unwrap();
+            });
+            let head = fixture_with_driver(&upstream.base_url(), driver).run_wire(
+                async |fixture, address| {
+                    let session = fixture.session();
+                    let mut headers =
+                        vec![session.as_str(), "Authorization: Bearer fixture-caller"];
+                    if path.contains("/images/") {
+                        headers.push("X-EMP-Provider: demo");
+                    }
+                    let wire = json_request(address.port(), path, &headers, request_body);
+                    let reply = assert_buffered(address, &wire, 200).await;
+                    let (head, body) = split_response(&reply);
+                    assert_eq!(head.headers["content-type"], ["application/json"]);
+                    assert_eq!(head.headers["cache-control"], ["no-store"]);
+                    assert_eq!(body, raw);
+                    if path.starts_with("/v1/responses") {
+                        assert_eq!(head.headers["openai-model"], ["native/alias"]);
+                        assert_ne!(
+                            head.headers.get("x-models-etag"),
+                            Some(&vec!["stale".to_owned()])
+                        );
+                    }
+                    if path.contains("/images/") {
+                        assert_eq!(
+                            head.headers["x-codex-imagegen-request-id"],
+                            ["image-fixture"]
+                        );
+                    }
+                    if matches!(path, "/v1/decisions" | "/v1/systemone") {
+                        assert_eq!(head.headers["retry-after"], ["7"]);
+                    }
+                    head
+                },
+            );
             assert_eq!(upstream.observed().0, upstream_path);
+            heads.push(head);
+        }
+        for pair in heads.windows(2) {
+            assert_eq!(pair[0], pair[1]);
         }
     }
 }
@@ -543,25 +538,34 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
 fn inference_projects_upstream_4xx_5xx_and_connection_failure() {
     let raw = br#"{ "error":{"message":"fixture"}, "z":2.00 }"#;
     for status in [400, 502] {
-        let upstream = OneShotUpstream::start_repeated_wire(
-            status,
-            "application/json",
-            Some(7),
-            2,
-            vec![raw.to_vec()],
-        );
-        fixture(&upstream.base_url()).run_candidate(async |fixture, address| {
-            let wire = json_request(
-                fixture.port(),
-                "/v1/decisions",
-                &[&fixture.session()],
-                br#"{"model":"upstream-model","input":"fixture"}"#,
+        let mut heads = Vec::new();
+        for &driver in TestDriver::selected() {
+            let upstream = OneShotUpstream::start_repeated_wire(
+                status,
+                "application/json",
+                Some(7),
+                1,
+                vec![raw.to_vec()],
             );
-            let reply = buffered_parity(fixture, address, &wire, status).await;
-            assert_eq!(split_response(&reply).1, raw);
-        });
-        for _ in 0..2 {
+            let head = fixture_with_driver(&upstream.base_url(), driver).run_wire(
+                async |fixture, address| {
+                    let wire = json_request(
+                        address.port(),
+                        "/v1/decisions",
+                        &[&fixture.session()],
+                        br#"{"model":"upstream-model","input":"fixture"}"#,
+                    );
+                    let reply = assert_buffered(address, &wire, status).await;
+                    let (head, body) = split_response(&reply);
+                    assert_eq!(body, raw);
+                    head
+                },
+            );
             assert_eq!(upstream.observed().0, "/v1/decisions");
+            heads.push(head);
+        }
+        for pair in heads.windows(2) {
+            assert_eq!(pair[0], pair[1]);
         }
     }
     let listener = TcpListener::bind(LOOPBACK).unwrap();
@@ -613,8 +617,19 @@ impl SseClient {
         use tokio::io::AsyncBufReadExt as _;
         loop {
             let bytes = loop {
-                if let Some(end) = self.pending.windows(2).position(|bytes| bytes == b"\n\n") {
-                    break self.pending.drain(..end + 2).collect::<Vec<_>>();
+                if let Some(frame_end) =
+                    self.pending.iter().enumerate().find_map(|(index, byte)| {
+                        if *byte != b'\n' {
+                            return None;
+                        }
+                        match self.pending[index + 1..] {
+                            [b'\n', ..] => Some(index + 2),
+                            [b'\r', b'\n', ..] => Some(index + 3),
+                            _ => None,
+                        }
+                    })
+                {
+                    break self.pending.drain(..frame_end).collect::<Vec<_>>();
                 }
                 if self.chunked {
                     let mut line = String::new();
@@ -650,11 +665,8 @@ impl SseClient {
                 assert!(text.starts_with(':'));
                 continue;
             };
-            let payload = text
-                .lines()
-                .find_map(|line| line.strip_prefix("data: "))
-                .unwrap();
-            let event: Value = serde_json::from_str(payload).unwrap();
+            let payload = sse::data(text).expect("SSE event data");
+            let event: Value = serde_json::from_str(&payload).unwrap();
             assert_eq!(event["type"], event_type);
             return Some(event);
         }
@@ -691,66 +703,58 @@ fn assert_upstream_cancelled(socket: &mut std::net::TcpStream) {
 
 async fn assert_settled(
     fixture: &Fixture,
-    ids: Vec<String>,
+    id: String,
     terminal_written: bool,
     token_reports: u64,
-) -> Vec<[Value; 5]> {
-    let request_count = ids.len();
+) -> Value {
     let root = fixture.directory.path().to_owned();
-    let outcomes = tokio::task::spawn_blocking(move || {
-        let receipts = || {
-            live_journal(&root)
-                .into_iter()
-                .filter(|row| {
-                    row["event"] == "request_finished"
-                        && row["fields"]["request_id"]
-                            .as_str()
-                            .is_some_and(|id| ids.iter().any(|expected| expected == id))
-                })
-                .collect::<Vec<_>>()
-        };
-        wait_for(DEADLINE, || receipts().len() >= ids.len());
-        let finished = receipts();
-        ids.iter()
-            .map(|id| {
-                let entries = finished
-                    .iter()
-                    .filter(|row| row["fields"]["request_id"] == *id)
-                    .collect::<Vec<_>>();
-                assert_eq!(entries.len(), 1, "{finished:?}");
-                let receipt = &entries[0]["fields"];
-                assert_eq!(receipt["terminal_written"], terminal_written, "{entries:?}");
-                [
-                    receipt["delivery"].clone(),
-                    receipt["writes_completed"].clone(),
-                    receipt["response_status"].clone(),
-                    receipt["downstream_terminal"].clone(),
-                    receipt["last_phase"].clone(),
-                ]
-            })
-            .collect::<Vec<_>>()
+    let state = fixture.legacy.state.clone();
+    let receipt = tokio::task::spawn_blocking(move || {
+        let _drained = state
+            .lifecycle
+            .admission
+            .quiesce(0, DEADLINE)
+            .expect("inference connection settled");
+        let records = live_journal(&root);
+        let mut finished = records
+            .iter()
+            .filter(|row| row["event"] == "request_finished" && row["fields"]["request_id"] == id);
+        let receipt = &finished
+            .next()
+            .unwrap_or_else(|| panic!("missing request_finished for {id} in {records:?}"))
+            ["fields"];
+        assert!(finished.next().is_none(), "duplicate request_finished for {id}");
+        assert_eq!(receipt["terminal_written"], terminal_written, "{receipt}");
+        receipt.clone()
     })
     .await
     .unwrap();
-    for pair in outcomes.windows(2) {
-        assert_eq!(pair[0], pair[1]);
-    }
 
     let now = system_now();
     let ledger = &fixture.legacy.state.backend.usage.ledger;
     let usage = ledger.query(0.0, now, "external", now, None).unwrap();
     let totals = &usage["totals"];
-    assert_eq!(totals["requests"], request_count, "{totals}");
+    assert_eq!(totals["requests"], 1, "{totals}");
     assert_eq!(totals["reported_requests"], token_reports, "{totals}");
     assert_eq!(totals["input_tokens"], 3 * token_reports, "{totals}");
     assert_eq!(totals["output_tokens"], 2 * token_reports, "{totals}");
-    outcomes
+    receipt
+}
+
+fn delivery_fields(receipt: &Value) -> [&Value; 5] {
+    [
+        &receipt["delivery"],
+        &receipt["writes_completed"],
+        &receipt["response_status"],
+        &receipt["downstream_terminal"],
+        &receipt["last_phase"],
+    ]
 }
 
 #[test]
 fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
     let mut results = Vec::new();
-    for driver in wire_contract::Driver::ALL {
+    for &driver in TestDriver::selected() {
         let (release, released) = mpsc::channel();
         let upstream = OneShotUpstream::serve(1, move |socket| {
             upstream_reply(
@@ -821,8 +825,22 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
                 assert_eq!(events[5]["part"]["text"], "answer");
                 assert_eq!(events[6]["item"]["content"][0]["text"], "answer");
                 let id = upstream.observed().1["x-emp-request-id"].clone();
-                let outcome = assert_settled(fixture, vec![id], true, 1).await;
-                (downstream.head, outcome)
+                let receipt = assert_settled(fixture, id, true, 1).await;
+                assert_eq!(receipt["delivery"], "terminal_written", "{receipt}");
+                assert!(
+                    receipt["writes_completed"]
+                        .as_u64()
+                        .is_some_and(|count| count > 1),
+                    "{receipt}"
+                );
+                assert_eq!(
+                    receipt.get("response_status"),
+                    Some(&Value::Null),
+                    "{receipt}"
+                );
+                assert_eq!(receipt["downstream_terminal"], "completed", "{receipt}");
+                assert_eq!(receipt["last_phase"], "execute_and_relay", "{receipt}");
+                (downstream.head, delivery_fields(&receipt).map(Clone::clone))
             });
         results.push(result);
     }
@@ -833,88 +851,102 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
 
 #[test]
 fn inference_stream_disconnect_closes_upstream_and_settles_once() {
-    let (closed, mut closures) = tokio::sync::mpsc::unbounded_channel();
-    let upstream = OneShotUpstream::serve(2, move |socket| {
-        upstream_reply(
-            socket,
-            200,
-            "text/event-stream",
-            FIRST.len() + LAST.len(),
-            "",
-        );
-        socket.write_all(FIRST).unwrap();
-        assert_upstream_cancelled(socket);
-        closed.send(()).unwrap();
-    });
-    fixture(&upstream.base_url()).run_candidate(async |fixture, address| {
-        let wire = json_request(
-            fixture.port(),
-            "/v1/responses",
-            &[&fixture.session()],
-            STREAM_REQUEST,
-        );
-        let mut ids = Vec::new();
-        for (address, candidate) in [(fixture.legacy.local_addr(), false), (address, true)] {
-            let mut downstream = SseClient::open(address, &wire, candidate).await;
-            downstream.first_output().await;
-            downstream.io.get_ref().set_zero_linger().unwrap();
-            drop(downstream);
-            timeout(DEADLINE, closures.recv())
-                .await
-                .expect("upstream was closed")
-                .unwrap();
-            ids.push(upstream.observed().1["x-emp-request-id"].clone());
-        }
-        assert_settled(fixture, ids, false, 0).await;
-    });
+    let mut outcomes = Vec::new();
+    for &driver in TestDriver::selected() {
+        let (closed, closure) = oneshot::channel();
+        let mut closed = Some(closed);
+        let upstream = OneShotUpstream::serve(1, move |socket| {
+            upstream_reply(
+                socket,
+                200,
+                "text/event-stream",
+                FIRST.len() + LAST.len(),
+                "",
+            );
+            socket.write_all(FIRST).unwrap();
+            assert_upstream_cancelled(socket);
+            closed.take().unwrap().send(()).unwrap();
+        });
+        let receipt =
+            fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
+                let wire = json_request(
+                    address.port(),
+                    "/v1/responses",
+                    &[&fixture.session()],
+                    STREAM_REQUEST,
+                );
+                let mut downstream =
+                    SseClient::open(address, &wire, matches!(driver, TestDriver::Candidate)).await;
+                downstream.first_output().await;
+                downstream.io.get_ref().set_zero_linger().unwrap();
+                drop(downstream);
+                timeout(DEADLINE, closure)
+                    .await
+                    .expect("upstream was closed")
+                    .unwrap();
+                let id = upstream.observed().1["x-emp-request-id"].clone();
+                assert_settled(fixture, id, false, 0).await
+            });
+        outcomes.push(delivery_fields(&receipt).map(Clone::clone));
+    }
+    for pair in outcomes.windows(2) {
+        assert_eq!(pair[0], pair[1]);
+    }
 }
 
 #[test]
 fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
     for (path, cancel) in [("/v1/responses/compact", true), ("/v1/responses", false)] {
-        let (dispatched, mut dispatches) = tokio::sync::mpsc::unbounded_channel();
-        let upstream = OneShotUpstream::serve(2, move |socket| {
-            let (release, released) = mpsc::channel();
-            let (closed, closure) = oneshot::channel();
-            dispatched.send((release, closure)).unwrap();
-            if cancel {
-                assert_upstream_cancelled(socket);
-            } else {
-                released
-                    .recv_timeout(DEADLINE)
-                    .expect("downstream is closed");
-                upstream_reply(socket, 200, "application/json", CHAT_COMPLETE.len(), "");
-                socket.write_all(CHAT_COMPLETE).unwrap();
-            }
-            closed.send(()).unwrap();
-        });
-        fixture(&upstream.base_url()).run_candidate(async |fixture, address| {
-            let wire = json_request(
-                fixture.port(),
-                path,
-                &[&fixture.session()],
-                COMPLETE_REQUEST,
-            );
-            let mut ids = Vec::new();
-            for address in [fixture.legacy.local_addr(), address] {
-                let mut downstream = TcpStream::connect(address).await.unwrap();
-                downstream.write_all(&wire).await.unwrap();
-                let (release, closure) = timeout(DEADLINE, dispatches.recv())
-                    .await
-                    .expect("EMP dispatched upstream")
-                    .unwrap();
-                downstream.set_zero_linger().unwrap();
-                drop(downstream);
-                if !cancel {
-                    release.send(()).unwrap();
+        let mut outcomes = Vec::new();
+        for &driver in TestDriver::selected() {
+            let (dispatched, dispatch) = oneshot::channel();
+            let mut dispatched = Some(dispatched);
+            let upstream = OneShotUpstream::serve(1, move |socket| {
+                let (release, released) = mpsc::channel();
+                let (closed, closure) = oneshot::channel();
+                dispatched.take().unwrap().send((release, closure)).unwrap();
+                if cancel {
+                    assert_upstream_cancelled(socket);
+                } else {
+                    released
+                        .recv_timeout(DEADLINE)
+                        .expect("downstream is closed");
+                    upstream_reply(socket, 200, "application/json", CHAT_COMPLETE.len(), "");
+                    socket.write_all(CHAT_COMPLETE).unwrap();
                 }
-                timeout(DEADLINE, closure)
-                    .await
-                    .expect("upstream finished")
-                    .unwrap();
-                ids.push(upstream.observed().1["x-emp-request-id"].clone());
-            }
-            assert_settled(fixture, ids, false, if cancel { 0 } else { 2 }).await;
-        });
+                closed.send(()).unwrap();
+            });
+            let receipt = fixture_with_driver(&upstream.base_url(), driver).run_wire(
+                async |fixture, address| {
+                    let wire = json_request(
+                        address.port(),
+                        path,
+                        &[&fixture.session()],
+                        COMPLETE_REQUEST,
+                    );
+                    let mut downstream = TcpStream::connect(address).await.unwrap();
+                    downstream.write_all(&wire).await.unwrap();
+                    let (release, closure) = timeout(DEADLINE, dispatch)
+                        .await
+                        .expect("EMP dispatched upstream")
+                        .unwrap();
+                    downstream.set_zero_linger().unwrap();
+                    drop(downstream);
+                    if !cancel {
+                        release.send(()).unwrap();
+                    }
+                    timeout(DEADLINE, closure)
+                        .await
+                        .expect("upstream finished")
+                        .unwrap();
+                    let id = upstream.observed().1["x-emp-request-id"].clone();
+                    assert_settled(fixture, id, false, u64::from(!cancel)).await
+                },
+            );
+            outcomes.push(delivery_fields(&receipt).map(Clone::clone));
+        }
+        for pair in outcomes.windows(2) {
+            assert_eq!(pair[0], pair[1]);
+        }
     }
 }

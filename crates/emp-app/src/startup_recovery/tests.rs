@@ -303,7 +303,7 @@ fn recovery_wire_contract_before_reset_or_exit() {
     const BAD_REQUEST: &str = json_head!("400 Bad Request", "27");
     const INVALID: &[u8] = br#"{"error":"invalid_request"}"#;
 
-    for driver in Driver::ALL {
+    for &driver in Driver::selected() {
         for restart in [false, true] {
             let (directory, config, _) = fixture();
             let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();

@@ -60,10 +60,6 @@ const SESSION_REQUIRED: &[u8] = br#"{"error":{"message":"management session is r
 
 pub(crate) use crate::lifecycle::TestDriver as Driver;
 
-impl Driver {
-    pub(crate) const ALL: [Self; 2] = [Self::Legacy, Self::Candidate];
-}
-
 fn assert_head(driver: Driver, name: &str, head: &str, expected: &str) {
     assert_eq!(head, expected, "{driver:?} {name}");
 }
@@ -96,48 +92,65 @@ pub(crate) fn assert_reply(
 fn fixture_defaults_stay_under_config_root() {
     const UNUSED_HOME: &str = "EMP_FIXTURE_UNUSED_HOME";
     if let Some(unused_home) = std::env::var_os(UNUSED_HOME) {
-        for driver in Driver::ALL {
-            Fixture::with_driver(tempfile::tempdir().unwrap(), driver).run_wire(
-                async |fixture, address| {
-                    let root = emp_state::config::resolve_user_path(fixture.directory.path());
-                    let backend = &fixture.legacy.state.backend;
-                    let auth = root.join("codex/auth.json");
-                    assert_eq!(backend.accounts.native_auth_path, auth);
-                    assert_eq!(
-                        backend.integration.manager.config_path(),
-                        root.join("codex/config.toml")
-                    );
-                    assert_eq!(backend.configuration.config_path, root.join("config.json"));
-                    assert!(root.join("state/service.lock").is_file());
-                    let reply = assert_wire(
-                        address,
-                        &request(
-                            address.port(),
-                            "GET",
-                            "/api/config",
-                            &[&fixture.session()],
-                            b"",
-                        ),
-                        false,
-                        200,
+        for &driver in Driver::selected() {
+            Fixture::new_with_driver(driver).run_wire(async |fixture, address| {
+                let root = emp_state::config::resolve_user_path(fixture.directory.path());
+                let backend = &fixture.legacy.state.backend;
+                let auth = root.join("codex/auth.json");
+                assert_eq!(backend.accounts.native_auth_path, auth);
+                assert_eq!(
+                    backend.integration.manager.config_path(),
+                    root.join("codex/config.toml")
+                );
+                let config = &backend.configuration;
+                assert_eq!(config.config_path, root.join("config.json"));
+                let key = root.join("state/master.key");
+                assert_eq!(config.vault.ensure_master_key(), Some(key.as_path()));
+                assert!(key.is_file());
+                assert!(root.join("state/service.lock").is_file());
+                assert_eq!(
+                    emp_state::accounts::account_auth_path(
+                        &config.read().unwrap(),
+                        "fixture",
+                        &config.config_path,
                     )
-                    .await;
-                    assert_eq!(
-                        json_body(&reply)["native_catalog_path"],
-                        json!(root.join("codex/models_cache.json"))
-                    );
-                },
-            );
+                    .unwrap(),
+                    root.join("state/accounts/fixture/auth.json.enc")
+                );
+                let reply = assert_wire(
+                    address,
+                    &request(
+                        address.port(),
+                        "GET",
+                        "/api/config",
+                        &[&fixture.session()],
+                        b"",
+                    ),
+                    false,
+                    200,
+                )
+                .await;
+                assert_eq!(
+                    json_body(&reply)["native_catalog_path"],
+                    json!(root.join("codex/models_cache.json"))
+                );
+            });
         }
         let unused_home = std::path::Path::new(&unused_home);
         assert!(
             !unused_home.exists(),
-            "unexpected entries in unused home: {:?}",
+            "fixture wrote to {unused_home:?}: {:?}",
             std::fs::read_dir(unused_home)
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name())
                 .collect::<Vec<_>>()
         );
+        let cache = unused_home.with_file_name("cache");
+        if cache.exists() {
+            for entry in std::fs::read_dir(&cache).unwrap() {
+                assert_eq!(entry.unwrap().file_name(), "dconf", "{cache:?}");
+            }
+        }
         return;
     }
 
@@ -154,73 +167,95 @@ fn fixture_defaults_stay_under_config_root() {
         "HOME",
         "USERPROFILE",
         "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
         "APPDATA",
         "LOCALAPPDATA",
+        "NVM_DIR",
+        "NVM_HOME",
+        "NPM_CONFIG_PREFIX",
+        "npm_config_prefix",
+        "HOMEBREW_PREFIX",
     ] {
         command.env(variable, &home);
     }
-    command.env("XDG_CACHE_HOME", parent.path().join("cache"));
-    let output = command.output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success() && stdout.contains("1 passed"),
-        "{stdout}\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    command
+        .env("XDG_CACHE_HOME", parent.path().join("cache"))
+        .env("EASY_MULTI_PROVIDER_CONFIG", home.join("config.json"))
+        .env(
+            "EMP_OFFICIAL_MODELS_PATH",
+            home.join("official-models.json"),
+        )
+        .env("EMP_UPDATE_READY", home.join("ready.json"))
+        .env(
+            emp_state::filesystem::MASTER_KEY_FILE_ENV,
+            home.join("master.key"),
+        );
+    for inline_key in [None, Some("invalid-inline-fixture-key")] {
+        if let Some(key) = inline_key {
+            command.env(emp_state::filesystem::MASTER_KEY_ENV, key);
+        } else {
+            command.env_remove(emp_state::filesystem::MASTER_KEY_ENV);
+        }
+        let output = command.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
 fn pages_and_embedded_assets() {
-    for driver in Driver::ALL {
-        Fixture::with_driver(tempfile::tempdir().unwrap(), driver).run_wire(
-            async |fixture, address| {
-                let port = fixture.port();
-                let index = include_bytes!("../../../../web/index.html").as_slice();
-                let script = include_bytes!("../../../../web/i18n.js").as_slice();
-                let css = include_bytes!("../../../../web/guide.css").as_slice();
-                let icon = include_bytes!(
-                    "../../../../../../assets/branding/native/easy-multi-provider-tray.svg"
-                )
-                .as_slice();
-                let index_head = INDEX.replace("{}", &index.len().to_string());
-                for (method, path, head, body) in [
-                    ("GET", "/", index_head.as_str(), index),
-                    ("GET", "/index.html", index_head.as_str(), index),
-                    (
-                        "GET",
-                        "/assets/i18n.js",
-                        &asset_head!("text/javascript; charset=utf-8", script.len()),
-                        script,
-                    ),
-                    (
-                        "GET",
-                        "/assets/guide.css",
-                        &asset_head!("text/css; charset=utf-8", css.len()),
-                        css,
-                    ),
-                    (
-                        "GET",
-                        "/assets/emp-icon-mono.svg",
-                        &asset_head!("image/svg+xml", icon.len()),
-                        icon,
-                    ),
-                    (
-                        "GET",
-                        "/healthz",
-                        json_head!("200 OK", "15"),
-                        br#"{"status":"ok"}"#.as_slice(),
-                    ),
-                    ("HEAD", "/", index_head.as_str(), index),
-                    ("HEAD", "/assets/i18n.js", NOT_FOUND, MISSING),
-                ] {
-                    let wire = request(port, method, path, &[], b"");
-                    let reply = exchange_wire(address, &wire, false).await;
-                    assert_reply(driver, &format!("{method} {path}"), &reply, head, body);
-                }
-            },
-        );
+    for &driver in Driver::selected() {
+        Fixture::new_with_driver(driver).run_wire(async |fixture, address| {
+            let port = fixture.port();
+            let index = include_bytes!("../../../../web/index.html").as_slice();
+            let script = include_bytes!("../../../../web/i18n.js").as_slice();
+            let css = include_bytes!("../../../../web/guide.css").as_slice();
+            let icon = include_bytes!(
+                "../../../../../../assets/branding/native/easy-multi-provider-tray.svg"
+            )
+            .as_slice();
+            let index_head = INDEX.replace("{}", &index.len().to_string());
+            for (method, path, head, body) in [
+                ("GET", "/", index_head.as_str(), index),
+                ("GET", "/index.html", index_head.as_str(), index),
+                (
+                    "GET",
+                    "/assets/i18n.js",
+                    &asset_head!("text/javascript; charset=utf-8", script.len()),
+                    script,
+                ),
+                (
+                    "GET",
+                    "/assets/guide.css",
+                    &asset_head!("text/css; charset=utf-8", css.len()),
+                    css,
+                ),
+                (
+                    "GET",
+                    "/assets/emp-icon-mono.svg",
+                    &asset_head!("image/svg+xml", icon.len()),
+                    icon,
+                ),
+                (
+                    "GET",
+                    "/healthz",
+                    json_head!("200 OK", "15"),
+                    br#"{"status":"ok"}"#.as_slice(),
+                ),
+                ("HEAD", "/", index_head.as_str(), index),
+                ("HEAD", "/assets/i18n.js", NOT_FOUND, MISSING),
+            ] {
+                let wire = request(port, method, path, &[], b"");
+                let reply = exchange_wire(address, &wire, false).await;
+                assert_reply(driver, &format!("{method} {path}"), &reply, head, body);
+            }
+        });
     }
 }
 
@@ -228,7 +263,7 @@ fn pages_and_embedded_assets() {
 fn management_json_and_error_responses() {
     const ACCOUNTS: &[u8] = br#"{"accounts":[],"claude_quota":null,"memory_routing_status":null,"native_account":{"auth_mode":"missing","credential_set":false,"hidden_models":[],"id":"@native","model_context_windows":{},"name":"Current Codex login","native":true,"prefix":"","quota":null},"provider_quotas":{},"refresh_errors":{}}"#;
     const TOO_LARGE: &[u8] = br#"{"error":{"code":"request_too_large","limit_bytes":5242880,"message":"request body is too large (EMP limit: 5242880 bytes)","reason":"hard_limit"}}"#;
-    for driver in Driver::ALL {
+    for &driver in Driver::selected() {
         let directory = tempfile::tempdir().unwrap();
         let config = directory.path().join("config.json");
         std::fs::write(&config, br#"{"language":"en"}"#).unwrap();
@@ -284,8 +319,8 @@ fn management_sse_and_update_drain() {
         "X-Content-Type-Options: nosniff\r\n",
         "Connection: close\r\n\r\n",
     );
-    for driver in Driver::ALL {
-        Fixture::with_driver(tempfile::tempdir().unwrap(), driver).run_wire(async |fixture, address| {
+    for &driver in Driver::selected() {
+        Fixture::new_with_driver(driver).run_wire(async |fixture, address| {
             let port = fixture.port();
             let session = fixture.session();
             let stream = RawClient::request(
@@ -362,7 +397,7 @@ fn inference_responses() {
         "Connection: close\r\n\r\n",
     );
 
-    for driver in Driver::ALL {
+    for &driver in Driver::selected() {
         for (status, raw, candidate, legacy) in [
             (
                 200,
@@ -476,7 +511,7 @@ fn responses_and_realtime_websocket_upgrades() {
         "Connection: Upgrade\r\n",
         "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
     );
-    for driver in Driver::ALL {
+    for &driver in Driver::selected() {
         let expected = match driver {
             Driver::Candidate => CANDIDATE,
             Driver::Legacy => LEGACY,
@@ -528,7 +563,7 @@ fn realtime_upstream_method_not_allowed() {
     use super::websocket::realtime_fixture;
     use crate::tests::realtime_contract::{RealtimeUpstream, UpstreamResponse, multipart_offer};
 
-    for driver in Driver::ALL {
+    for &driver in Driver::selected() {
         let upstream = RealtimeUpstream::start(UpstreamResponse {
             status: 405,
             reason: "Method Not Allowed",

@@ -226,8 +226,8 @@ fn migrated_wrong_methods_match_legacy_before_and_during_update_drain() {
 fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
     use crate::{server::raw_tcp::RawClient, services::modules::aero::CallLease};
 
-    for use_candidate in [false, true] {
-        Fixture::new().run_candidate(async |fixture, candidate| {
+    for &driver in TestDriver::selected() {
+        Fixture::new_with_driver(driver).run_wire(async |fixture, address| {
             let state = &fixture.legacy.state;
             let calls = &state.backend.aero_callers;
             let delegation = calls
@@ -243,11 +243,6 @@ fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
                     }),
                 )
                 .unwrap();
-            let address = if use_candidate {
-                candidate
-            } else {
-                fixture.legacy.local_addr()
-            };
             let auth = format!("Authorization: Bearer {}", delegation.key);
             let mut ws = RawClient::request(
                 address,
@@ -270,7 +265,7 @@ fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
             drop(delegation);
             assert!(
                 state.lifecycle.updates().drain_for_test(Duration::ZERO),
-                "idle WebSocket kept the parent work active (candidate={use_candidate})"
+                "idle WebSocket kept the parent work active ({driver:?})"
             );
             ws.io.shutdown().await.unwrap();
         });
@@ -316,7 +311,7 @@ fn lifecycle_and_unmatched_requests_match_legacy_wire() {
             )
             .await;
         let missing_balance = json_request(port, "/api/providers/balance", &[&session], b"{}");
-        for address in [old, candidate] {
+        for (_, address) in driver_endpoints(old, candidate) {
             assert!(
                 exchange_wire(address, &missing_balance, false)
                     .await
@@ -393,7 +388,7 @@ fn lifecycle_and_unmatched_requests_match_legacy_wire() {
 }
 
 #[cfg(unix)]
-fn integration_fixture(observed_at: Option<&str>) -> Fixture {
+fn integration_fixture(observed_at: Option<&str>, driver: TestDriver) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::write(
@@ -426,7 +421,7 @@ fn integration_fixture(observed_at: Option<&str>) -> Fixture {
         )
         .unwrap();
     }
-    Fixture::with_directory(directory)
+    Fixture::with_driver(directory, driver)
 }
 
 #[cfg(unix)]
@@ -442,48 +437,50 @@ fn normalize_integration_reply(fixture: &Fixture, reply: Vec<u8>) -> Vec<u8> {
 fn integration_recovery_record_matches_legacy_wire() {
     const OBSERVED_AT: &str = "2026-01-02T03:04:05Z";
 
-    let old = integration_fixture(Some(OBSERVED_AT));
-    integration_fixture(Some(OBSERVED_AT)).run_candidate(async |new, candidate| {
-        let old_status = request(
-            old.port(),
-            "GET",
-            "/api/integration",
-            &[&old.session()],
-            b"",
-        );
-        let new_status = request(
-            new.port(),
-            "GET",
-            "/api/integration",
-            &[&new.session()],
-            b"",
-        );
-        let old_addr = old.legacy.local_addr();
-        let check_status = |fixture: &Fixture, reply: Vec<u8>| {
-            assert_eq!(
-                json_body(&reply)["runtime"]["last_known"]["observed_at"],
-                OBSERVED_AT
+    let old = integration_fixture(Some(OBSERVED_AT), TestDriver::reference());
+    integration_fixture(Some(OBSERVED_AT), TestDriver::Candidate).run_wire(
+        async |new, candidate| {
+            let old_status = request(
+                old.port(),
+                "GET",
+                "/api/integration",
+                &[&old.session()],
+                b"",
             );
-            normalize_integration_reply(fixture, reply)
-        };
-        let (old_reply, new_reply) = tokio::join!(
-            assert_wire_with(old_addr, &old_status, false, 200, |reply| check_status(
-                &old, reply
-            )),
-            assert_wire_with(candidate, &new_status, false, 200, |reply| check_status(
-                new, reply
-            )),
-        );
-        assert_wire_response_parity(&old_status, &old_reply, &new_reply);
-    });
+            let new_status = request(
+                new.port(),
+                "GET",
+                "/api/integration",
+                &[&new.session()],
+                b"",
+            );
+            let old_addr = old.legacy.local_addr();
+            let check_status = |fixture: &Fixture, reply: Vec<u8>| {
+                assert_eq!(
+                    json_body(&reply)["runtime"]["last_known"]["observed_at"],
+                    OBSERVED_AT
+                );
+                normalize_integration_reply(fixture, reply)
+            };
+            let (old_reply, new_reply) = tokio::join!(
+                assert_wire_with(old_addr, &old_status, false, 200, |reply| check_status(
+                    &old, reply
+                )),
+                assert_wire_with(candidate, &new_status, false, 200, |reply| check_status(
+                    new, reply
+                )),
+            );
+            assert_wire_response_parity(&old_status, &old_reply, &new_reply);
+        },
+    );
     old.legacy.shutdown().unwrap();
 }
 
 #[cfg(unix)]
 #[test]
 fn integration_commands_match_legacy_wire_and_restore_native_files() {
-    let old = integration_fixture(None);
-    integration_fixture(None).run_candidate(async |new, candidate| {
+    let old = integration_fixture(None, TestDriver::reference());
+    integration_fixture(None, TestDriver::Candidate).run_wire(async |new, candidate| {
         let old_addr = old.legacy.local_addr();
         for (operation, body, status, state) in [
             ("enable", b"{}".as_slice(), 409, "native"),
@@ -542,103 +539,91 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
     use crate::server::ShutdownReason;
     use crate::server::raw_tcp::{RawClient, read_websocket_frame};
 
-    let old = Fixture::new();
-    let new = Fixture::new();
-    let (candidate, candidate_task) = spawn_candidate(&new.legacy);
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async {
-            for (driver, fixture, addr) in [
-                (Driver::Legacy, &old, old.legacy.local_addr()),
-                (Driver::Candidate, &new, candidate),
-            ] {
-                let port = fixture.port();
-                let session = fixture.session();
-                let websocket = request(
+    for &driver in Driver::selected() {
+        let address = Fixture::new_with_driver(driver).run_wire(async |fixture, addr| {
+            let port = fixture.port();
+            let session = fixture.session();
+            let websocket = request(
+                port,
+                "GET",
+                "/v1/responses",
+                &[
+                    &session,
+                    "Upgrade: websocket",
+                    "Connection: Upgrade",
+                    "Sec-WebSocket-Version: 13",
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                ],
+                b"",
+            );
+            let mut ws = RawClient::request(addr, &websocket).await;
+            assert!(ws.head.starts_with("HTTP/1.1 101"));
+            let mut sse = RawClient::request(
+                addr,
+                &request(port, "GET", "/api/accounts/events", &[&session], b""),
+            )
+            .await;
+            assert!(sse.head.starts_with("HTTP/1.1 200"));
+            let mut admitted = TcpStream::connect(addr).await.unwrap();
+            admitted
+                .write_all(&request(
                     port,
-                    "GET",
-                    "/v1/responses",
+                    "POST",
+                    "/api/integration/verify",
                     &[
                         &session,
-                        "Upgrade: websocket",
-                        "Connection: Upgrade",
-                        "Sec-WebSocket-Version: 13",
-                        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                        "Content-Length: 2",
+                        "Content-Type: application/json",
                     ],
                     b"",
-                );
-                let mut ws = RawClient::request(addr, &websocket).await;
-                assert!(ws.head.starts_with("HTTP/1.1 101"));
-                let mut sse = RawClient::request(
-                    addr,
-                    &request(port, "GET", "/api/accounts/events", &[&session], b""),
-                )
+                ))
+                .await
+                .unwrap();
+            let state = &fixture.legacy.state;
+            crate::tests::wait_for(Duration::from_secs(5), || {
+                state.lifecycle.updates().active_for_test() == 1
+            });
+            let quit = json_request(port, "/api/quit", &[&session], b"{}");
+            let mut stopping = TcpStream::connect(addr).await.unwrap();
+            stopping.write_all(&quit).await.unwrap();
+            assert_eq!(read_websocket_frame(&mut ws.io, false).await.0, 0x88);
+            let mut denied = TcpStream::connect(addr).await.unwrap();
+            let _ = denied
+                .write_all(&request(port, "GET", "/healthz", &[], b""))
                 .await;
-                assert!(sse.head.starts_with("HTTP/1.1 200"));
-                let mut admitted = TcpStream::connect(addr).await.unwrap();
-                admitted
-                    .write_all(&request(
-                        port,
-                        "POST",
-                        "/api/integration/verify",
-                        &[
-                            &session,
-                            "Content-Length: 2",
-                            "Content-Type: application/json",
-                        ],
-                        b"",
-                    ))
-                    .await
-                    .unwrap();
-                let state = &fixture.legacy.state;
-                crate::tests::wait_for(Duration::from_secs(5), || {
-                    state.lifecycle.updates().active_for_test() == 1
-                });
-                let quit = json_request(port, "/api/quit", &[&session], b"{}");
-                let mut stopping = TcpStream::connect(addr).await.unwrap();
-                stopping.write_all(&quit).await.unwrap();
-                assert_eq!(read_websocket_frame(&mut ws.io, false).await.0, 0x88);
-                let mut denied = TcpStream::connect(addr).await.unwrap();
-                let _ = denied
-                    .write_all(&request(port, "GET", "/healthz", &[], b""))
-                    .await;
-                let mut rejected = [0];
-                let rejected = timeout(Duration::from_secs(3), denied.read(&mut rejected))
-                    .await
-                    .unwrap();
-                assert!(matches!(rejected, Ok(0) | Err(_)));
-                assert!(!state.lifecycle.shutdown.load(Ordering::Acquire));
-                admitted.write_all(b"{}").await.unwrap();
-                let mut response = Vec::new();
-                admitted.read_to_end(&mut response).await.unwrap();
-                assert_status(&response, 409);
-                let mut response = Vec::new();
-                stopping.read_to_end(&mut response).await.unwrap();
-                assert_reply(
-                    driver,
-                    "POST /api/quit",
-                    &response,
-                    json_head!("200 OK", "21"),
-                    br#"{"status":"stopping"}"#,
-                );
-                let sse_end = sse.rest().await;
-                assert!(String::from_utf8_lossy(&sse_end).contains("event: emp-exiting"));
-                let signal = state.lifecycle.signal().wait().await;
-                assert_eq!(
-                    signal,
-                    if addr == candidate {
-                        ShutdownReason::ResponseWritten
-                    } else {
-                        ShutdownReason::Requested
-                    }
-                );
-                assert!(state.lifecycle.admission.acquire_request().is_none());
-            }
-            candidate_task.await.unwrap().unwrap();
-            assert!(TcpStream::connect(candidate).await.is_err());
+            let mut rejected = [0];
+            let rejected = timeout(Duration::from_secs(3), denied.read(&mut rejected))
+                .await
+                .unwrap();
+            assert!(matches!(rejected, Ok(0) | Err(_)));
+            assert!(!state.lifecycle.shutdown.load(Ordering::Acquire));
+            admitted.write_all(b"{}").await.unwrap();
+            let mut response = Vec::new();
+            admitted.read_to_end(&mut response).await.unwrap();
+            assert_status(&response, 409);
+            let mut response = Vec::new();
+            stopping.read_to_end(&mut response).await.unwrap();
+            assert_reply(
+                driver,
+                "POST /api/quit",
+                &response,
+                json_head!("200 OK", "21"),
+                br#"{"status":"stopping"}"#,
+            );
+            let sse_end = sse.rest().await;
+            assert!(String::from_utf8_lossy(&sse_end).contains("event: emp-exiting"));
+            let signal = state.lifecycle.signal().wait().await;
+            assert_eq!(
+                signal,
+                if matches!(driver, Driver::Candidate) {
+                    ShutdownReason::ResponseWritten
+                } else {
+                    ShutdownReason::Requested
+                }
+            );
+            assert!(state.lifecycle.admission.acquire_request().is_none());
+            addr
         });
-    old.legacy.shutdown().unwrap();
-    new.legacy.shutdown().unwrap();
+        assert!(std::net::TcpStream::connect(address).is_err());
+    }
 }
