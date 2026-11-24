@@ -108,8 +108,7 @@ impl TeamState {
                 token,
                 identity,
             });
-            store.recovery_required = false;
-            self.save_store(state, store)?;
+            self.apply_permissions(state, store)?;
             self.events.notify_one();
             catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
             return self.local_status();

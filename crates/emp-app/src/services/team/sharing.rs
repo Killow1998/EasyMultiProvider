@@ -3,8 +3,12 @@ use emp_modules::{
     team::{ShareMetadata, SyncPlan},
     workspace::{NATIVE_SHARE, Publish, SharedService},
 };
-use emp_state::{ConfigError, FileTransaction};
-use std::{collections::BTreeSet, path::Path};
+use std::collections::BTreeSet;
+
+mod cleanup;
+use cleanup::{
+    merge_subscription_routes, remove_legacy_providers, remove_private_file, retire_subscriptions,
+};
 
 impl TeamState {
     pub(super) fn publish(
@@ -39,7 +43,7 @@ impl TeamState {
         let access_changed = session.identity != identity;
         session.identity = identity;
         if !permissions.sync_allowed {
-            self.save_store(state, store)?;
+            self.apply_permissions(state, store)?;
             super::super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
             return Err(Failure(403, "workspace_permission_required".into()));
         }
@@ -85,7 +89,7 @@ impl TeamState {
             .collect::<Vec<_>>();
         let plan: SyncPlan = policy(state, Request::SyncShares { shares: metadata })?;
         let syncable = plan.selected.len();
-        let selected = plan
+        let mut selected = plan
             .selected
             .into_iter()
             .map(|index| (index, true))
@@ -97,6 +101,20 @@ impl TeamState {
                     .ok_or_else(|| Failure(400, "invalid_module_reply".into()))
             })
             .collect::<Result<Vec<_>>>()?;
+        selected.sort_by_key(|(share, _)| {
+            (
+                std::cmp::Reverse(share.payload.subscription.as_ref().map(|s| s.expires_at)),
+                &share.id,
+            )
+        });
+        let mut identities = BTreeSet::new();
+        for (share, install) in &mut selected {
+            if let Some(auth) = &share.payload.subscription {
+                *install &= identities.insert(emp_state::accounts::account_auth_identity(
+                    &auth.auth_document(),
+                ));
+            }
+        }
         let available: BTreeSet<_> = selected
             .iter()
             .map(|(share, _)| share.id.as_str())
@@ -111,83 +129,154 @@ impl TeamState {
             access_changed |= current != record.available;
             record.available = current;
         }
+        let session = session.clone();
         let settings = &state.backend.configuration;
-        let mut config = settings.edit().map_err(|_| Failure::unavailable())?;
-        let mut updated = config.clone();
-        let legacy_paths = remove_team_entries(state, &mut updated, &store.imported, false)?;
-        store
-            .imported
-            .retain(|_, record| record.expires_at.is_some());
-        let mut credentials = Vec::new();
-        let mut changed = 0;
-        for (share, install) in selected {
-            let local_id = format!("team-{}", share.id);
-            let metadata = store.imported.get(&local_id);
-            if install
-                && super::subscriptions::stage(
-                    state,
-                    &mut updated,
-                    session,
-                    &local_id,
-                    metadata,
-                    share,
-                    &mut credentials,
-                )?
-            {
-                changed += 1;
-            }
-            let auth = share
-                .payload
-                .subscription
-                .as_ref()
-                .ok_or_else(|| Failure(502, "invalid_workspace_share".into()))?;
-            let account_identity =
-                emp_state::accounts::account_auth_identity(&auth.auth_document());
-            access_changed |= metadata.is_none_or(|record| {
-                record.account_identity.as_deref() != Some(account_identity.as_str())
-                    || record.version != share.version
-                    || record.expires_at != Some(auth.expires_at)
-            });
-            store.imported.insert(
-                local_id,
-                Imported {
-                    workspace: workspace.clone(),
-                    share: share.id.clone(),
-                    version: share.version,
-                    available: true,
-                    expires_at: Some(auth.expires_at),
-                    account_identity: Some(account_identity),
-                },
-            );
-        }
-        let available_identities: BTreeSet<_> = store
-            .imported
-            .values()
-            .filter(|record| record.workspace == workspace && record.usable())
-            .filter_map(|record| record.account_identity.as_deref())
-            .collect();
-        super::subscriptions::mark_expired_private(
-            &settings.vault,
-            &mut updated,
-            &available_identities,
-        );
-        if changed > 0 || access_changed || !legacy_paths.is_empty() || *config != updated {
-            emp_state::config::preserve_service_route_names(&config, &mut updated);
-            emp_state::config::validate_service_names(&config, &updated)
-                .map_err(|_| Failure(409, "workspace_service_name_conflict".into()))?;
-            config
-                .commit_with(&updated, |_, files| {
-                    for path in &legacy_paths {
-                        remove_private_file(files, path)?;
+        let (changed, refresh) = super::super::accounts::edit_account_credentials(
+            state,
+            |config| -> Result<_> {
+                let mut updated = config.clone();
+                let mut removed_paths = remove_legacy_providers(&mut updated, &store.imported);
+                let mut retired = BTreeSet::new();
+                for (source, record) in store.imported.iter_mut().filter(|(_, r)| {
+                    !r.available && r.workspace == workspace && r.expires_at.is_some()
+                }) {
+                    retired.insert(source.clone());
+                    if let Some(id) = record.local_account.take() {
+                        retired.insert(id);
                     }
-                    super::subscriptions::persist(&settings.vault, files, credentials)?;
-                    files.remember(&self.path)?;
-                    self.write(&settings.vault, &store)?;
-                    Ok(())
-                })
-                .map_err(|_| Failure::unavailable())?;
-            *self.store.lock().map_err(|_| Failure::unavailable())? = Some(store);
-            drop(config);
+                }
+                removed_paths.extend(retire_subscriptions(state, &mut updated, &retired)?);
+                retired.clear();
+                store
+                    .imported
+                    .retain(|_, record| record.expires_at.is_some());
+                let mut credentials = Vec::new();
+                let mut changed = 0;
+                for (share, install) in selected {
+                    let local_id = format!("team-{}", share.id);
+                    let metadata = store.imported.get(&local_id);
+                    let auth = share
+                        .payload
+                        .subscription
+                        .as_ref()
+                        .ok_or_else(|| Failure(502, "invalid_workspace_share".into()))?;
+                    let document = auth.auth_document();
+                    let account_identity = emp_state::accounts::account_auth_identity(&document);
+                    let retained = super::subscriptions::matching_local(
+                        &updated,
+                        &settings.vault,
+                        &document,
+                        &account_identity,
+                    );
+                    if let Some(previous) = metadata.and_then(|r| r.local_account.as_ref())
+                        && (!install || retained.as_ref() != Some(previous))
+                    {
+                        retired.insert(previous.clone());
+                    }
+                    let mut binding = None;
+                    if install {
+                        let written = super::subscriptions::stage(
+                            state,
+                            &mut updated,
+                            &session,
+                            retained.as_deref(),
+                            metadata,
+                            share,
+                            &mut credentials,
+                        )?;
+                        if let Some(id) = retained {
+                            if updated["accounts"]
+                                .as_array()
+                                .expect("accounts")
+                                .iter()
+                                .any(|r| r["id"] == id && r["workspace_shared"] == true)
+                            {
+                                binding = Some(id.clone());
+                            }
+                            if metadata.is_some() && local_id != id {
+                                merge_subscription_routes(&mut updated, &local_id, &id);
+                                retired.insert(local_id.clone());
+                            }
+                        }
+                        if written
+                            || metadata.is_none_or(|r| {
+                                !r.available
+                                    || r.version != share.version
+                                    || r.local_account != binding
+                            })
+                        {
+                            changed += 1;
+                        }
+                    } else if metadata.is_some() {
+                        retired.insert(local_id.clone());
+                    }
+                    access_changed |=
+                        metadata.and_then(|r| r.local_account.as_ref()) != binding.as_ref();
+                    access_changed |= metadata.is_none_or(|record| {
+                        record.account_identity.as_deref() != Some(account_identity.as_str())
+                            || record.version != share.version
+                            || record.expires_at != Some(auth.expires_at)
+                    });
+                    store.imported.insert(
+                        local_id,
+                        Imported {
+                            workspace: workspace.clone(),
+                            share: share.id.clone(),
+                            version: share.version,
+                            available: true,
+                            expires_at: Some(auth.expires_at),
+                            account_identity: Some(account_identity),
+                            local_account: binding,
+                        },
+                    );
+                }
+                retired.retain(|id| {
+                    !store
+                        .imported
+                        .values()
+                        .any(|r| r.local_account.as_ref() == Some(id))
+                });
+                removed_paths.extend(retire_subscriptions(state, &mut updated, &retired)?);
+                if store.recovery_required {
+                    store.recovery_required = updated["accounts"]
+                        .as_array()
+                        .expect("accounts")
+                        .iter()
+                        .filter(|row| row["workspace_shared"] == true)
+                        .any(|row| {
+                            store
+                                .grant(row["id"].as_str().expect("account ID"))
+                                .is_none()
+                        });
+                    access_changed |= !store.recovery_required;
+                }
+                let refresh = changed > 0
+                    || access_changed
+                    || !removed_paths.is_empty()
+                    || **config != updated;
+                if refresh {
+                    emp_state::config::preserve_service_route_names(config, &mut updated);
+                    emp_state::config::validate_service_names(config, &updated)
+                        .map_err(|_| Failure(409, "workspace_service_name_conflict".into()))?;
+                    config
+                        .commit_with(&updated, |_, files| {
+                            for path in &removed_paths {
+                                remove_private_file(files, path)?;
+                            }
+                            super::subscriptions::persist(&settings.vault, files, credentials)?;
+                            files.remember(&self.path)?;
+                            self.write(&settings.vault, &store)?;
+                            Ok(())
+                        })
+                        .map_err(|_| Failure::unavailable())?;
+                    *self.store.lock().map_err(|_| Failure::unavailable())? = Some(store);
+                }
+                Ok((changed, refresh))
+            },
+            |r| matches!(r, Ok((_, true))),
+        )
+        .ok_or_else(Failure::unavailable)??;
+        if refresh {
             super::super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
         }
         Ok(json!({
@@ -197,135 +286,112 @@ impl TeamState {
         }))
     }
 
-    pub(crate) fn purge_local(&self, state: &ServerState) -> Result<()> {
-        let settings = &state.backend.configuration;
-        let mut config = settings.edit().map_err(|_| Failure::unavailable())?;
-        let mut updated = config.clone();
-        let old = self.snapshot()?;
-        let paths = remove_team_entries(state, &mut updated, &old.imported, true)?;
-        let store = Store {
-            device: old.device,
-            ..Store::default()
-        };
-        config
-            .commit_with(&updated, |_, files| {
-                for path in &paths {
-                    remove_private_file(files, path)?;
+    pub(super) fn apply_permissions(&self, state: &ServerState, mut store: Store) -> Result<()> {
+        let session = store.session.as_ref().ok_or_else(Failure::signed_out)?;
+        let grants = session.identity["native_usage"].as_array();
+        let mut retired = BTreeSet::new();
+        for (source, record) in store
+            .imported
+            .iter_mut()
+            .filter(|(_, r)| r.workspace == session.workspace() && r.expires_at.is_some())
+        {
+            if session.identity["member"]["sync"] != true
+                || grants.is_some_and(|grants| {
+                    !grants.iter().any(|g| {
+                        g["share"] == record.share
+                            && g["account_identity"].as_str() == record.account_identity.as_deref()
+                    })
+                })
+            {
+                if record.available {
+                    retired.insert(source.clone());
                 }
-                self.persist_device(&store.device)?;
-                remove_private_file(files, &self.path)
-            })
-            .map_err(|_| Failure::unavailable())?;
-        *self.store.lock().map_err(|_| Failure::unavailable())? = Some(store);
-        drop(config);
+                record.available = false;
+                if let Some(id) = record.local_account.take() {
+                    retired.insert(id);
+                }
+            }
+        }
+        if retired.is_empty() {
+            return self.save_store(state, store);
+        }
+        let settings = &state.backend.configuration;
+        super::super::accounts::replacing_account_credentials(state, |config| -> Result<()> {
+            let mut updated = config.clone();
+            let paths = retire_subscriptions(state, &mut updated, &retired)?;
+            config
+                .commit_with(&updated, |_, files| {
+                    for path in paths {
+                        remove_private_file(files, &path)?;
+                    }
+                    files.remember(&self.path)?;
+                    self.write(&settings.vault, &store)?;
+                    Ok(())
+                })
+                .map_err(|_| Failure::unavailable())?;
+            *self.store.lock().map_err(|_| Failure::unavailable())? = Some(store);
+            Ok(())
+        })
+        .ok_or_else(Failure::unavailable)?
+    }
+
+    pub(crate) fn purge_local(&self, state: &ServerState) -> Result<()> {
+        let old = self.snapshot()?;
+        super::super::accounts::replacing_account_credentials(state, |config| -> Result<()> {
+            let mut updated = config.clone();
+            let managed = updated["accounts"]
+                .as_array()
+                .expect("normalized accounts")
+                .iter()
+                .filter(|row| row["workspace_shared"] == true)
+                .filter_map(|row| {
+                    row["id"].as_str().filter(|id| {
+                        is_team_service_id(id)
+                            || row["retained_identity"].is_string()
+                            || old.grant(id).is_some()
+                    })
+                })
+                .map(str::to_owned)
+                .collect();
+            let mut paths = retire_subscriptions(state, &mut updated, &managed)?;
+            paths.extend(remove_legacy_providers(&mut updated, &old.imported));
+            let removed = |id: &str| {
+                managed.contains(id)
+                    && !updated["accounts"]
+                        .as_array()
+                        .expect("normalized accounts")
+                        .iter()
+                        .any(|row| row["id"] == id)
+            };
+            let clear_search = updated["subscription_search"]["account_id"]
+                .as_str()
+                .is_some_and(removed);
+            if updated["decision_provider"].as_str().is_some_and(removed) {
+                updated["decision_provider"] = json!("");
+            }
+            if clear_search {
+                updated["subscription_search"]["enabled"] = json!(false);
+                updated["subscription_search"]["account_id"] = json!("");
+            }
+            let store = Store {
+                device: old.device,
+                ..Store::default()
+            };
+            config
+                .commit_with(&updated, |_, files| {
+                    for path in &paths {
+                        remove_private_file(files, path)?;
+                    }
+                    self.persist_device(&store.device)?;
+                    remove_private_file(files, &self.path)
+                })
+                .map_err(|_| Failure::unavailable())?;
+            *self.store.lock().map_err(|_| Failure::unavailable())? = Some(store);
+            Ok(())
+        })
+        .ok_or_else(Failure::unavailable)??;
         self.discovery.stop();
         let _ = super::super::catalog::refresh_catalog(state);
         Ok(())
-    }
-}
-
-fn remove_team_entries(
-    state: &ServerState,
-    config: &mut Value,
-    imported: &BTreeMap<String, Imported>,
-    subscriptions: bool,
-) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    let mut removed = BTreeSet::new();
-    config["providers"]
-        .as_array_mut()
-        .expect("normalized providers")
-        .retain(|entry| {
-            let Some(id) = entry["id"].as_str().filter(|id| {
-                imported
-                    .get(*id)
-                    .is_some_and(|record| record.expires_at.is_none())
-            }) else {
-                return true;
-            };
-            if let Some(path) = entry["api_key_file"]
-                .as_str()
-                .filter(|path| !path.is_empty())
-            {
-                paths.push(PathBuf::from(path));
-            }
-            removed.insert(id.to_owned());
-            false
-        });
-    config["models"]
-        .as_array_mut()
-        .expect("normalized models")
-        .retain(|model| {
-            !model["provider"]
-                .as_str()
-                .is_some_and(|id| removed.contains(id))
-        });
-    if subscriptions {
-        for entry in config["accounts"].as_array().expect("normalized accounts") {
-            let Some(id) = entry["id"]
-                .as_str()
-                .filter(|id| entry["workspace_shared"] == true && is_team_service_id(id))
-            else {
-                continue;
-            };
-            let auth =
-                emp_state::account_auth_path(config, id, &state.backend.configuration.config_path)
-                    .map_err(|_| Failure::unavailable())?;
-            if !super::subscriptions::owns_credential(entry, &auth) {
-                continue;
-            }
-            paths.push(auth.with_file_name("config.toml"));
-            paths.push(auth);
-            removed.insert(id.to_owned());
-        }
-        config["accounts"]
-            .as_array_mut()
-            .expect("normalized accounts")
-            .retain(|account| {
-                !account["id"]
-                    .as_str()
-                    .is_some_and(|id| removed.contains(id))
-            });
-        if config["subscription_search"]["account_id"]
-            .as_str()
-            .is_some_and(|id| removed.contains(id))
-        {
-            config["subscription_search"]["enabled"] = json!(false);
-            config["subscription_search"]["account_id"] = json!("");
-        }
-    }
-    if config["decision_provider"]
-        .as_str()
-        .is_some_and(|id| removed.contains(id))
-    {
-        config["decision_provider"] = json!("");
-    }
-    let retained: BTreeSet<_> = [("accounts", "auth_file"), ("providers", "api_key_file")]
-        .into_iter()
-        .flat_map(|(kind, field)| {
-            config[kind]
-                .as_array()
-                .expect("normalized services")
-                .iter()
-                .filter_map(move |entry| entry[field].as_str().map(PathBuf::from))
-        })
-        .collect();
-    paths.retain(|path| {
-        !retained.contains(path)
-            && (path.file_name().and_then(|name| name.to_str()) != Some("config.toml")
-                || !retained.iter().any(|auth| auth.parent() == path.parent()))
-    });
-    Ok(paths)
-}
-
-fn remove_private_file(
-    files: &mut FileTransaction,
-    path: &Path,
-) -> std::result::Result<(), ConfigError> {
-    files.remember(path)?;
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(emp_state::FilesystemError::ManagedFileUnavailable.into()),
     }
 }

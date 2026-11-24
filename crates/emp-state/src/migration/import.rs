@@ -46,6 +46,7 @@ fn validate_import_payload(payload: &Value) -> MigrationResult<ValidatedImport> 
         let object = metadata.as_object_mut().expect("normalized account");
         object.remove("workspace_shared");
         object.remove("credential_source");
+        object.remove("retained_identity");
         let auth = validate_auth_json(record.get("auth").unwrap_or(&Value::Null))
             .map_err(|_| MigrationError::InvalidAccountRecord)?;
         let id = metadata

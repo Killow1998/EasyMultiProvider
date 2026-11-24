@@ -81,6 +81,14 @@ impl Session {
 }
 
 impl Store {
+    pub(super) fn grant(&self, id: &str) -> Option<&Imported> {
+        self.imported.get(id).or_else(|| {
+            self.imported
+                .values()
+                .find(|r| r.local_account.as_deref() == Some(id))
+        })
+    }
+
     pub(super) fn native_usage_grant(&self, identity: &str) -> Option<(&Session, &str)> {
         let session = self
             .session
@@ -186,8 +194,7 @@ impl TeamState {
         let store = self.store.lock().ok()?;
         let store = store.as_ref()?;
         let record = store
-            .imported
-            .get(provider.as_ref())
+            .grant(provider.as_ref())
             .filter(|source| source.usable())?;
         let session = store
             .session
@@ -225,7 +232,7 @@ impl TeamState {
         let store = store.as_ref()?;
         let workspace = store.session.as_ref()?.workspace();
         let shares = store.imported.iter().filter(|(_, record)| {
-            record.workspace == workspace && record.account_identity.is_some()
+            record.workspace == workspace && record.available && record.account_identity.is_some()
         });
         shares.clone().next()?;
         let auth = if provider == "codex-native" {
@@ -258,6 +265,9 @@ impl TeamState {
             .value()
             .get("account")
             .unwrap_or(&Value::Null);
+        if account["retained_identity"].is_string() && account["auth_file"] == "" {
+            return Err(RequestDenied::ShareUnavailable);
+        }
         let source = self.subscription_source(state, &route.provider_id, account);
         self.check_route(&source, active, tier)?;
         if active
@@ -281,21 +291,20 @@ impl TeamState {
         active: bool,
         tier: Option<&str>,
     ) -> std::result::Result<(), RequestDenied> {
-        if !is_team_service_id(provider) {
-            return Ok(());
-        }
         let store = self
             .store
             .lock()
             .map_err(|_| RequestDenied::ShareUnavailable)?;
-        let store = store.as_ref().ok_or(RequestDenied::ShareUnavailable)?;
-        let Some(record) = store.imported.get(provider) else {
-            return if self.configured_shares.contains(provider) {
+        let Some(record) = store.as_ref().and_then(|s| s.grant(provider)) else {
+            return if store.as_ref().is_none_or(|s| s.recovery_required)
+                && (is_team_service_id(provider) || self.configured_shares.contains(provider))
+            {
                 Err(RequestDenied::ShareUnavailable)
             } else {
                 Ok(())
             };
         };
+        let store = store.as_ref().expect("grant belongs to store");
         if record.expires_at.is_none() {
             return Err(RequestDenied::ShareUnavailable);
         }
@@ -321,13 +330,16 @@ impl TeamState {
     }
 
     pub(crate) fn shared_subscription(&self, id: &str) -> bool {
-        is_team_service_id(id)
-            && (self.configured_shares.contains(id)
-                || self.store.lock().map_or(true, |store| {
-                    store
-                        .as_ref()
-                        .is_none_or(|store| store.imported.contains_key(id))
-                }))
+        let recovery = || self.configured_shares.contains(id) || is_team_service_id(id);
+        self.store
+            .lock()
+            .ok()
+            .and_then(|store| {
+                store
+                    .as_ref()
+                    .map(|s| s.grant(id).is_some() || (s.recovery_required && recovery()))
+            })
+            .unwrap_or_else(recovery)
     }
 
     pub(crate) fn exclude_shared_migration_providers(&self, config: &mut Value) -> Result<()> {
@@ -368,11 +380,12 @@ impl TeamState {
         let Some(store) = store.as_ref() else { return };
         for account in accounts.as_array_mut().expect("public account list") {
             let Some(id) = account["id"].as_str().filter(|id| {
-                store.imported.contains_key(*id) || self.configured_shares.contains(*id)
+                store.grant(id).is_some()
+                    || (store.recovery_required && self.configured_shares.contains(*id))
             }) else {
                 continue;
             };
-            let can_reset = store.imported.get(id).is_some_and(|record| {
+            let can_reset = store.grant(id).is_some_and(|record| {
                 record.usable()
                     && store.session.as_ref().is_some_and(|session| {
                         session.can_sync(record) && can_migrate(&session.identity)
@@ -390,10 +403,10 @@ impl TeamState {
         let Ok(store) = self.snapshot() else {
             return false;
         };
-        let Some(record) = store.imported.get(id) else {
+        let Some(record) = store.grant(id) else {
             return false;
         };
-        let Some(session) = store.session.filter(|session| {
+        let Some(session) = store.session.as_ref().filter(|session| {
             record.usable()
                 && session.workspace() == record.workspace
                 && can_migrate(&session.identity)

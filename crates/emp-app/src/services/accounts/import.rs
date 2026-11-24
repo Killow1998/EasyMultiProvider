@@ -96,12 +96,19 @@ pub(crate) fn matching_account<'a>(
         .into_iter()
         .flatten()
         .find(|account| {
-            account["workspace_shared"] != true
-                && account["auth_file"]
-                    .as_str()
-                    .and_then(|path| vault.read_encrypted_json(Path::new(path)).ok())
-                    .is_some_and(|old| emp_state::same_account_auth(&old, auth))
+            matches_retained(account, auth)
+                || (account["workspace_shared"] != true
+                    && account["auth_file"]
+                        .as_str()
+                        .and_then(|path| vault.read_encrypted_json(Path::new(path)).ok())
+                        .is_some_and(|old| emp_state::same_account_auth(&old, auth)))
         })
+}
+
+fn matches_retained(account: &Value, auth: &Value) -> bool {
+    account["retained_identity"]
+        .as_str()
+        .is_some_and(|identity| identity == emp_state::accounts::account_auth_identity(auth))
 }
 
 pub(crate) fn import_account_state(
@@ -154,7 +161,9 @@ fn import_credentials(
                 .expect("normalized accounts")
                 .iter()
                 .find(|record| record["id"] == account_id);
-            if previous_account.is_some_and(|record| record["workspace_shared"] == true) {
+            if previous_account.is_some_and(|record| {
+                record["workspace_shared"] == true && !matches_retained(record, &auth)
+            }) {
                 return Err(
                     "team subscription credentials are managed by workspace sync".to_owned(),
                 );
@@ -171,7 +180,7 @@ fn import_credentials(
                             .ok()
                     })
                     .is_some_and(|old| emp_state::same_account_auth(&old, &auth));
-                if !same {
+                if !same && !matches_retained(existing, &auth) {
                     return Err(
                         "account identity changed during import; please import again".into(),
                     );
