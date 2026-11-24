@@ -139,19 +139,13 @@ impl Context {
                 emp_state::write_new_private_file(&config.join(".credentials.json"), &bytes)
                     .map_err(|_| ClaudeCliError::Failure("claude_cli_temp_unavailable"))?;
             }
-            for key in [
-                "HTTP_PROXY",
-                "HTTPS_PROXY",
-                "ALL_PROXY",
-                "NO_PROXY",
-                "http_proxy",
-                "https_proxy",
-                "all_proxy",
-                "no_proxy",
-                "SSL_CERT_FILE",
-                "SSL_CERT_DIR",
-                "NODE_EXTRA_CA_CERTS",
-            ] {
+            for (key, value) in emp_transport::ProxyEnvironment::capture_current()
+                .environment
+                .child_variables()
+            {
+                command.env(key, value);
+            }
+            for key in ["SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"] {
                 if let Some(value) = std::env::var_os(key) {
                     command.env(key, value);
                 }

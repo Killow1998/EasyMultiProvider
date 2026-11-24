@@ -8,13 +8,25 @@ independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 Older series leave routine maintenance; their dated acceptance records remain.
 
-## Current target and acceptance (2026-11-20 UTC)
+## Current target and acceptance (2026-11-24 UTC)
 
-The maintenance window is **0.167–0.171** following the stable
+The maintenance window is **0.168–0.172** following the stable
+[Codex 0.172.0 release](https://github.com/openai/codex/releases/tag/rust-v0.172.0).
+The WebUI suggests updating Codex when the selected runtime is older than 0.168.
+
+The official Linux x86_64 runtime was exercised with isolated homes and
+simulated upstream services. API key, project and organization spending-limit
+errors reached the client while the connection remained open. With a cached
+tool catalog, the first image-tool call started its MCP server and produced
+a PNG. Code Mode completed and resumed subagent calls over Responses, Chat
+Completions and Anthropic Messages. Connector result bodies reached the client
+and were absent from the inspected EMP log and usage files.
+
+## Previous target and acceptance (2026-11-20 UTC)
+
+The maintenance window was **0.167–0.171** following the stable
 [0.171.0 release](https://github.com/openai/codex/releases/tag/rust-v0.171.0).
-The WebUI displays an update link beside the detected runtime for versions
-below 0.167. Older runtimes can still be selected using the existing runtime
-policy.
+At this checkpoint the WebUI suggested updating runtimes older than 0.167.
 
 Official Linux x86_64 Codex 0.171.0 passed all 55 created-history restore
 assertions against the local EMP 0.15.0-based candidate, with 15 synthetic

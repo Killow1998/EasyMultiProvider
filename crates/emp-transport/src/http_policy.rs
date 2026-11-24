@@ -387,7 +387,9 @@ impl HttpClientPolicy {
             .host
             .clone()
             .ok_or(HttpClientPolicyError::InvalidUrl)?;
-        let transport_proxy_url = self.proxy_policy.proxy_url_for_target(&target)?;
+        let transport_proxy_url = self
+            .proxy_policy
+            .proxy_for_endpoint(&target.scheme, &host)?;
         let proxy_origin = transport_proxy_url
             .as_deref()
             .map(ProxyOrigin::proxy)

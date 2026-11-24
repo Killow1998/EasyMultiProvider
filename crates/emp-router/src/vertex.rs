@@ -10,8 +10,17 @@ use url::Url;
 pub(super) mod gemini;
 #[cfg(test)]
 mod tests;
+#[cfg(target_os = "linux")]
+mod user_adc;
 
-type CredentialCache = HashMap<String, ([u8; 32], AccessTokenCredentials)>;
+#[derive(Clone)]
+enum VertexCredential {
+    Google(AccessTokenCredentials),
+    #[cfg(target_os = "linux")]
+    User(std::sync::Arc<user_adc::UserCredential>),
+}
+
+type CredentialCache = HashMap<String, ([u8; 32], VertexCredential)>;
 static CREDENTIALS: OnceLock<Mutex<CredentialCache>> = OnceLock::new();
 const CLOUD_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
@@ -179,6 +188,7 @@ pub(super) fn endpoint(route: &ResolvedRoute, stream: bool) -> Result<String, Ro
 }
 
 pub(super) async fn headers(
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] client: &HttpClient,
     provider: &Map<String, Value>,
     incoming: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, RouterError> {
@@ -208,33 +218,47 @@ pub(super) async fn headers(
         if let Some((_, credential)) = cache.get(id).filter(|(old, _)| *old == fingerprint) {
             credential.clone()
         } else {
-            let credential = if mode == "vertex_adc" {
-                credentials::Builder::default()
-                    .with_scopes([CLOUD_SCOPE])
-                    .build_access_token_credentials()
-            } else {
-                let key = serde_json::from_str(secret)
-                    .map_err(|_| auth_error("Vertex service account JSON is invalid"))?;
-                credentials::service_account::Builder::new(key)
-                    .with_access_specifier(
-                        credentials::service_account::AccessSpecifier::from_scopes([CLOUD_SCOPE]),
-                    )
-                    .build_access_token_credentials()
-            }
-            .map_err(|_| auth_error("Unable to load Google Cloud credentials"))?;
+            let credential = load_credential(mode, secret)?;
             cache.insert(id.to_owned(), (fingerprint, credential.clone()));
             credential
         }
     };
-    let token = credential
-        .access_token()
-        .await
-        .map_err(|_| auth_error("Unable to refresh Google Cloud credentials"))?;
-    headers.insert(
-        "Authorization".to_owned(),
-        format!("Bearer {}", token.token),
-    );
+    let token = match credential {
+        VertexCredential::Google(credential) => {
+            credential
+                .access_token()
+                .await
+                .map_err(|_| auth_error("Unable to refresh Google Cloud credentials"))?
+                .token
+        }
+        #[cfg(target_os = "linux")]
+        VertexCredential::User(user) => user.access_token(client).await?,
+    };
+    headers.insert("Authorization".into(), format!("Bearer {token}"));
     Ok(headers)
+}
+
+fn load_credential(mode: &str, secret: &str) -> Result<VertexCredential, RouterError> {
+    let credential = if mode == "vertex_adc" {
+        #[cfg(target_os = "linux")]
+        if let Some(user) = user_adc::UserCredential::load()? {
+            return Ok(VertexCredential::User(std::sync::Arc::new(user)));
+        }
+        credentials::Builder::default()
+            .with_scopes([CLOUD_SCOPE])
+            .build_access_token_credentials()
+    } else {
+        let key = serde_json::from_str(secret)
+            .map_err(|_| auth_error("Vertex service account JSON is invalid"))?;
+        credentials::service_account::Builder::new(key)
+            .with_access_specifier(credentials::service_account::AccessSpecifier::from_scopes(
+                [CLOUD_SCOPE],
+            ))
+            .build_access_token_credentials()
+    };
+    credential
+        .map(VertexCredential::Google)
+        .map_err(|_| auth_error("Unable to load Google Cloud credentials"))
 }
 
 fn auth_error(message: &'static str) -> RouterError {

@@ -84,6 +84,44 @@ impl ProxyEnvironment {
         }
     }
 
+    pub fn child_variables(&self) -> impl Iterator<Item = (&'static str, String)> {
+        [
+            ("HTTPS_PROXY", "https_proxy", self.proxy_for_scheme("https")),
+            ("HTTP_PROXY", "http_proxy", self.proxy_for_scheme("http")),
+            ("ALL_PROXY", "all_proxy", self.all.clone()),
+            ("NO_PROXY", "no_proxy", Some(self.no_proxy.join(","))),
+        ]
+        .into_iter()
+        .filter_map(|(upper, lower, value)| value.map(|v| [(upper, v.clone()), (lower, v)]))
+        .flatten()
+    }
+
+    fn proxy_for_scheme(&self, scheme: &str) -> Option<String> {
+        let candidates: &[(&Option<String>, bool)] = match scheme {
+            "https" | "wss" => &[
+                (&self.wss, false),
+                (&self.socks, true),
+                (&self.https, false),
+                (&self.all, false),
+            ],
+            "http" | "ws" => &[
+                (&self.ws, false),
+                (&self.socks, true),
+                (&self.https, false),
+                (&self.http, false),
+                (&self.all, false),
+            ],
+            _ => &[(&self.all, false)],
+        };
+        candidates.iter().find_map(|(proxy, socks)| {
+            let value = proxy.as_deref().filter(|value| !value.is_empty())?;
+            if *socks && let Some(address) = value.strip_prefix("http://") {
+                return Some(format!("socks5h://{address}"));
+            }
+            Some(value.to_owned())
+        })
+    }
+
     pub(crate) fn has_proxy(&self) -> bool {
         self.http.is_some()
             || self.https.is_some()
@@ -304,8 +342,7 @@ impl ProxyPolicy {
         }
     }
 
-    pub(super) fn proxy_url_for_target(&self, route: &UrlTarget) -> HttpResult<Option<String>> {
-        let host = route.host.as_deref().unwrap_or("");
+    pub fn proxy_for_endpoint(&self, scheme: &str, host: &str) -> HttpResult<Option<String>> {
         if is_loopback(host) {
             return Ok(None);
         }
@@ -327,33 +364,7 @@ impl ProxyPolicy {
         let Some(settings) = environment.as_ref() else {
             return Ok(None);
         };
-        let candidates: &[(&Option<String>, bool)] = match route.scheme.as_str() {
-            "https" | "wss" => &[
-                (&settings.wss, false),
-                (&settings.socks, true),
-                (&settings.https, false),
-                (&settings.all, false),
-            ],
-            "http" | "ws" => &[
-                (&settings.ws, false),
-                (&settings.socks, true),
-                (&settings.https, false),
-                (&settings.http, false),
-                (&settings.all, false),
-            ],
-            _ => &[(&settings.all, false)],
-        };
-        let selected = candidates
-            .iter()
-            .find(|(value, _)| value.as_deref().is_some_and(|value| !value.is_empty()))
-            .map(|(value, socks)| {
-                let value = value.as_deref().unwrap_or_default();
-                if *socks && value.starts_with("http://") {
-                    format!("socks5h://{}", &value[7..])
-                } else {
-                    value.to_owned()
-                }
-            });
+        let selected = settings.proxy_for_scheme(scheme);
         if let Some(proxy) = selected.as_deref() {
             ProxyOrigin::proxy(proxy)?;
         }

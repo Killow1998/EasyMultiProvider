@@ -7,6 +7,7 @@ license.workspace = true
 description = "State cryptography and filesystem vault compatibility for EMP."
 
 [dependencies]
+emp-transport = { path = "../emp-transport" }
 emp-modules = { path = "../emp-modules" }
 atomic-write-file = "0.3.1"
 base64 = "0.22"

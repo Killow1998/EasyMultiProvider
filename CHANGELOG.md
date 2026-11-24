@@ -1,18 +1,34 @@
 # Changelog
 
-## Unreleased
+## 0.15.10 (2026-11-24)
 
 ### 中文
 
 #### 问题修复
 
+- **订阅额度可以通过系统代理刷新。** 只设置桌面系统代理时，Codex 登录、查询和重置额度、本机 Claude 登录，以及 EMP 更新包下载都沿用 EMP 的代理设置。显式代理优先，本机回环地址直连。若上游拒绝已过期的登录，额度查询会提示重新认证。
+- **在 Linux 上使用 Vertex AI。** 使用 Google Cloud 用户 ADC 登录时，续期与读取模型目录走相同的网络设置。连续刷新目录可以复用有效令牌。
 - **订阅模型的上下文设置可以正常保存。** 在 Native 或 Other 订阅中打开「管理模型」，列表读取完成后即可编辑。手动刷新会保留已填的值，刷新失败后也可以继续编辑和保存。
+
+#### Codex 兼容性
+
+- 维护范围更新为 **0.168–0.172**。选用低于 0.168 的引擎时，WebUI 会提示更新 Codex。针对 0.172.0，已用模拟服务验证支出上限错误提示、生图工具按需启动、Code Mode 子代理，以及连接器结果正文不会写入 EMP 日志。
+
+从 0.15.9 升级只需更新桌面端 EMP Core。
 
 ### English
 
 #### Fixes
 
-- **Keep context limits when editing subscription models.** In Manage models for a Native or Other subscription, editing starts after the model list loads. Refreshing the list keeps your changes, and you can still edit and save them if a refresh fails.
+- **Refresh subscription quotas through your system proxy.** When only a desktop proxy is configured, Codex sign-in, quota checks and resets, local Claude sign-in and EMP update downloads follow EMP’s proxy settings. Explicit proxies take precedence and loopback connections stay direct. If the upstream service rejects an expired login, quota checks prompt you to sign in again.
+- **Use Vertex AI through a proxy on Linux.** Google Cloud user ADC token renewal now follows the same network settings as the model catalog request. Repeated catalog refreshes reuse a valid token.
+- **Keep custom context limits when editing subscription models.** In Manage models for a Native or Other subscription, editing starts after the list loads. A manual refresh preserves your draft, including when the refresh fails.
+
+#### Codex compatibility
+
+- The maintenance window is now **0.168–0.172**. The WebUI suggests updating Codex when the selected runtime is older than 0.168. Targeted 0.172.0 checks with simulated services covered spending-limit errors, on-demand image tool startup, Code Mode subagents and keeping connector result bodies out of EMP logs.
+
+To upgrade from 0.15.9, update desktop EMP Core only.
 
 ## 0.15.9 (2026-11-23)
 

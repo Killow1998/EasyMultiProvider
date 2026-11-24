@@ -364,11 +364,11 @@ impl UpdateManager {
         transport_error: &'static str,
         etag: Option<&str>,
     ) -> Result<Response> {
-        let client = self.client()?;
         let mut url = Url::parse(raw_url).map_err(|_| UpdateError("invalid_download_url"))?;
         for redirect in 0..=MAX_REDIRECTS {
             self.validate_url(&url)?;
-            let mut request = client
+            let mut request = self
+                .client(&url)?
                 .get(url.clone())
                 .timeout(timeout)
                 .header("Accept", accept);

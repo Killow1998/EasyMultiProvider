@@ -39,10 +39,10 @@ fn prepared_executable_reprobes_when_a_cached_runtime_is_replaced_or_removed() {
     );
 
     for (version, outside_window) in [
-        ("0.166.0", true),
-        ("0.167.0", false),
+        ("0.167.0", true),
+        ("0.168.0", false),
         ("0.169.1", false),
-        ("0.171.0", false),
+        ("0.172.0", false),
     ] {
         script(
             root.path(),

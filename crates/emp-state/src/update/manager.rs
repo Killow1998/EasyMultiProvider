@@ -235,12 +235,9 @@ impl UpdateManager {
         })))
     }
 
-    // Read current environment/system settings for each network attempt. A proxy
-    // enabled after EMP starts must also apply to the next update.
-    fn client(&self) -> Result<Client> {
-        // Native system-proxy support uses the same environment-first precedence
-        // on Windows and macOS. Never substitute an untrusted download mirror.
+    fn client(&self, url: &Url) -> Result<Client> {
         let mut client_builder = Client::builder()
+            .no_proxy()
             .https_only(!self.0.endpoints.allow_loopback_http)
             .redirect(reqwest::redirect::Policy::none())
             // One owner for the visible retry budget, including body failures.
@@ -248,9 +245,17 @@ impl UpdateManager {
             .connect_timeout(Duration::from_secs(20))
             .timeout(Duration::from_secs(600))
             .user_agent(format!("EMP/{}", self.snapshot().current_version));
-        if self.0.endpoints.allow_loopback_http {
-            // Injected local release fixtures must bypass any ambient HTTP proxy.
-            client_builder = client_builder.no_proxy();
+        let proxy = emp_transport::ProxyPolicy::dynamic_environment()
+            .proxy_for_endpoint(
+                url.scheme(),
+                url.host_str()
+                    .expect("validated update host")
+                    .trim_matches(['[', ']']),
+            )
+            .map_err(|_| UpdateError("update_failed"))?;
+        if let Some(proxy) = proxy {
+            client_builder = client_builder
+                .proxy(reqwest::Proxy::all(proxy).map_err(|_| UpdateError("update_failed"))?);
         }
         client_builder
             .build()
