@@ -1,5 +1,5 @@
 use super::{
-    ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
+    BUSINESS_SLOT, ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
     head::GuardedHead,
     http::{
         accounts::AccountWriteRoute,
@@ -12,12 +12,14 @@ use super::{
         usage, websocket,
     },
     run_blocking,
+    transport::ConnectionIo,
 };
 use crate::{
     app::ServerState,
     http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE, RequestMethod},
     services::{
-        connection_admission::ConnectionPermit, modules::aero::CallLease,
+        connection_admission::{ConnectionPermit, ConnectionSlot},
+        modules::aero::CallLease,
         observation::http::HttpObservation,
     },
 };
@@ -78,7 +80,7 @@ pub(crate) struct ConnectionContext(Arc<Connection>);
 struct Connection {
     control: Arc<ServerControl>,
     upgrade: Mutex<Option<PendingUpgrade>>,
-    request_permit: Mutex<Option<Arc<ConnectionPermit>>>,
+    request_slot: Mutex<Option<Arc<ConnectionSlot>>>,
     request_access: OnceLock<RequestAccess>,
     request_id: Option<String>,
     shutdown_after_response: Mutex<Option<oneshot::Receiver<ShutdownReason>>>,
@@ -93,7 +95,7 @@ impl ConnectionContext {
         Some(CallLease {
             connection: self
                 .0
-                .request_permit
+                .request_slot
                 .lock()
                 .expect("request admission")
                 .as_ref()?
@@ -147,7 +149,7 @@ impl ConnectionContext {
 }
 
 pub(super) async fn drive_http(
-    mut io: tokio::net::TcpStream,
+    mut io: ConnectionIo,
     peer: SocketAddr,
     accepted: Instant,
     router: Router,
@@ -162,7 +164,7 @@ pub(super) async fn drive_http(
     else {
         return;
     };
-    if io.set_nodelay(true).is_err() {
+    if io.set_nodelay().is_err() {
         let _ = run_blocking(move || observation.failure("socket_setup_failed")).await;
         return;
     }
@@ -178,6 +180,8 @@ pub(super) async fn drive_http(
     let head = match head {
         Ok(head) => head,
         Err(error) => {
+            let _slot = permit.slot().clone();
+            drop(permit);
             let bytes = error.reply().encode();
             let result = io.write_all(&bytes).await;
             let _ = io.shutdown().await;
@@ -199,24 +203,17 @@ pub(super) async fn drive_http(
     let watch_report = report.is_some();
     observation.received(request);
     crate::services::runtime::codex_contacted(request, &state);
-    let (io, socket) = if watch_report || inference || responses_upgrade {
-        match io.into_std().and_then(|stream| {
-            let socket = stream.try_clone();
-            let socket = if streaming {
-                Some(socket?)
-            } else {
-                socket.ok()
-            };
-            Ok((tokio::net::TcpStream::from_std(stream)?, socket))
-        }) {
-            Ok(connection) => connection,
-            Err(_) => {
+    let socket = if watch_report || inference || responses_upgrade {
+        match io.probe() {
+            Ok(socket) => Some(socket),
+            Err(_) if streaming => {
                 let _ = run_blocking(move || observation.failure("socket_setup_failed")).await;
                 return;
             }
+            Err(_) => None,
         }
     } else {
-        (io, None)
+        None
     };
     let stream = streaming.then(|| Arc::new(StreamConnection::default()));
     let (inference, report_socket, websocket_probe) = if inference {
@@ -275,6 +272,8 @@ pub(super) async fn drive(
     let head = match GuardedHead::read(&mut io, accepted + mode.head_timeout()).await {
         Ok(head) => head,
         Err(response) => {
+            let _slot = permit.slot().clone();
+            drop(permit);
             if matches!(mode, ServerMode::Http) {
                 let _ = io.write_all(&response.reply().encode()).await;
             }
@@ -282,7 +281,7 @@ pub(super) async fn drive(
             return;
         }
     };
-    drive_connection(io, peer, router, control, Arc::new(permit), head, None).await;
+    drive_connection(io, peer, router, control, permit, head, None).await;
 }
 
 impl ServerMode {
@@ -299,7 +298,7 @@ async fn drive_connection(
     peer: SocketAddr,
     router: Router,
     control: Arc<ServerControl>,
-    permit: Arc<ConnectionPermit>,
+    permit: ConnectionPermit,
     head: GuardedHead,
     http_context: Option<HttpRequestContext>,
 ) {
@@ -345,11 +344,12 @@ async fn drive_connection(
     let context = ConnectionContext(Arc::new(Connection {
         control,
         upgrade: Mutex::default(),
-        request_permit: Mutex::new(permit),
+        request_slot: Mutex::new(permit.as_ref().map(|permit| permit.slot().clone())),
         request_access: OnceLock::new(),
         request_id,
         shutdown_after_response: Mutex::default(),
     }));
+    let business = Mutex::new(permit);
     let encoded_reply = Arc::new(OnceLock::new());
     let raw_request = raw.request();
     let (transport_target, routing_uri) = if http_context.is_some() {
@@ -367,6 +367,7 @@ async fn drive_connection(
         let raw = raw.clone();
         let context = context.clone();
         let encoded_reply = &encoded_reply;
+        let business = &business;
         let inference = inference.as_ref();
         let routing_uri = routing_uri.as_ref();
         async move {
@@ -400,22 +401,21 @@ async fn drive_connection(
             if let Some(uri) = routing_uri {
                 *request.uri_mut() = uri.clone();
             }
-            let mut response = router.oneshot(request).await?;
-            if let Some(stream) = stream
-                && let Some(flushed) = response.extensions_mut().remove::<Flushed>()
+            let slot = context
+                .0
+                .request_slot
+                .lock()
+                .expect("request admission")
+                .clone();
+            let mut response = BUSINESS_SLOT.scope(slot, router.oneshot(request)).await?;
+            let flushed = response.extensions_mut().remove::<Flushed>();
+            if response.extensions().get::<BufferedResponse>().is_some() || flushed.is_some() {
+                business.lock().expect("request work").take();
+            }
+            if let Some(flushed) = flushed
+                && let Some(stream) = stream
             {
                 stream.delivery.await_flush(flushed);
-            }
-            if response.extensions().get::<BufferedResponse>().is_some()
-                && delegation.is_none_or(|callback| callback.work.is_none())
-                && let Some(permit) = context
-                    .0
-                    .request_permit
-                    .lock()
-                    .expect("request admission")
-                    .as_ref()
-            {
-                permit.begin_buffered_delivery();
             }
             let _ = encoded_reply.set(
                 response
@@ -482,7 +482,7 @@ async fn drive_connection(
             drop(
                 context
                     .0
-                    .request_permit
+                    .request_slot
                     .lock()
                     .expect("request admission")
                     .take(),
@@ -504,10 +504,17 @@ async fn drive_connection(
                     .and_then(|_| context.0.control.admission.acquire_websocket())
             })
             .map(Arc::new);
+        business.lock().expect("request work").take();
         release_http_permit.await;
-        run(io, websocket_permit.clone()).await;
+        let slot = websocket_permit
+            .as_ref()
+            .map(|permit| permit.slot().clone());
+        BUSINESS_SLOT
+            .scope(slot, run(io, websocket_permit.clone()))
+            .await;
         drop(websocket_permit);
     }
+    drop(business.into_inner().expect("request work"));
     if let Some(HttpRequestContext {
         mut observation,
         stream,

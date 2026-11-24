@@ -124,6 +124,65 @@ async fn account_snapshot(stream: &mut Stream) -> String {
 }
 
 #[test]
+fn idle_account_events_close_at_shutdown_without_a_heartbeat() {
+    for quit in [false, true] {
+        let fixture = Fixture::new();
+        let address = fixture.server.local_addr();
+        let session = fixture.session();
+        let wire = request(fixture.port(), "GET", ACCOUNT_EVENTS, &[&session], b"");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut stream = runtime.block_on(async {
+            let mut stream = Stream::open(address, &wire, "no-store").await;
+            account_snapshot(&mut stream).await;
+            assert_eq!(
+                fixture.server.state.lifecycle.admission.active_requests(),
+                0
+            );
+            if quit {
+                let reply = exchange_wire(
+                    address,
+                    &json_request(address.port(), "/api/quit", &[&session], b"{}"),
+                    false,
+                )
+                .await;
+                wire_contract::assert_json_reply(
+                    "quit with an idle subscriber",
+                    &reply,
+                    "200 OK",
+                    &json!({"status":"stopping"}),
+                );
+            }
+            stream
+        });
+        let shutdown = std::thread::spawn(move || fixture.server.shutdown());
+        runtime.block_on(async {
+            if quit {
+                assert_eq!(
+                    stream.next(wire_timeout()).await.as_deref(),
+                    Some("event: emp-exiting\ndata: {}\n\n")
+                );
+            }
+            assert!(stream.next(wire_timeout()).await.is_none());
+        });
+        shutdown.join().unwrap().unwrap();
+        let journal = crate::tests::live_journal(fixture.directory.path());
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|entry| {
+                    entry["event"] == "http_request_completed"
+                        && entry["fields"]["path"] == ACCOUNT_EVENTS
+                })
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
 fn account_stream_snapshot_heartbeat_and_quit_match_while_updates_drain() {
     Fixture::new().run_wire(async |fixture, endpoint| {
         let state = &fixture.server.state;
@@ -175,11 +234,16 @@ fn account_stream_disconnect_releases_subscription_without_another_event() {
             account_snapshot(&mut stream).await;
             streams.push(stream);
         }
-        let denied = assert_wire(address, &wire, false, 503).await;
-        assert!(
-            str::from_utf8(&denied)
-                .unwrap()
-                .contains("Retry-After: 15\r\n")
+        let denied = exchange_wire(address, &wire, false).await;
+        let expected = br#"{"error":{"message":"Too many quota subscribers","origin":"emp"}}"#;
+        wire_contract::assert_reply(
+            "management subscriber capacity",
+            &denied,
+            &format!(
+                wire_contract::json_head!("503 Service Unavailable", "{}", "Retry-After: 15"),
+                expected.len()
+            ),
+            expected,
         );
 
         let count = state.backend.management_events.subscriber_count();
@@ -433,12 +497,15 @@ fn management_stream_access_and_selection_match_during_update_drain() {
             let mut headers = headers;
             headers.push(&session);
             let wire = request(fixture.port(), "GET", path, &headers, b"");
-            let reply = assert_wire(address, &wire, false, 200).await;
-            assert!(
-                str::from_utf8(&reply)
-                    .unwrap()
-                    .contains("Content-Type: application/json\r\n")
-            );
+            let reply = exchange_wire(address, &wire, false).await;
+            let raw = crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
+            let state = &fixture.server.state;
+            let expected = if path == CALLS {
+                crate::api::calls::read(raw, state, None)
+            } else {
+                crate::api::usage::read(raw, state, None)
+            };
+            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
         }
         let wire = request(
             fixture.port(),

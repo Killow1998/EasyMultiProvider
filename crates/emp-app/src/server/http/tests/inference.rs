@@ -59,11 +59,12 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
                 held
             });
             let state = &fixture.server.state;
+            let parent = state.lifecycle.admission.acquire_request().unwrap();
             let delegation = state.backend.aero_callers.delegate(
                 Caller { id: "local".into(), name: String::new() },
                 None,
                 Some(CallLease {
-                    connection: Arc::new(state.lifecycle.admission.acquire_request().unwrap()),
+                    connection: parent.slot().clone(),
                     work: Arc::new(state.lifecycle.updates().enter().unwrap()),
                 }),
             ).unwrap();
@@ -125,6 +126,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
             let admission = &state.lifecycle.admission;
             let updates = state.lifecycle.updates();
             let callers = &state.backend.aero_callers;
+            let parent_permit = admission.acquire_request().unwrap();
             let parent = callers
                 .delegate(
                     Caller {
@@ -133,7 +135,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
                     },
                     None,
                     Some(CallLease {
-                        connection: Arc::new(admission.acquire_request().unwrap()),
+                        connection: parent_permit.slot().clone(),
                         work: Arc::new(updates.enter().unwrap()),
                     }),
                 )
@@ -191,7 +193,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
                 1,
                 "callback used a separate work permit"
             );
-            drop(parent);
+            drop((parent, parent_permit));
             assert_eq!(
                 admission.active_requests(),
                 1,
@@ -226,6 +228,10 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
 }
 
 pub(super) fn fixture(base: &str) -> Fixture {
+    Fixture::with_directory(fixture_directory(base))
+}
+
+fn fixture_directory(base: &str) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let config = root.join("config.json");
@@ -250,7 +256,7 @@ pub(super) fn fixture(base: &str) -> Fixture {
         .to_string(),
     )
     .unwrap();
-    Fixture::with_directory(directory)
+    directory
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -374,9 +380,7 @@ fn stalled_buffered_inference(quit: bool) {
         slow
     });
     let result = shutdown_with_stalled_response(fixture.server, slow);
-    if quit {
-        result.expect("quit completed successfully");
-    }
+    result.expect("shutdown completed successfully");
     let id = &upstream.observed().1["x-emp-request-id"];
     let journal = live_journal(fixture.directory.path());
     for (event, status, delivery) in [
@@ -400,6 +404,153 @@ fn quit_completes_with_a_stalled_buffered_inference_response() {
 #[test]
 fn shutdown_records_write_failure_for_a_stalled_buffered_inference_response() {
     stalled_buffered_inference(false);
+}
+
+#[test]
+fn shutdown_reports_search_that_crossed_the_drain_deadline() {
+    use crate::{error::AppError, server::REQUEST_DRAIN_TIMEOUT};
+
+    let (release, released) = mpsc::channel();
+    let upstream = OneShotUpstream::serve(1, move |socket| {
+        upstream_reply(socket, 200, "application/json", RESULT.len(), "");
+        released
+            .recv_timeout(test_timeout(REQUEST_DRAIN_TIMEOUT) + wire_timeout())
+            .unwrap();
+        socket.write_all(RESULT).unwrap();
+    });
+    let Fixture {
+        directory, server, ..
+    } = fixture(&upstream.base_url());
+    let address = server.local_addr();
+    let wire = json_request(
+        address.port(),
+        "/v1/alpha/search",
+        &[
+            &format!("X-EMP-Session: {}", server.session_token()),
+            "Authorization: Bearer caller",
+        ],
+        br#"{"query":"fixture"}"#,
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut client = runtime.block_on(TcpStream::connect(address)).unwrap();
+    runtime.block_on(client.write_all(&wire)).unwrap();
+    assert_eq!(upstream.observed().0, "/v1/alpha/search");
+    assert!(
+        server
+            .state
+            .lifecycle
+            .admission
+            .quiesce_work(0, Duration::ZERO)
+            .is_none()
+    );
+    let closing = std::thread::spawn(move || server.shutdown());
+    let eof = runtime.block_on(async {
+        timeout(
+            test_timeout(REQUEST_DRAIN_TIMEOUT) + wire_timeout(),
+            client.read(&mut [0]),
+        )
+        .await
+    });
+    let _ = release.send(());
+    assert_eq!(
+        eof.unwrap().unwrap(),
+        0,
+        "the listener cancels the transport at the cutoff"
+    );
+    let outcome = closing.join().unwrap();
+    assert!(
+        matches!(outcome, Err(AppError::ServerStopped)),
+        "{outcome:?}"
+    );
+    let journal = live_journal(directory.path());
+    let records: Vec<_> = journal
+        .iter()
+        .filter(|entry| {
+            entry["event"] == "http_request_completed"
+                && entry["fields"]["path"] == "/v1/alpha/search"
+        })
+        .collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["fields"]["status"], 200);
+    assert_eq!(records[0]["fields"]["result"], "write_failed");
+}
+
+#[test]
+fn failed_aero_parent_keeps_the_running_callback_in_quit_precheck() {
+    use crate::server::REQUEST_DRAIN_TIMEOUT;
+
+    let (disconnect_parent, disconnected) = mpsc::channel();
+    let aero = OneShotUpstream::serve(1, move |_| {
+        disconnected.recv_timeout(wire_timeout()).unwrap();
+    });
+    let (finish_callback, finished) = mpsc::channel();
+    let callback = OneShotUpstream::serve(1, move |socket| {
+        upstream_reply(
+            socket,
+            200,
+            "text/event-stream",
+            FIRST.len() + LAST.len(),
+            "",
+        );
+        socket.write_all(FIRST).unwrap();
+        finished
+            .recv_timeout(test_timeout(REQUEST_DRAIN_TIMEOUT))
+            .unwrap();
+        socket.write_all(LAST).unwrap();
+    });
+    let directory = fixture_directory(&callback.base_url());
+    let config = directory.path().join("config.json");
+    let mut configuration: Value =
+        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    configuration["aero_profiles"] = json!([{
+        "id":"aero/fixture","name":"fixture","planner":{"model":"demo/model"},"executor":{"model":"demo/model"}
+    }]);
+    std::fs::write(config, configuration.to_string()).unwrap();
+    let started = json!({"value":{"endpoint":aero.base_url()},"error":null});
+    install_worker_fixture(
+        directory.path(),
+        emp_modules::Module::Aero,
+        "{}",
+        &format!("while read -r line; do printf '%s\\n' '{started}'; done"),
+    );
+    Fixture::with_directory(directory).run_wire(async |fixture, address| {
+        let port = fixture.port();
+        let session = fixture.session();
+        let parent_wire = json_request(
+            port, "/v1/responses", &[&session, "session_id: fixture"],
+            br#"{"model":"aero/fixture","stream":false,"input":"fixture"}"#,
+        );
+        let parent = tokio::spawn(async move { exchange_wire(address, &parent_wire, false).await });
+        let (_aero, (_, headers, _)) = tokio::task::spawn_blocking(move || {
+            let observed = aero.observed();
+            (aero, observed)
+        }).await.unwrap();
+        let token = format!("Authorization: Bearer {}", headers["x-aero-caller-key"]);
+        let mut stream = RawClient::request(
+            address,
+            &json_request(port, "/v1/responses", &[&token], STREAM_REQUEST),
+        ).await;
+        assert_eq!(callback.observed().0, "/v1/chat/completions");
+        assert!(stream.head.starts_with("HTTP/1.1 200 "), "{}", stream.head);
+        disconnect_parent.send(()).unwrap();
+        let parent = parent.await.unwrap();
+        assert_status(&parent, 503);
+        assert_eq!(json_body(&parent)["error"]["code"], "aero_runtime_unavailable");
+        let reply = quit_response(address, &session).await;
+        wire_contract::assert_json_reply(
+            "quit while Aero callback is running", &reply, "409 Error",
+            &json!({"error":{"code":"active_conversations","message":"Finish active Codex requests and WebSockets, then retry shutdown","origin":"emp"}}),
+        );
+        finish_callback.send(()).unwrap();
+        assert!(String::from_utf8_lossy(&stream.rest().await).contains("response.completed"));
+        wire_contract::assert_json_reply(
+            "quit after Aero callback", &quit_response(address, &session).await,
+            "200 OK", &json!({"status":"stopping"}),
+        );
+    });
 }
 
 #[test]

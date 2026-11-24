@@ -42,7 +42,7 @@ macro_rules! asset_head {
 
 pub(crate) use asset_head;
 
-const INDEX: &str = concat!(
+pub(super) const INDEX: &str = concat!(
     "HTTP/1.1 200 OK\r\n",
     "Content-Type: text/html; charset=utf-8\r\n",
     "Content-Length: {}\r\n",
@@ -82,6 +82,29 @@ pub(crate) fn assert_reply(name: &str, reply: &[u8], expected_head: &str, expect
 pub(crate) fn assert_json_reply(name: &str, reply: &[u8], status: &str, body: &Value) {
     let body = body.to_string();
     let head = format!(json_head!("{}", "{}"), status, body.len());
+    assert_reply(name, reply, &head, body.as_bytes());
+}
+
+pub(super) fn assert_reference_reply(name: &str, reply: &[u8], reference: &[u8]) {
+    let split = reference
+        .windows(4)
+        .position(|bytes| bytes == b"\r\n\r\n")
+        .unwrap()
+        + 4;
+    assert_reply(
+        name,
+        reply,
+        str::from_utf8(&reference[..split]).unwrap(),
+        &reference[split..],
+    );
+}
+
+pub(super) fn assert_presented_entry_error(name: &str, reply: &[u8], status: &str, body: &Value) {
+    let body = body.to_string();
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        body.len(),
+    );
     assert_reply(name, reply, &head, body.as_bytes());
 }
 

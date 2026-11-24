@@ -73,7 +73,6 @@ mod gateway_contract;
 mod history_diagnostic_contract;
 mod integration_sideband_contract;
 mod internal_events_contract;
-#[cfg(unix)]
 pub(crate) use internal_events_contract::live_journal;
 mod management_http_contract;
 mod management_operation_contract;
@@ -427,17 +426,18 @@ fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
         })
 }
 
-fn finish_upstream(
+fn finish_upstream<T>(
     address: SocketAddr,
-    worker: &mut Option<JoinHandle<std::io::Result<()>>>,
-) -> std::io::Result<()> {
+    worker: &mut Option<JoinHandle<std::io::Result<T>>>,
+) -> std::io::Result<Option<T>> {
     let Some(worker) = worker.take() else {
-        return Ok(());
+        return Ok(None);
     };
     let _ = TcpStream::connect(address);
     worker
         .join()
         .map_err(|_| std::io::Error::other("fake upstream panicked"))?
+        .map(Some)
 }
 
 pub(crate) struct OneShotUpstream {

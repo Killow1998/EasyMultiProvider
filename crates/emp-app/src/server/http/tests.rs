@@ -46,7 +46,33 @@ use tokio::{
 };
 
 pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input: bool) -> Vec<u8> {
-    timeout(test_timeout(Duration::from_secs(15)), async {
+    exchange_before(
+        address,
+        request,
+        end_input,
+        test_timeout(Duration::from_secs(15)),
+    )
+    .await
+}
+
+#[cfg(unix)]
+async fn quit_response(address: SocketAddr, session: &str) -> Vec<u8> {
+    exchange_before(
+        address,
+        &json_request(address.port(), "/api/quit", &[session], b"{}"),
+        false,
+        test_timeout(crate::server::REQUEST_DRAIN_TIMEOUT),
+    )
+    .await
+}
+
+async fn exchange_before(
+    address: SocketAddr,
+    request: &[u8],
+    end_input: bool,
+    deadline: Duration,
+) -> Vec<u8> {
+    timeout(deadline, async {
         let mut stream = TcpStream::connect(address).await.unwrap();
         stream.write_all(request).await.unwrap();
         if end_input {
@@ -62,7 +88,7 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
 
 #[cfg(unix)]
 async fn connect_submitted_write(fixture: &Fixture) -> (TcpStream, tokio::task::JoinHandle<()>) {
-    use crate::server::{connection::drive_http, http_router};
+    use crate::server::{connection::drive_http, http_router, transport::ConnectionIo};
 
     let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
     let client = TcpStream::connect(listener.local_addr().unwrap())
@@ -72,12 +98,12 @@ async fn connect_submitted_write(fixture: &Fixture) -> (TcpStream, tokio::task::
     let state = &fixture.server.state;
     let admission = &state.lifecycle.admission;
     let task = tokio::spawn(drive_http(
-        stream,
+        ConnectionIo::new(stream),
         peer,
         tokio::time::Instant::now(),
         http_router(state.clone()),
         state.clone(),
-        super::proxy::ConnectionIntake::Public(Arc::new(admission.acquire_request().unwrap())),
+        super::proxy::ConnectionIntake::Public(admission.acquire_request().unwrap()),
     ));
     (client, task)
 }
@@ -199,6 +225,7 @@ fn decode_report_wire(wire: Vec<u8>) -> Vec<u8> {
     }
 }
 
+#[cfg(unix)]
 async fn assert_wire_with<T>(
     address: SocketAddr,
     request: &[u8],
@@ -438,7 +465,20 @@ fn update_module_and_gateway_reads_keep_json_and_auth() {
                 &[&session, "Accept: text/event-stream"],
                 b"",
             );
-            let reply = assert_wire(address, &wire, true, 200).await;
+            let reply = exchange_wire(address, &wire, true).await;
+            let state = &fixture.server.state;
+            let reference = if path == "/api/updates" {
+                crate::api::updates::read(state)
+            } else if path == "/api/modules" {
+                crate::api::modules::read(state)
+            } else {
+                let raw =
+                    crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
+                crate::api::gateway::GatewayRead::for_path(raw.raw_path())
+                    .unwrap()
+                    .read(raw, state)
+            };
+            wire_contract::assert_reference_reply(path, &reply, &reference.encode());
             assert_eq!(json_body(&reply)[field], expected);
             assert_eq!(
                 str::from_utf8(&reply)
@@ -477,9 +517,11 @@ fn update_module_and_gateway_reads_keep_json_and_auth() {
             400,
         )
         .await;
-        assert_eq!(
-            json_body(&reply)["error"]["message"],
-            "Invalid report period"
+        wire_contract::assert_json_reply(
+            "invalid gateway usage period",
+            &reply,
+            "400 Bad Request",
+            &json!({"error":{"message":"Invalid report period","origin":"emp"}}),
         );
     });
 }
@@ -510,7 +552,10 @@ fn gateway_and_decision_module_gates_precede_management_authentication() {
                 404,
             )
             .await;
-            assert_eq!(json_body(&reply)["error"]["code"], "module_disabled");
+            wire_contract::assert_json_reply(
+                path, &reply, "404 Not Found",
+                &json!({"error":{"code":"module_disabled","message":"This EMP module is not active","origin":"emp"}}),
+            );
         }
     });
 }
@@ -596,15 +641,7 @@ fn pages_and_health_keep_origin_and_method_policy() {
                     200,
                 )
                 .await;
-                let (head, received) = page_reply_parts(&reply, content_type, "no-store");
-                assert!(received == body, "{method} {path} body changed");
-                if content_type == "text/html; charset=utf-8" {
-                    assert!(head.contains("\r\nReferrer-Policy: no-referrer\r\n"));
-                    assert!(head.contains(&format!(
-                        "\r\nSet-Cookie: {}\r\n",
-                        crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE,
-                    )));
-                }
+                assert_page_reply(path, &reply, content_type, body);
                 let denied = assert_wire(
                     address,
                     &request(port, method, path, &foreign, b""),
@@ -612,10 +649,24 @@ fn pages_and_health_keep_origin_and_method_policy() {
                     403,
                 )
                 .await;
-                assert_eq!(json_body(&denied)["error"]["message"], error);
+                wire_contract::assert_json_reply(
+                    path,
+                    &denied,
+                    "403 Forbidden",
+                    &json!({"error":{"message":error}}),
+                );
             }
         }
     });
+}
+
+fn assert_page_reply(path: &str, reply: &[u8], content_type: &str, body: &[u8]) {
+    let head = if content_type == "application/json" {
+        format!(wire_contract::json_head!("200 OK", "{}"), body.len())
+    } else {
+        wire_contract::INDEX.replace("{}", &body.len().to_string())
+    };
+    wire_contract::assert_reply(path, reply, &head, body);
 }
 
 fn page_reply_parts<'a>(reply: &'a [u8], content_type: &str, cache: &str) -> (&'a str, &'a [u8]) {
@@ -717,10 +768,16 @@ fn guides_and_assets_keep_wire_contracts() {
                 200,
             )
             .await;
-            let (_, received) = page_reply_parts(&reply, content_type, cache);
             if let Some(body) = body {
-                assert!(received == body, "{path} body changed");
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\nX-Content-Type-Options: nosniff\r\nCache-Control: {cache}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                );
+                wire_contract::assert_reply(path, &reply, &head, body);
             } else {
+                let expected = crate::services::guide_assets::asset_reply(path).unwrap().encode();
+                wire_contract::assert_reference_reply(path, &reply, &expected);
+                let (_, received) = page_reply_parts(&reply, content_type, cache);
                 let html = str::from_utf8(received).unwrap();
                 assert!(html.starts_with("<!doctype html><html lang=\"zh-CN\">"));
                 assert!(html.contains("href=\"/assets/guide.css\""));
@@ -732,7 +789,10 @@ fn guides_and_assets_keep_wire_contracts() {
                 403,
             )
             .await;
-            assert_eq!(json_body(&denied)["error"]["message"], denied_message);
+            wire_contract::assert_json_reply(
+                path, &denied, "403 Forbidden",
+                &json!({"error":{"message":denied_message}}),
+            );
             assert_entry_error(address, &request(port, "HEAD", path, &[], b""), 404).await;
         }
     });
@@ -794,8 +854,7 @@ fn page_and_asset_misses_keep_status_and_origin_order() {
             ] {
                 let reply =
                     assert_wire(address, &request(port, method, path, &[], b""), false, 200).await;
-                let (_, body) = page_reply_parts(&reply, content_type, "no-store");
-                assert_eq!(body, content, "{method} {path}");
+                assert_page_reply(path, &reply, content_type, content);
                 let reply =
                     exchange_wire(address, &request(port, method, path, &foreign, b""), false)
                         .await;
@@ -860,13 +919,11 @@ fn module_panel_checks_origin_and_revision() {
             200,
         )
         .await;
-        let (head, body) = str::from_utf8(&reply)
-            .unwrap()
-            .split_once("\r\n\r\n")
-            .unwrap();
-        assert!(head.contains("\r\nContent-Type: text/javascript; charset=utf-8\r\n"));
-        assert!(head.contains("\r\nCache-Control: no-store\r\n"));
-        assert_eq!(body, panel);
+        wire_contract::assert_reply(
+            &path, &reply,
+            &wire_contract::asset_head!("text/javascript; charset=utf-8", panel.len()),
+            panel.as_bytes(),
+        );
         let stale = assert_wire(
             address,
             &request(
@@ -880,12 +937,11 @@ fn module_panel_checks_origin_and_revision() {
             404,
         )
         .await;
-        let (head, body) = str::from_utf8(&stale)
-            .unwrap()
-            .split_once("\r\n\r\n")
-            .unwrap();
-        assert!(head.contains("\r\nContent-Type: text/plain\r\n"));
-        assert!(body.is_empty());
+        wire_contract::assert_reply(
+            "stale panel revision", &stale,
+            "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+            b"",
+        );
         for (method, path, headers) in [
             (
                 "GET",
@@ -895,14 +951,7 @@ fn module_panel_checks_origin_and_revision() {
             ("GET", "/assets/module-unknown.js", [].as_slice()),
             ("HEAD", &*path, [].as_slice()),
         ] {
-            let reply = assert_wire(
-                address,
-                &request(port, method, path, headers, b""),
-                false,
-                404,
-            )
-            .await;
-            assert_eq!(json_body(&reply)["error"]["message"], "not found");
+            assert_entry_error(address, &request(port, method, path, headers, b""), 404).await;
         }
         let reply = assert_wire(
             address,
@@ -911,8 +960,11 @@ fn module_panel_checks_origin_and_revision() {
             200,
         )
         .await;
-        let (_, body) = page_reply_parts(&reply, "text/javascript; charset=utf-8", "no-store");
-        assert_eq!(body, include_bytes!("../../../web/module-settings.js"));
+        let body = include_bytes!("../../../web/module-settings.js");
+        wire_contract::assert_reply(
+            "/assets/module-settings.js", &reply,
+            &wire_contract::asset_head!("text/javascript; charset=utf-8", body.len()), body,
+        );
     });
 }
 
@@ -967,7 +1019,14 @@ fn team_reads_preserve_identity_and_auth() {
                     request(port, "GET", target, headers, b"")
                 }
             };
-            let reply = assert_wire(address, &valid(path, &signed), !post, 200).await;
+            let reply = exchange_wire(address, &valid(path, &signed), !post).await;
+            let state = &fixture.server.state;
+            let expected = match path {
+                "/api/team/status" => crate::api::team::read(state),
+                "/api/team/notices" => crate::api::team::notices(state),
+                _ => JsonReply::new(200, "{}").with_header("Cache-Control", "no-store"),
+            };
+            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
             let head = str::from_utf8(&reply)
                 .unwrap()
                 .split_once("\r\n\r\n")
@@ -1041,7 +1100,10 @@ fn team_reads_preserve_identity_and_auth() {
             json_request(port, path, &[], b"[]"),
         ] {
             let reply = assert_wire(address, &request, false, 404).await;
-            assert_eq!(json_body(&reply)["error"]["code"], "module_disabled");
+            wire_contract::assert_json_reply(
+                "disabled team module", &reply, "404 Not Found",
+                &json!({"error":{"code":"module_disabled","message":"This EMP module is not active","origin":"emp"}}),
+            );
         }
     });
 }
@@ -1081,13 +1143,23 @@ fn inspection_reads_preserve_auth_and_hide_credentials() {
                 &[&session, "Accept: text/event-stream"],
                 b"",
             );
-            let reply = if path == "/api/support-report" {
-                let new = assert_wire_with(address, &wire, true, 200, checked_support_report).await;
-
-                new.0
-            } else {
-                assert_wire(address, &wire, true, 200).await
+            let reply = exchange_wire(address, &wire, true).await;
+            let state = &fixture.server.state;
+            let expected = match path {
+                "/api/diagnostics" => crate::api::diagnostics::read(state),
+                "/api/support-report" => crate::api::support_report::read(state),
+                "/api/capabilities" => crate::api::inspection::capabilities(state),
+                "/api/models/vision-test-image" => crate::api::inspection::vision_test_image(state),
+                "/api/models/audio-test-sound" => crate::api::inspection::audio_test_sound(state),
+                _ => crate::api::images::credit_status(state),
             };
+            if path == "/api/support-report" {
+                let actual = checked_support_report(&reply);
+                let expected = checked_support_report(&expected.encode());
+                wire_contract::assert_reference_reply(path, actual.as_bytes(), expected.as_bytes());
+            } else {
+                wire_contract::assert_reference_reply(path, &reply, &expected.encode());
+            }
             assert_status(&reply, 200);
             let text = str::from_utf8(&reply).unwrap();
             let head = text.split_once("\r\n\r\n").unwrap().0;
@@ -1149,11 +1221,11 @@ fn inspection_reads_preserve_auth_and_hide_credentials() {
     });
 }
 
-fn checked_support_report(reply: Vec<u8>) -> (Vec<u8>, String) {
-    let body = json_body(&reply);
+fn checked_support_report(reply: &[u8]) -> String {
+    let body = json_body(reply);
     let timestamp = body["generated_at"].as_str().unwrap();
     time::OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339).unwrap();
-    let (head, body) = str::from_utf8(&reply)
+    let (head, body) = str::from_utf8(reply)
         .unwrap()
         .split_once("\r\n\r\n")
         .unwrap();
@@ -1168,8 +1240,7 @@ fn checked_support_report(reply: Vec<u8>) -> (Vec<u8>, String) {
         &length,
         &format!("\r\nContent-Length: {}\r\n", body_with_fixed_time.len()),
     );
-    let normalized = format!("{head}\r\n\r\n{body_with_fixed_time}");
-    (reply, normalized)
+    format!("{head}\r\n\r\n{body_with_fixed_time}")
 }
 
 async fn proxy_probe(
@@ -1202,13 +1273,16 @@ fn account_reads_preserve_json_and_auth() {
             ("/api/accounts/%40native/quota-history?range=all", "series"),
         ] {
             for end_input in [false, true] {
-                let reply = assert_wire(
-                    address,
-                    &request(port, "GET", path, &[&session], b""),
-                    end_input,
-                    200,
-                )
-                .await;
+                let wire = request(port, "GET", path, &[&session], b"");
+                let reply = exchange_wire(address, &wire, end_input).await;
+                let raw =
+                    crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
+                let expected = crate::api::accounts::AccountRead::for_path(raw.raw_path())
+                    .unwrap()
+                    .read(raw, &fixture.server.state, system_now())
+                    .map_err(|_| "expected account read")
+                    .unwrap();
+                wire_contract::assert_reference_reply(path, &reply, &expected.encode());
                 assert!(json_body(&reply)[field].is_array(), "{path}");
             }
             for (method, headers, status) in [
@@ -1311,13 +1385,29 @@ fn usage_and_settings_reads_preserve_json_and_auth() {
                 "/api/request-limits/absent",
             ),
         ] {
-            let reply = assert_wire(
+            let wire = request(port, "GET", path, &[&session], b"");
+            let reply = exchange_wire(
                 address,
-                &request(port, "GET", path, &[&session], b""),
+                &wire,
                 !path.starts_with("/api/usage?") && !path.starts_with("/api/calls?"),
-                200,
             )
             .await;
+            let raw = crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
+            let state = &fixture.server.state;
+            let expected = match raw.raw_path() {
+                "/api/usage" => crate::api::usage::read(raw, state, None),
+                "/api/calls" => crate::api::calls::read(raw, state, None),
+                path if path.starts_with("/api/providers/") => crate::api::provider_quota::history(
+                    raw,
+                    state,
+                    crate::api::provider_quota::history_id(path).unwrap(),
+                    system_now(),
+                ),
+                path => crate::server::http::settings::SettingsRead::for_path(path)
+                    .unwrap()
+                    .read(state),
+            };
+            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
             assert!(
                 !json_body(&reply)[field].is_null(),
                 "missing {field} for {path}"
@@ -1434,13 +1524,16 @@ fn report_stream_selection_obeys_accept_header() {
                 "records",
             ),
         ] {
-            let reply = assert_wire(
-                address,
-                &request(fixture.port(), "GET", path, &[&session, accept], b""),
-                false,
-                200,
-            )
-            .await;
+            let wire = request(fixture.port(), "GET", path, &[&session, accept], b"");
+            let reply = exchange_wire(address, &wire, false).await;
+            let raw = crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
+            let state = &fixture.server.state;
+            let expected = if raw.raw_path() == "/api/usage" {
+                crate::api::usage::read(raw, state, None)
+            } else {
+                crate::api::calls::read(raw, state, None)
+            };
+            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
             assert!(!json_body(&reply)[field].is_null());
         }
     });
@@ -1484,7 +1577,15 @@ fn closing_report_input_cancels_json_queries() {
                 "503 Service Unavailable",
                 &json!({"error":{"message":message,"origin":"emp"}}),
             );
-            let reply = assert_wire(address, &wire, false, 200).await;
+            let reply = exchange_wire(address, &wire, false).await;
+            let raw = crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
+            let state = &fixture.server.state;
+            let expected = if field == "totals" {
+                crate::api::usage::read(raw, state, None)
+            } else {
+                crate::api::calls::read(raw, state, None)
+            };
+            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
             assert!(!json_body(&reply)[field].is_null(), "{path}");
         }
     });
@@ -1584,11 +1685,9 @@ fn proxy_identity_rebuilds_headers_and_requires_live_delegation() {
         let ws = [spoof.as_slice(), &["Upgrade: websocket"]].concat();
         let unauthorized = |reply: &[u8], presented| {
             if presented {
-                assert_status(reply, 401);
-                page_reply_parts(reply, "application/json", "no-store");
-                assert_eq!(
-                    json_body(reply),
-                    json!({"error":{
+                wire_contract::assert_presented_entry_error(
+                    "presented proxy caller", reply, "401 Unauthorized",
+                    &json!({"error":{
                         "message":"EMP 请求处理出错\nproxy caller authentication is required",
                         "origin":"emp","summary":"EMP 请求处理出错",
                     }}),
@@ -1679,7 +1778,12 @@ fn public_origins_and_models_keep_their_route_policies() {
                 403,
             )
             .await;
-            assert_eq!(json_body(&received)["error"]["message"], message);
+            wire_contract::assert_json_reply(
+                path,
+                &received,
+                "403 Forbidden",
+                &json!({"error":{"message":message}}),
+            );
         }
         let local = request(fixture.port(), "POST", "/healthz", &[], b"");
         let reply = exchange_wire(address, &local, false).await;
@@ -1714,10 +1818,10 @@ fn route_access_precedes_identity_and_preserves_management_exceptions() {
             &["Content-Length: -1"],
             b"",
         );
-        let reply = assert_wire(address, &decisions, false, 401).await;
-        assert_eq!(
-            json_body(&reply)["error"]["message"],
-            "EMP gateway authentication is required"
+        let reply = exchange_wire(address, &decisions, false).await;
+        wire_contract::assert_json_reply(
+            "/v1/decisions", &reply, "401 Unauthorized",
+            &json!({"error":{"message":"EMP gateway authentication is required","origin":"emp"}}),
         );
         fixture
             .server
@@ -1725,8 +1829,11 @@ fn route_access_precedes_identity_and_preserves_management_exceptions() {
             .backend
             .modules
             .mark_unavailable(emp_modules::Module::Decision, "test");
-        let reply = assert_wire(address, &decisions, false, 404).await;
-        assert_eq!(json_body(&reply)["error"]["code"], "module_disabled");
+        let reply = exchange_wire(address, &decisions, false).await;
+        wire_contract::assert_json_reply(
+            "/v1/decisions", &reply, "404 Not Found",
+            &json!({"error":{"code":"module_disabled","message":"This EMP module is not active","origin":"emp"}}),
+        );
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 0);
 
         let modules = request(
@@ -1736,11 +1843,7 @@ fn route_access_precedes_identity_and_preserves_management_exceptions() {
             &["Origin: https://outside.invalid", &fixture.session()],
             b"",
         );
-        let reply = assert_wire(address, &modules, false, 401).await;
-        assert_eq!(
-            json_body(&reply)["error"]["message"],
-            "management session is required"
-        );
+        assert_entry_error(address, &modules, 401).await;
     });
 }
 
@@ -1759,26 +1862,36 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
         let port = fixture.port();
         let session = fixture.session();
         let headers = [session.as_str(), "Content-Type: application/json"];
-        for (extra, status, message) in [
-            (vec!["Content-Length: 5242881"], 413, "too large"),
-            (vec!["Content-Length: -1"], 400, "cannot be negative"),
+        let hard_limit = |limit: usize, decoded: bool| {
+            let prefix = if decoded { "decoded " } else { "" };
+            json!({"error":{
+                "code":"request_too_large",
+                "reason":"hard_limit",
+                "message":format!("{prefix}request body is too large (EMP limit: {limit} bytes)"),
+                "limit_bytes":limit
+            }})
+        };
+        let bad_request = |message: &str| json!({"error":{"message":message,"origin":"emp"}});
+        for (extra, status, expected) in [
+            (vec!["Content-Length: 5242881"], "413 Content Too Large", hard_limit(MAX, false)),
+            (vec!["Content-Length: -1"], "400 Bad Request", bad_request("Content-Length cannot be negative")),
             (
                 vec!["Content-Length: invalid"],
-                400,
-                "invalid Content-Length",
+                "400 Bad Request",
+                bad_request("invalid Content-Length"),
             ),
             (
                 vec!["Content-Length: 2", "content-length: 2"],
-                400,
-                "duplicate Content-Length",
+                "400 Bad Request",
+                bad_request("duplicate Content-Length or unsupported Transfer-Encoding"),
             ),
             (
                 vec!["Transfer-Encoding: chunked"],
-                400,
-                "unsupported Transfer-Encoding",
+                "400 Bad Request",
+                bad_request("duplicate Content-Length or unsupported Transfer-Encoding"),
             ),
         ] {
-            let reply = assert_wire(
+            let reply = exchange_wire(
                 address,
                 &request(
                     port,
@@ -1788,21 +1901,15 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
                     b"",
                 ),
                 false,
-                status,
             )
             .await;
-            assert!(
-                json_body(&reply)["error"]["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains(message)
-            );
+            wire_contract::assert_json_reply("language framing", &reply, status, &expected);
         }
         let declared = format!(
             "Content-Length: {}",
             RequestLimitsConfig::default().maximum + 1
         );
-        let reply = assert_wire(
+        let reply = exchange_wire(
             address,
             &request(
                 port,
@@ -1812,10 +1919,16 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
                 b"",
             ),
             false,
-            413,
         )
         .await;
-        assert_eq!(json_body(&reply)["error"]["code"], "request_too_large");
+        let mut expected = hard_limit(RequestLimitsConfig::default().maximum, false);
+        let error = &mut expected["error"];
+        error["message"] = json!(format!("EMP 请求处理出错\n{}", error["message"].as_str().unwrap()));
+        error["summary"] = json!("EMP 请求处理出错");
+        wire_contract::assert_presented_entry_error(
+            "oversized inference body", &reply, "413 Content Too Large",
+            &expected,
+        );
 
         let gzip_json = gzip(b"{}", Vec::new());
         let mut truncated = gzip_json.clone();
@@ -1823,48 +1936,42 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
         let encoded = |inner: &[u8]| emp_transport::zstd_encode(inner).unwrap();
         let intermediate_large = gzip(b"{}", vec![b'a'; MAX]);
         let final_large = gzip(&vec![b' '; MAX + 1], Vec::new());
-        for (encoding, body, status, message) in [
-            ("br", b"{}".to_vec(), 400, "unsupported Content-Encoding"),
-            ("gzip", truncated, 400, "invalid compressed request body"),
+        for (encoding, body, status, expected) in [
+            ("br", b"{}".to_vec(), "400 Bad Request", bad_request("unsupported Content-Encoding")),
+            ("gzip", truncated, "400 Bad Request", bad_request("invalid compressed request body")),
             (
                 "gzip, zstd",
                 encoded(&intermediate_large),
-                413,
-                "decoded request body is too large",
+                "413 Content Too Large",
+                hard_limit(MAX, true),
             ),
             (
                 "gzip, zstd",
                 encoded(&final_large),
-                413,
-                "decoded request body is too large",
+                "413 Content Too Large",
+                hard_limit(MAX, true),
             ),
             (
                 "gzip, zstd",
                 encoded(&gzip_json),
-                400,
-                "language is required",
+                "400 Bad Request",
+                bad_request("language is required"),
             ),
             (
                 "identity",
                 b"[]".to_vec(),
-                400,
-                "request body must be a JSON object",
+                "400 Bad Request",
+                bad_request("request body must be a JSON object"),
             ),
         ] {
             let content_encoding = format!("Content-Encoding: {encoding}");
-            let reply = assert_wire(
+            let reply = exchange_wire(
                 address,
                 &json_request(port, "/api/language", &[&session, &content_encoding], &body),
                 false,
-                status,
             )
             .await;
-            assert!(
-                json_body(&reply)["error"]["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains(message)
-            );
+            wire_contract::assert_json_reply(encoding, &reply, status, &expected);
         }
         let padded = request(
             port,
@@ -1873,10 +1980,10 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
             &[headers.as_slice(), &["Content-Length: +2"]].concat(),
             b"{}ignored",
         );
-        let reply = assert_wire(address, &padded, false, 400).await;
-        assert_eq!(
-            json_body(&reply)["error"]["message"],
-            "language is required"
+        let reply = exchange_wire(address, &padded, false).await;
+        wire_contract::assert_json_reply(
+            "signed Content-Length", &reply, "400 Bad Request",
+            &json!({"error":{"message":"language is required","origin":"emp"}}),
         );
         let incomplete = request(
             port,
@@ -1900,8 +2007,11 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
             &[headers.as_slice(), &["Content-Length: 2"]].concat(),
             b"{",
         );
-        let reply = assert_wire(address, &timed_out, false, 408).await;
-        assert_eq!(json_body(&reply)["error"]["code"], "request_timeout");
+        let reply = exchange_wire(address, &timed_out, false).await;
+        wire_contract::assert_json_reply(
+            "language body timeout", &reply, "408 Request Timeout",
+            &json!({"error":{"code":"request_timeout","message":"request body timed out","origin":"emp"}}),
+        );
     });
 }
 
@@ -2019,42 +2129,46 @@ fn realtime_uses_its_own_auth_and_multipart_errors() {
             &["Content-Length: 9", "content-length: 8"],
             b"",
         );
-        let reply = assert_wire(address, &unauthenticated, false, 401).await;
-        assert_eq!(
-            json_body(&reply)["error"]["code"],
-            "native_subscription_unavailable"
+        let reply = exchange_wire(address, &unauthenticated, false).await;
+        wire_contract::assert_json_reply(
+            "/v1/live without subscription", &reply, "401 Unauthorized",
+            &json!({"error":{"code":"native_subscription_unavailable","message":"A current native ChatGPT subscription login is required for Codex Voice","origin":"emp"}}),
         );
 
         let sideband = request(port, "GET", "/v1/live/rtc_demo", &[], b"");
-        let reply = assert_wire(address, &sideband, false, 401).await;
-        assert_eq!(
-            json_body(&reply)["error"]["code"],
-            "realtime_caller_unauthorized"
+        let reply = exchange_wire(address, &sideband, false).await;
+        wire_contract::assert_json_reply(
+            "/v1/live/rtc_demo", &reply, "401 Unauthorized",
+            &json!({"error":{"code":"realtime_caller_unauthorized","message":"Caller authentication is required for Codex Voice","origin":"emp"}}),
         );
 
         let session = fixture.session();
         let content_type = "Content-Type: multipart/form-data; boundary=EMP";
-        for (headers, status, code) in [
+        for (headers, status, code, message) in [
             (
                 vec!["Content-Length: 9", "content-length: 8"],
-                400,
+                "400 Bad Request",
                 "realtime_invalid_request",
+                "Realtime request contains duplicate framing or media-type headers",
             ),
             (
                 vec!["Transfer-Encoding: chunked"],
-                400,
+                "400 Bad Request",
                 "realtime_invalid_request",
+                "Transfer-Encoding is not supported for realtime calls",
             ),
             (
                 vec!["Content-Encoding: gzip"],
-                415,
+                "415 Unsupported Media Type",
                 "realtime_unsupported_encoding",
+                "Realtime calls require identity Content-Encoding",
             ),
-            (vec![], 411, "realtime_length_required"),
+            (vec![], "411 Error", "realtime_length_required", "Content-Length is required for realtime calls"),
             (
                 vec!["Content-Length: 262145"],
-                413,
+                "413 Content Too Large",
                 "realtime_request_too_large",
+                "Realtime request exceeds the 262144 byte limit",
             ),
         ] {
             let wire = request(
@@ -2064,9 +2178,21 @@ fn realtime_uses_its_own_auth_and_multipart_errors() {
                 &[&[session.as_str(), content_type], headers.as_slice()].concat(),
                 b"",
             );
-            let reply = assert_wire(address, &wire, false, status).await;
-            assert_eq!(json_body(&reply)["error"]["code"], code);
+            let reply = exchange_wire(address, &wire, false).await;
+            wire_contract::assert_json_reply(
+                message, &reply, status,
+                &json!({"error":{"code":code,"message":message,"origin":"emp"}}),
+            );
         }
+        let reply = exchange_wire(
+            address,
+            &request(port, "POST", "/v1/live", &[&session, content_type, "Content-Length: 6"], b"--EMP\n"),
+            false,
+        ).await;
+        wire_contract::assert_json_reply(
+            "malformed realtime multipart body", &reply, "400 Bad Request",
+            &json!({"error":{"code":"realtime_invalid_multipart","message":"Realtime request must contain exactly two multipart fields","origin":"emp"}}),
+        );
     });
 }
 

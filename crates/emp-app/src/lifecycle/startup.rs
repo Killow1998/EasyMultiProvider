@@ -330,21 +330,24 @@ impl ServerHandle {
             Arc::new_cyclic(|control: &std::sync::Weak<crate::server::ServerControl>| {
                 let control = control.clone();
                 crate::server::ServerControl::new(Arc::new(ConnectionAdmission::new(admission)))
-                    .with_updates(crate::services::updates::UpdateState::new(
-                        config_path,
-                        crate::VERSION,
-                        local_addr,
-                        open_browser,
-                        markers.rolled_back,
-                        move || {
-                            if let Some(control) = control.upgrade() {
-                                control.stop(crate::server::ShutdownReason::Requested);
-                            }
-                            Ok(())
-                        },
-                        Arc::clone(&backend.diagnostics),
-                        Arc::clone(&backend.modules),
-                    ))
+                    .with_backend(
+                        crate::services::updates::UpdateState::new(
+                            config_path,
+                            crate::VERSION,
+                            local_addr,
+                            open_browser,
+                            markers.rolled_back,
+                            move || {
+                                if let Some(control) = control.upgrade() {
+                                    control.stop(crate::server::ShutdownReason::Requested);
+                                }
+                                Ok(())
+                            },
+                            Arc::clone(&backend.diagnostics),
+                            Arc::clone(&backend.modules),
+                        ),
+                        Arc::clone(&backend.management_events),
+                    )
             });
         let state = Arc::new(ServerState {
             #[cfg(test)]

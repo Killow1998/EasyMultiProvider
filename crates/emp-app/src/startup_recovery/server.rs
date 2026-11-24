@@ -75,7 +75,7 @@ pub(crate) fn run(
             }
         }
         let result = worker.join().map_err(|_| AppError::ServerStopped)?;
-        return if tray_closed { Ok(false) } else { result };
+        return result.map(|retry| !tray_closed && retry);
     }
     serve(listener, config, external_key, reason, &token, control)
 }

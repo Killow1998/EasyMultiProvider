@@ -89,7 +89,6 @@ impl ServerHandle {
         let _ = credential_operations.close_and_drain(Duration::ZERO);
         self.state.backend.usage.stop();
         let accounts = &self.state.backend.accounts;
-        self.state.backend.management_events.close();
         if let Ok(_wait) = accounts.quota_sampler_wait.lock() {
             accounts.quota_sampler_condition.notify_all();
         }

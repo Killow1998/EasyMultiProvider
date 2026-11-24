@@ -400,7 +400,7 @@ async fn responses_turns(
             let (control, mut monitor) = control::TurnControl::start(state, &mut websocket);
             let mut source = request.source.expect("authorized WebSocket caller").clone();
             source.aero_lease = Some(crate::services::modules::aero::CallLease {
-                connection: permit.clone(),
+                connection: permit.slot().clone(),
                 work: Arc::new(work),
             });
             let request = Request {

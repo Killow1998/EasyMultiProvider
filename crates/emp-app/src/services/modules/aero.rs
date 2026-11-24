@@ -6,7 +6,9 @@ use super::{ActiveWorker, Modules};
 use crate::{
     app::ServerState,
     services::{
-        connection_admission::ConnectionPermit, gateway_clients::Caller, updates::RequestPermit,
+        connection_admission::{ConnectionPermit, ConnectionSlot},
+        gateway_clients::Caller,
+        updates::RequestPermit,
     },
 };
 use emp_modules::{Command, Module};
@@ -39,7 +41,12 @@ impl Default for Callers {
 
 #[derive(Clone)]
 pub(crate) struct CallLease {
-    pub(crate) connection: Arc<ConnectionPermit>,
+    pub(crate) connection: Arc<ConnectionSlot>,
+    pub(crate) work: Arc<RequestPermit>,
+}
+
+pub(crate) struct CallbackLease {
+    pub(crate) connection: ConnectionPermit,
     pub(crate) work: Arc<RequestPermit>,
 }
 
@@ -94,8 +101,16 @@ impl Callers {
     pub(crate) fn identify_callback(
         &self,
         key: &str,
-    ) -> Option<(CallerDelegation, Option<CallLease>)> {
-        self.active.lock().ok()?.get(key).cloned()
+    ) -> Option<(CallerDelegation, Option<CallbackLease>)> {
+        let calls = self.active.lock().ok()?;
+        let (identity, lease) = calls.get(key)?;
+        Some((
+            identity.clone(),
+            lease.as_ref().map(|lease| CallbackLease {
+                connection: lease.connection.start_work(),
+                work: lease.work.clone(),
+            }),
+        ))
     }
 }
 

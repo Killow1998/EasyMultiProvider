@@ -3,7 +3,8 @@ use super::*;
 
 struct NativeErrorSseUpstream {
     address: SocketAddr,
-    worker: Option<JoinHandle<std::io::Result<()>>>,
+    worker: Option<JoinHandle<std::io::Result<usize>>>,
+    expected_requests: usize,
 }
 impl NativeErrorSseUpstream {
     fn start(wire: Vec<u8>) -> Self {
@@ -13,11 +14,11 @@ impl NativeErrorSseUpstream {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let worker = thread::spawn(move || {
-            for _ in 0..requests {
+            for received in 0..requests {
                 let (mut stream, _) = listener.accept()?;
                 stream.set_read_timeout(Some(crate::server::raw_tcp::wire_timeout()))?;
                 if stream.peek(&mut [0])? == 0 {
-                    return Ok(());
+                    return Ok(received);
                 }
                 let _ = receive_native_request(&mut stream);
                 stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")?;
@@ -26,11 +27,12 @@ impl NativeErrorSseUpstream {
                     stream.flush()?;
                 }
             }
-            Ok(())
+            Ok(requests)
         });
         Self {
             address,
             worker: Some(worker),
+            expected_requests: requests,
         }
     }
     fn base_url(&self) -> String {
@@ -38,7 +40,13 @@ impl NativeErrorSseUpstream {
     }
 
     fn finish(mut self) {
-        finish_upstream(self.address, &mut self.worker).expect("finish Native SSE fake upstream");
+        let received = finish_upstream(self.address, &mut self.worker)
+            .expect("finish Native SSE fake upstream")
+            .expect("Native SSE worker is running");
+        assert_eq!(
+            received, self.expected_requests,
+            "Native SSE upstream request count"
+        );
     }
 }
 impl Drop for NativeErrorSseUpstream {

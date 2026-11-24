@@ -152,6 +152,11 @@ fn tab_separated_http_request_line_is_accepted() {
         }
         let reply = assert_wire(address, &wire, true, 200).await;
         assert!(json_body(&reply)["models"].is_array());
+        wire_contract::assert_reference_reply(
+            "tab-separated /api/config",
+            &reply,
+            &crate::api::catalog::read_configuration(&fixture.server.state).encode(),
+        );
     });
 }
 
@@ -165,15 +170,12 @@ fn websocket_upgrade_carries_prefix_and_keeps_capacity_rejections() {
         let slots = std::iter::from_fn(|| state.lifecycle.admission.acquire_websocket())
             .collect::<Vec<_>>();
         let sideband = upgrade(port, "/v1/live/rtc_busy", &session, &[], &[]);
-        let reply = assert_wire(address, &sideband, false, 503).await;
-        assert!(
-            reply
-                .windows(b"Retry-After: 2".len())
-                .any(|window| window == b"Retry-After: 2")
-        );
-        assert_eq!(
-            json_body(&reply)["error"]["code"],
-            "realtime_capacity_unavailable"
+        let reply = exchange_wire(address, &sideband, false).await;
+        let expected = br#"{"error":{"code":"realtime_capacity_unavailable","message":"Too many WebSocket connections","origin":"emp"}}"#;
+        wire_contract::assert_reply(
+            "sideband capacity", &reply,
+            &format!(wire_contract::json_head!("503 Service Unavailable", "{}", "Retry-After: 2"), expected.len()),
+            expected,
         );
         let responses = upgrade(port, "/v1/responses", &session, &[], &[]);
         {

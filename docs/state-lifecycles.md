@@ -24,7 +24,7 @@ not mean every transition is enforced by a type.
 | R02 | [Integration manager](../crates/emp-codex/src/configuration/manager.rs), [storage](../crates/emp-codex/src/configuration/storage.rs) | Native → apply → applied lease → restore; mismatched ownership → conflict | M. Configuration ownership and runtime liveness are separate. Restore is not Quit. |
 | R03 | [Runtime service](../crates/emp-app/src/services/runtime.rs), [runtime record](../crates/emp-codex/src/configuration/runtime.rs) | Configuration change → pending verification → probe / synchronization result | M. A saved setting is not proof that an already-running Codex adopted it. |
 | R04 | [Shutdown preparation](../crates/emp-app/src/services/shutdown.rs) | Quit → quiesce → restore owned settings → exit; refusal → keep serving | I. Commit to shutdown only after prerequisites succeed. |
-| R05 | [Connections](../crates/emp-app/src/lifecycle/connections.rs), [admission](../crates/emp-transport/src/admission.rs) | Acquire permit → active connection/body → release; quiesce blocks new work | I. Resource counters and shutdown eligibility are orthogonal. Preserve RAII. |
+| R05 | [Connections](../crates/emp-app/src/server/connection.rs), [admission](../crates/emp-app/src/services/connection_admission.rs) | Acquire permit → active connection/body → release; quiesce blocks new work | I. Capacity and business occupancy have separate lifetimes. |
 | R06 | [Tray actions](../crates/emp-app/src/tray/actions.rs) | Idle → action in progress → integration / browser / quit result | I. Tray and WebUI invoke the same services; do not create tray-owned integration state. |
 | R07 | [Update manager](../crates/emp-updater/src/manager/operations.rs), [drain](../crates/emp-app/src/services/updates.rs) | Check → available → download → verify → wait for active work → install; error → retry | M. Download progress, release cache, active-work count and drain state have different lifetimes. |
 | R08 | [Update worker](../crates/emp-updater/src/worker.rs) | `waiting_for_exit` → `replacing` → `starting` → `waiting_for_startup` → `complete`; failure → restore / rollback / recovery | E. Persisted phases survive process replacement. Keep separate from the WebUI polling lifecycle. |
@@ -35,9 +35,26 @@ quota sampler checks its condition and receives shutdown notification under the
 same mutex. `ExitSignals` retains the runtime until its callback task is joined
 and keeps signal receivers registered throughout shutdown.
 
-Normal exit restores owned native routing before draining admitted handlers,
-workers and credential operations, then flushes rotated credentials before
-releasing the service lock; an unsaved rotation makes shutdown fail. Only the
+### 退出排空模型
+
+`ServerControl::stop` 首次收到退出信号时关闭准入、更新入口和管理事件源，并确定排空期限。`/api/quit` 先检查业务占用、恢复集成配置并完成退出回执的写入尝试，然后发信号。SIGTERM、控制台事件和更新交接通过同一控制入口发信号，恢复页在退出或重置回执写完后发信号。监听器 `serve` 独自判定排空结果，生命周期读取该结果并完成各自的配置、凭据与服务锁收尾。
+
+| 占用者 | 占用区间 |
+| --- | --- |
+| 普通请求 | 从请求准入到处理器生成完整正文，或处理终止。 |
+| 推理和报表流 | 从准入到上游读取和正文生成结束，或流处理终止。 |
+| Aero 委托 | 父请求和已通过委托认证的回调各持有一个业务引用，共用原请求槽和更新许可。回调在委托键仍有效时登记自己的引用。 |
+| 已提交的阻塞工作 | 从提交到工作返回，跟随所属业务许可，即使发起它的处理器先结束。传输结算也等待已提交的工作返回。 |
+| WebSocket | 从预留或接管 WebSocket 许可到会话退出。 |
+| 管理事件订阅 | 释放普通请求槽后占用独立订阅名额。排空开始即关闭事件源、唤醒订阅，并交付待发的退出事件。 |
+
+同一许可上最后一个业务持有者结束，且响应正文已经完整生成时，余下的工作属于发送，容量槽继续保留到连接收尾。父请求生成 Aero 错误响应时，仍在推理的回调继续占用业务。`/api/quit` 的预检查和期限快照读取同一份业务计数，预检查豁免退出请求自身。
+
+监听器在期限到达时先快照业务计数，仍有业务就返回 `ServerStopped`，只有发送则可正常退出。快照后再取消传输，连接用实际写入错误走原有结算，并等待已提交工作结束。收尾完成时间不会改写快照。取消使用接纳时已拥有的套接字，唤醒挂起的读写和探测，连接准入只需要一个描述符。
+
+Normal exit restores owned native routing while the listener drains admitted
+handlers, then joins workers and flushes rotated credentials before releasing
+the service lock. An unsaved rotation makes shutdown fail. Only the
 updater's own handoff preserves integration, while update and rollback retain
 the current browser session and tab.
 

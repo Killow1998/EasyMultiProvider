@@ -1,5 +1,297 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn healthz_uses_the_last_available_descriptor() {
+    const CHILD: &str = "EMP_TEST_HEALTHZ_LAST_DESCRIPTOR";
+    if std::env::var_os(CHILD).is_none() {
+        let child = std::process::Command::new("sh")
+            .args(["-c", "ulimit -n 128 && exec \"$@\"", "emp-fd-limit"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "server::http::tests::lifecycle::healthz_uses_the_last_available_descriptor",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr),
+        );
+        assert!(String::from_utf8_lossy(&child.stdout).contains("1 passed"));
+        return;
+    }
+
+    use std::io::Read;
+    let fixture = Fixture::new();
+    let client = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
+    client
+        .set_read_timeout(Some(crate::server::raw_tcp::wire_timeout()))
+        .unwrap();
+    let mut fillers = Vec::new();
+    loop {
+        match std::fs::File::open("/dev/null") {
+            Ok(file) => fillers.push(file),
+            Err(error) => {
+                assert_eq!(error.raw_os_error(), Some(libc::EMFILE));
+                break;
+            }
+        }
+    }
+    drop(fillers.pop().expect("one descriptor for accept"));
+    client.connect(&fixture.server.local_addr().into()).unwrap();
+    let mut client: std::net::TcpStream = client.into();
+    client
+        .write_all(&request(fixture.port(), "GET", "/healthz", &[], b""))
+        .unwrap();
+    let mut reply = Vec::new();
+    let result = client.read_to_end(&mut reply);
+    drop(fillers);
+    result.unwrap();
+    wire_contract::assert_json_reply(
+        "/healthz with one available fd",
+        &reply,
+        "200 OK",
+        &json!({"status":"ok"}),
+    );
+    fixture.server.shutdown().unwrap();
+}
+
+#[test]
+fn drain_owner_matrix() {
+    use crate::server::{
+        REQUEST_DRAIN_TIMEOUT, ServeError,
+        raw_tcp::{RawClient, wire_timeout},
+        serve,
+        tests::poll_once,
+    };
+    use std::{pin::pin, task::Poll};
+    use tokio::time::advance;
+
+    #[derive(Clone, Copy, Debug)]
+    enum Owner {
+        Handler,
+        InferenceStream,
+        DelegatedCallback,
+        SubmittedWork,
+        WebSocket,
+        ManagementSubscription,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum AtCutoff {
+        Finished,
+        Working,
+        Sending,
+    }
+
+    use AtCutoff::{Finished, Sending, Working};
+    use Owner::{
+        DelegatedCallback, Handler, InferenceStream, ManagementSubscription, SubmittedWork,
+        WebSocket,
+    };
+
+    let cases = [
+        (Handler, &[Finished, Working, Sending][..]),
+        (InferenceStream, &[Finished, Working, Sending]),
+        (DelegatedCallback, &[Finished, Working, Sending]),
+        (SubmittedWork, &[Finished, Working, Sending]),
+        (WebSocket, &[Finished, Working]),
+        (ManagementSubscription, &[Finished, Sending]),
+    ];
+    const LARGE_PAYLOAD: usize = 8 * 1024 * 1024;
+    for (owner, phases) in cases {
+        for &phase in phases {
+            for via_quit in [true, false] {
+                let case = format!("{owner:?} {phase:?} /api/quit={via_quit}");
+                let slow_transport = phase != Finished && !matches!(owner, WebSocket);
+                let fixture = Fixture::new();
+                let state = fixture.server.state.clone();
+                let admission = state.lifecycle.admission.clone();
+                let events = state.backend.management_events.clone();
+                let session = fixture.session();
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async {
+                    let router = with_entry_state(
+                        super::super::lifecycle::routes().route(
+                            "/healthz",
+                            get(move || async move {
+                                let size = if slow_transport { LARGE_PAYLOAD } else { 1 };
+                                JsonReply::new(200, vec![b'x'; size])
+                            }),
+                        ),
+                        state.clone(),
+                    );
+                    // An independent listener gives the cutoff a virtual clock while sharing the
+                    // production request admission, quit checks, and journal from the fixture.
+                    let control = state.lifecycle.clone();
+                    let socket = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
+                    let address = socket.local_addr().unwrap();
+                    let listener = tokio::spawn(serve(socket, router, control.clone(), Some(state)));
+                    let server = ServerHandle {
+                        address,
+                        control,
+                        listener,
+                    };
+                    let mut payload = RawClient::request(
+                        address,
+                        &request(fixture.port(), "GET", "/healthz", &[], b""),
+                    )
+                    .await;
+                    assert!(payload.head.starts_with("HTTP/1.1 200 "), "{case}");
+                    let work = match owner {
+                        Handler => admission.acquire_request(),
+                        InferenceStream | DelegatedCallback | SubmittedWork => {
+                            let root = admission.acquire_request().unwrap();
+                            Some(root.slot().start_work())
+                        }
+                        WebSocket => admission.acquire_websocket(),
+                        ManagementSubscription => None,
+                    };
+                    let work = if phase == Working {
+                        assert!(work.is_some(), "{case}");
+                        work
+                    } else {
+                        drop(work);
+                        None
+                    };
+                    let subscription = if matches!(owner, ManagementSubscription) {
+                        let mut subscription = events.subscribe().unwrap();
+                        assert!(subscription.next(Duration::ZERO).await.is_some());
+                        Some(subscription)
+                    } else {
+                        None
+                    };
+                    if !slow_transport {
+                        assert_eq!(payload.rest().await, b"x", "{case}");
+                    }
+                    if via_quit {
+                        let reply = exchange_before(
+                            address,
+                            &json_request(fixture.port(), "/api/quit", &[&session], b"{}"),
+                            false,
+                            test_timeout(REQUEST_DRAIN_TIMEOUT),
+                        )
+                        .await;
+                        if phase == Working {
+                            wire_contract::assert_json_reply(
+                                &case,
+                                &reply,
+                                "409 Error",
+                                &json!({
+                                    "error": {
+                                        "code": "active_conversations",
+                                        "message": "Finish active Codex requests and WebSockets, then retry shutdown",
+                                        "origin": "emp"
+                                    }
+                                }),
+                            );
+                        } else {
+                            wire_contract::assert_json_reply(
+                                &case,
+                                &reply,
+                                "200 OK",
+                                &json!({"status":"stopping"}),
+                            );
+                            assert_eq!(
+                                timeout(wire_timeout(), server.shutdown_signal().wait())
+                                    .await
+                                    .unwrap(),
+                                crate::server::ShutdownReason::ResponseWritten,
+                                "{case}"
+                            );
+                        }
+                    } else {
+                        assert_eq!(
+                            admission.quiesce_work(0, Duration::ZERO).is_some(),
+                            phase != Working,
+                            "{case}"
+                        );
+                    }
+
+                    tokio::time::pause();
+                    let mut shutdown = pin!(async move {
+                        if via_quit && phase != Working {
+                            server.join().await
+                        } else {
+                            server.shutdown().await
+                        }
+                    });
+                    let result = match poll_once(shutdown.as_mut()).await {
+                        Poll::Ready(result) => result,
+                        Poll::Pending => {
+                            if phase != Finished {
+                                advance(REQUEST_DRAIN_TIMEOUT).await;
+                            }
+                            timeout(wire_timeout(), shutdown.as_mut())
+                                .await
+                                .unwrap_or_else(|_| {
+                                    panic!("{case}: shutdown exceeded the test deadline")
+                                })
+                        }
+                    };
+                    assert_eq!(
+                        matches!(result, Err(ServeError::AdmissionNotDrained)),
+                        phase == Working,
+                        "{case}: {result:?}",
+                    );
+                    if phase != Working {
+                        result.unwrap();
+                    }
+                    drop(work);
+                    tokio::time::resume();
+                    if slow_transport {
+                        assert!(payload.rest().await.len() < LARGE_PAYLOAD, "{case}");
+                    }
+                    if let Some(mut subscription) = subscription {
+                        if via_quit {
+                            assert!(subscription.next(Duration::ZERO).await.unwrap().quit, "{case}");
+                        }
+                        assert!(subscription.next(Duration::ZERO).await.is_none(), "{case}");
+                    }
+                });
+                fixture.server.shutdown().unwrap();
+                let journal = crate::tests::live_journal(fixture.directory.path());
+                let completions = |path| {
+                    journal.iter().filter(move |entry| {
+                        entry["event"] == "http_request_completed"
+                            && entry["fields"]["path"] == path
+                    })
+                };
+                let mut payload = completions("/healthz");
+                let fields = &payload.next().expect(&case)["fields"];
+                assert_eq!(fields["status"], 200, "{case}");
+                let result = if slow_transport {
+                    "write_failed"
+                } else {
+                    "responded"
+                };
+                assert_eq!(fields["result"], result, "{case}");
+                assert!(payload.next().is_none(), "{case}");
+                let mut quit = completions("/api/quit");
+                if via_quit {
+                    let fields = &quit.next().expect(&case)["fields"];
+                    let (status, result) = if phase == Working {
+                        (409, "rejected")
+                    } else {
+                        (200, "responded")
+                    };
+                    assert_eq!(fields["status"], status, "{case}");
+                    assert_eq!(fields["result"], result, "{case}");
+                }
+                assert!(quit.next().is_none(), "{case}");
+            }
+        }
+    }
+}
+
 #[test]
 fn raw_management_paths_follow_route_matching_without_writes() {
     Fixture::new().run_wire(async |fixture, endpoint| {
@@ -73,13 +365,31 @@ fn raw_management_paths_follow_route_matching_without_writes() {
             ] {
                 for query in [format!("?probe={suffix}"), format!("?probe=ok#{suffix}")] {
                     let path = format!("{route}{query}");
-                    assert_wire(
+                    let reply = exchange_wire(
                         endpoint,
                         &request(port, "GET", &path, headers, b""),
                         false,
-                        200,
                     )
                     .await;
+                    match route {
+                        "/healthz" => wire_contract::assert_json_reply(
+                            &path, &reply, "200 OK", &json!({"status":"ok"}),
+                        ),
+                        "/assets/i18n.js" => {
+                            let script = include_bytes!("../../../../web/i18n.js");
+                            wire_contract::assert_reply(
+                                &path,
+                                &reply,
+                                &wire_contract::asset_head!("text/javascript; charset=utf-8", script.len()),
+                                script,
+                            );
+                        }
+                        _ => wire_contract::assert_reference_reply(
+                            &path, &reply,
+                            &crate::server::http::settings::SettingsRead::for_path(route)
+                                .unwrap().read(&fixture.server.state).encode(),
+                        ),
+                    }
                 }
             }
         }
@@ -107,13 +417,13 @@ fn raw_management_paths_follow_route_matching_without_writes() {
                     .await;
             }
         }
-        assert_wire(
+        let reply = exchange_wire(
             endpoint,
             &request(port, "GET", "/healthz", &[], b""),
             false,
-            200,
         )
         .await;
+        wire_contract::assert_json_reply("/healthz", &reply, "200 OK", &json!({"status":"ok"}));
     });
 }
 
@@ -221,6 +531,7 @@ fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
         Fixture::new().run_wire(async |fixture, address| {
             let state = &fixture.server.state;
             let calls = &state.backend.aero_callers;
+            let parent = state.lifecycle.admission.acquire_request().unwrap();
             let delegation = calls
                 .delegate(
                     Caller {
@@ -229,7 +540,7 @@ fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
                     },
                     None,
                     Some(CallLease {
-                        connection: Arc::new(state.lifecycle.admission.acquire_request().unwrap()),
+                        connection: parent.slot().clone(),
                         work: Arc::new(state.lifecycle.updates().enter().unwrap()),
                     }),
                 )
@@ -329,7 +640,12 @@ fn lifecycle_and_unmatched_requests_keep_method_and_auth_policy() {
         );
         for path in ["/", "/index.html", "/healthz"] {
             for method in ["POST", "DELETE"] {
-                assert_wire(endpoint, &request(port, method, path, &[], b""), false, 200).await;
+                let reply = exchange_wire(endpoint, &request(port, method, path, &[], b""), false).await;
+                if path == "/healthz" {
+                    wire_contract::assert_json_reply(path, &reply, "200 OK", &json!({"status":"ok"}));
+                } else {
+                    assert_page_reply(path, &reply, "text/html; charset=utf-8", crate::WEB_INDEX_BYTES);
+                }
                 let denied = exchange_wire(
                     endpoint,
                     &request(port, method, path, &["Origin: https://other.invalid"], b""),

@@ -61,7 +61,7 @@ pub(crate) struct AdmittedCallback {
 }
 
 pub(crate) enum ConnectionIntake {
-    Public(Arc<ConnectionPermit>),
+    Public(ConnectionPermit),
     CallbackHead(tokio::sync::OwnedSemaphorePermit),
 }
 
@@ -78,7 +78,7 @@ impl ConnectionIntake {
             .lifecycle
             .admission
             .acquire_request()
-            .map(|permit| Self::Public(Arc::new(permit)))
+            .map(Self::Public)
     }
 
     pub(crate) fn admit(
@@ -86,7 +86,7 @@ impl ConnectionIntake {
         request: Option<Request<'_>>,
         state: &ServerState,
         peer: Option<IpAddr>,
-    ) -> Option<(Arc<ConnectionPermit>, Option<AdmittedCallback>)> {
+    ) -> Option<(ConnectionPermit, Option<AdmittedCallback>)> {
         let callback = request
             .filter(|request| request.method == RequestMethod::Post)
             .and_then(|request| aero_delegation_key(request, state, peer))
@@ -111,7 +111,7 @@ impl ConnectionIntake {
                     identity,
                     work: None,
                 });
-                Some((Arc::new(permit), identity))
+                Some((permit, identity))
             }
         }
     }
