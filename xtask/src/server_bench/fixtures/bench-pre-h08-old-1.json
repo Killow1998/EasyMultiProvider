@@ -1,0 +1,64 @@
+{
+  "label": "old-1",
+  "startup_ms": 20.212824,
+  "startup_measurement": "concurrent_health_probe",
+  "exit_ms": 30.128833,
+  "idle": {
+    "rss_kib": 26024,
+    "threads": 17
+  },
+  "http": [
+    {
+      "concurrency": 1,
+      "requests": 2000,
+      "latency_ms": {
+        "p50": 4.4278900000000005,
+        "p99": 8.753542
+      },
+      "requests_per_second": 212.8050409716062
+    },
+    {
+      "concurrency": 4,
+      "requests": 2000,
+      "latency_ms": {
+        "p50": 8.407164999999999,
+        "p99": 14.328606
+      },
+      "requests_per_second": 460.1221897588354
+    },
+    {
+      "concurrency": 16,
+      "requests": 2000,
+      "latency_ms": {
+        "p50": 36.678717,
+        "p99": 80.241152
+      },
+      "requests_per_second": 417.606600813544
+    }
+  ],
+  "sse_requests": 16,
+  "sse_first_byte_ms": {
+    "p50": 16.497731,
+    "p99": 24.262299000000002
+  },
+  "ws": {
+    "sessions": 64,
+    "before": {
+      "rss_kib": 49684,
+      "threads": 17
+    },
+    "open": {
+      "rss_kib": 61840,
+      "threads": 81
+    },
+    "after": {
+      "rss_kib": 54960,
+      "threads": 17
+    },
+    "after_15s": {
+      "rss_kib": 55004,
+      "threads": 17
+    }
+  },
+  "cancellation_within_1s": true
+}

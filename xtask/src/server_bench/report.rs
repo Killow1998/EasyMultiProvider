@@ -378,34 +378,47 @@ mod tests {
     }
 
     #[test]
-    fn compares_h07_report_without_mixing_startup_measurements() {
-        let old_json = include_str!("fixtures/bench-h07-old-1.json");
-        let baseline: Report = serde_json::from_str(old_json).unwrap();
-        let mut new_json: serde_json::Value = serde_json::from_str(old_json).unwrap();
-        new_json["label"] = "new".into();
-        new_json["startup_ms"] = 20.0.into();
-        new_json["startup_measurement"] = "concurrent_health_probe".into();
-        new_json["exit_ms"] = 20.0.into();
-        let candidate: Report = serde_json::from_value(new_json).unwrap();
-        let comparison = baseline.compare(&candidate).unwrap();
+    fn compares_startup_only_when_bench_reports_use_the_same_measurement() {
+        let h07: Report =
+            serde_json::from_str(include_str!("fixtures/bench-h07-old-1.json")).unwrap();
+        let pre_h08_json = include_str!("fixtures/bench-pre-h08-old-1.json");
+        let pre_h08: Report = serde_json::from_str(pre_h08_json).unwrap();
+        let comparison = h07.compare(&pre_h08).unwrap();
         assert!(
             comparison.contains(
-                "| Startup to /healthz 200 (ms) | 32.207 | 20.000 | incomparable | incomparable |"
+                "| Startup to /healthz 200 (ms) | 32.207 | 20.213 | incomparable | incomparable |"
             ),
             "{comparison}"
         );
         assert!(
             comparison
-                .contains("| POST /api/quit to exit (ms) | 19.177 | 20.000 | +0.823 | +4.29% |")
+                .contains("| POST /api/quit to exit (ms) | 19.177 | 30.129 | +10.952 | +57.11% |"),
+            "{comparison}"
         );
-        assert!(candidate.compare(&baseline).unwrap().contains(
-            "| Startup to /healthz 200 (ms) | 20.000 | 32.207 | incomparable | incomparable |"
+        assert!(pre_h08.compare(&h07).unwrap().contains(
+            "| Startup to /healthz 200 (ms) | 20.213 | 32.207 | incomparable | incomparable |"
         ));
         assert!(
-            baseline
-                .compare(&baseline)
+            h07.compare(&h07)
                 .unwrap()
                 .contains("| Startup to /healthz 200 (ms) | 32.207 | 32.207 | +0.000 | +0.00% |")
+        );
+
+        let directory = crate::temporary_directory("emp-bench-report-").unwrap();
+        let path = directory.path().join("report.json");
+        Report {
+            label: "new".into(),
+            startup_ms: 20.0,
+            startup_measurement: StartupMeasurement::ConcurrentHealthProbe,
+            ..serde_json::from_str(pre_h08_json).unwrap()
+        }
+        .save(&path)
+        .unwrap();
+        let comparison = pre_h08.compare(&Report::load(&path).unwrap()).unwrap();
+        assert!(
+            comparison
+                .contains("| Startup to /healthz 200 (ms) | 20.213 | 20.000 | -0.213 | -1.05% |"),
+            "{comparison}"
         );
     }
 

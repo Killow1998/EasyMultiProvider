@@ -849,12 +849,12 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
             assert_upgrade(&client);
             client.io.write_all(&websocket_frame(0x81, MASK, NATIVE_CREATE)).await.unwrap();
 
-            let upstream_delay = Duration::from_millis(400);
+            let ws_handshake_delay = Duration::from_millis(400);
             let (fallback_started, http_wait_ms) = timeout(DEADLINE, async {
                 let (mut ws, _) = listener.accept().await.unwrap();
                 let request = String::from_utf8(head(&mut ws).await.unwrap()).unwrap();
                 assert_eq!(parse_request(&request).unwrap().header("Upgrade"), Some("websocket"));
-                tokio::time::sleep(upstream_delay).await;
+                tokio::time::sleep(ws_handshake_delay).await;
                 let rejected_at = std::time::Instant::now();
                 ws.write_all(
                     b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -868,7 +868,7 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
                 let mut body = vec![0; request.header("Content-Length").unwrap().parse().unwrap()];
                 http.read_exact(&mut body).await.unwrap();
                 let http_wait_started = std::time::Instant::now();
-                tokio::time::sleep(upstream_delay).await;
+                tokio::time::sleep(ws_handshake_delay / 4).await;
                 let http_wait_ms = http_wait_started.elapsed().as_millis() as u64;
                 http.write_all(
                     b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
