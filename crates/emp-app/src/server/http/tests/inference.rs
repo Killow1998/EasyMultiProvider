@@ -312,6 +312,93 @@ fn upstream_reply(
     write!(socket, "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\n{extra}Connection: close\r\n\r\n").unwrap();
 }
 
+fn stalled_buffered_inference(quit: bool) {
+    const BODY_BYTES: usize = 12 * 1024 * 1024;
+    let body = json!({
+        "id":"resp_fixture", "object":"response", "status":"completed", "model":"upstream",
+        "output":[], "fixture_payload":"x".repeat(BODY_BYTES),
+    })
+    .to_string();
+    let upstream = OneShotUpstream::serve(1, move |stream| {
+        upstream_reply(stream, 200, "application/json", body.len(), "");
+        stream.write_all(body.as_bytes()).unwrap();
+    });
+    let fixture = fixture(&upstream.base_url());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let slow = runtime.block_on(async {
+        let address = fixture.server.local_addr();
+        let session = fixture.session();
+        let wire = json_request(
+            address.port(),
+            "/v1/responses",
+            &[&session, "Authorization: Bearer caller"],
+            br#"{"model":"native/alias","stream":false,"input":"fixture"}"#,
+        );
+        let slow = RawClient::request(address, &wire).await;
+        let head = ResponseHead::parse(&slow.head);
+        assert_eq!(head.status, "HTTP/1.1 200 OK");
+        assert!(head.headers["content-length"][0].parse::<usize>().unwrap() >= BODY_BYTES);
+        if quit {
+            let reply = timeout(crate::server::REQUEST_DRAIN_TIMEOUT, async {
+                let mut socket = TcpStream::connect(address).await.unwrap();
+                socket
+                    .write_all(&json_request(
+                        address.port(),
+                        "/api/quit",
+                        &[&session],
+                        b"{}",
+                    ))
+                    .await
+                    .unwrap();
+                let mut reply = Vec::new();
+                socket.read_to_end(&mut reply).await.unwrap();
+                reply
+            })
+            .await
+            .expect("quit returned a response");
+            assert_status(&reply, 200);
+            assert_eq!(json_body(&reply), json!({"status":"stopping"}));
+            let signal = fixture.server.state.lifecycle.signal();
+            assert_eq!(
+                timeout(DEADLINE, signal.wait()).await.unwrap(),
+                crate::server::ShutdownReason::ResponseWritten,
+            );
+            assert!(fixture.server.state.lifecycle.admission.active_requests() > 0);
+        }
+        slow
+    });
+    let result = shutdown_with_stalled_response(fixture.server, slow);
+    if quit {
+        result.expect("quit completed successfully");
+    }
+    let id = &upstream.observed().1["x-emp-request-id"];
+    let journal = live_journal(fixture.directory.path());
+    for (event, status, delivery) in [
+        ("http_request_completed", "status", "result"),
+        ("request_finished", "response_status", "delivery"),
+    ] {
+        let records: Vec<_> = journal
+            .iter()
+            .filter(|entry| entry["event"] == event && entry["fields"]["request_id"] == id.as_str())
+            .map(|entry| (&entry["fields"][status], &entry["fields"][delivery]))
+            .collect();
+        assert_eq!(records, [(&json!(200), &json!("write_failed"))], "{event}");
+    }
+}
+
+#[test]
+fn quit_completes_with_a_stalled_buffered_inference_response() {
+    stalled_buffered_inference(true);
+}
+
+#[test]
+fn shutdown_records_write_failure_for_a_stalled_buffered_inference_response() {
+    stalled_buffered_inference(false);
+}
+
 #[test]
 fn inference_buffered_routes_preserve_wire_bytes_and_headers() {
     let native_request = br#"{"model":"native/alias","input":"fixture","stream":false}"#;

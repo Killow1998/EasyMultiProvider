@@ -2,7 +2,6 @@
 use super::ServerHandle;
 use crate::app::ServerState;
 use crate::error::AppError;
-use crate::server::REQUEST_DRAIN_TIMEOUT;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -79,22 +78,13 @@ impl ServerHandle {
     fn shutdown_inner(self, preserve_integration: bool) -> Result<(), AppError> {
         let restoration = prepare_exit(&self.state, preserve_integration);
         self.state.catalog_refresh.stop();
-        let admitted_work_drained = if let Some(gate) = self
-            .state
-            .lifecycle
-            .admission
-            .quiesce(0, REQUEST_DRAIN_TIMEOUT)
-        {
-            gate.keep_closed();
-            true
-        } else {
-            false
-        };
-        let restoration = restoration.and(if admitted_work_drained {
-            Ok(())
-        } else {
-            Err(AppError::ServerStopped)
+        let listener = self.listener.map_or(Ok(()), |listener| {
+            listener
+                .join()
+                .map_err(|_| AppError::ServerStopped)?
+                .map_err(|_| AppError::ServerStopped)
         });
+        let restoration = restoration.and(listener);
         let credential_operations = &self.state.backend.accounts.credential_operations;
         let _ = credential_operations.close_and_drain(Duration::ZERO);
         self.state.backend.usage.stop();

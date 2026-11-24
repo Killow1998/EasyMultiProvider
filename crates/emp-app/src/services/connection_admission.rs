@@ -87,6 +87,14 @@ impl ConnectionAdmission {
         self.websockets.close_permanently();
     }
 
+    pub(crate) fn wait_until_idle(&self, deadline: Instant) -> bool {
+        self.requests
+            .wait_for_at_most(0, deadline, |slots| slots.active)
+            && self
+                .websockets
+                .wait_for_at_most(0, deadline, |slots| slots.active)
+    }
+
     /// Stop new work and wait until admitted requests and WebSockets drain.
     /// `exempt_requests` accounts for the management request doing a restore.
     pub(crate) fn quiesce(

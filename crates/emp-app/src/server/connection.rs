@@ -4,7 +4,7 @@ use super::{
     http::{
         accounts::AccountWriteRoute,
         catalog::CatalogWriteRoute,
-        error::EntryWire,
+        error::{BufferedResponse, EntryWire},
         inference::{BufferedReceipt, InferenceConnection, InferenceRoute},
         local_writes::LocalWriteRoute,
         proxy::{AdmittedCallback, ConnectionIntake, RequestAccess},
@@ -406,9 +406,7 @@ async fn drive_connection(
             {
                 stream.delivery.await_flush(flushed);
             }
-            let wire = response.extensions().get::<EntryWire>();
-            if wire.is_some()
-                && stream.is_none()
+            if response.extensions().get::<BufferedResponse>().is_some()
                 && delegation.is_none_or(|callback| callback.work.is_none())
                 && let Some(permit) = context
                     .0
@@ -419,7 +417,12 @@ async fn drive_connection(
             {
                 permit.begin_buffered_delivery();
             }
-            let _ = encoded_reply.set(wire.map(|wire| wire.0.clone()));
+            let _ = encoded_reply.set(
+                response
+                    .extensions()
+                    .get::<EntryWire>()
+                    .map(|wire| wire.0.clone()),
+            );
             if response.status().is_success()
                 || response.status() == StatusCode::SWITCHING_PROTOCOLS
             {

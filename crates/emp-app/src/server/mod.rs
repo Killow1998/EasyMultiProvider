@@ -11,13 +11,14 @@ use axum::{Router, middleware::from_fn_with_state};
 use std::net::SocketAddr;
 use std::{
     io,
+    net::Shutdown,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
 };
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::watch,
     task::{JoinError, JoinHandle, JoinSet},
     time::{Duration, Instant, sleep, sleep_until},
@@ -132,6 +133,7 @@ pub(crate) struct ServerHandle {
 pub(crate) enum ServeError {
     Accept(io::Error),
     Worker(JoinError),
+    AdmissionNotDrained,
 }
 
 #[cfg(test)]
@@ -245,6 +247,7 @@ async fn serve(
 ) -> Result<(), ServeError> {
     let mut connections = JoinSet::new();
     let (blocking_work, pending_work) = watch::channel(());
+    let (cancel_transport, cancelled) = watch::channel(());
     let mut worker_failure = None;
     let shutdown = control.signal();
     let mut accept_log = AcceptLog::default();
@@ -287,24 +290,33 @@ async fn serve(
                     let ((stream, peer), accepted) = result.map_err(ServeError::Accept)?;
                     if let Some(state) = &http_state {
                         if let Some(intake) = http::proxy::ConnectionIntake::accept(state, peer.ip()) {
-                            connections.spawn(BLOCKING_WORK.scope(
-                                pending_work.clone(),
-                                connection::drive_http(
-                                    stream, peer, accepted, router.clone(), Arc::clone(state), intake,
-                                ),
-                            ));
+                            let state = state.clone();
+                            let router = router.clone();
+                            connections.spawn(BLOCKING_WORK.scope(pending_work.clone(), {
+                                let cancelled = cancelled.clone();
+                                async move {
+                                    let result = drain_connection(stream, cancelled, |stream| {
+                                        connection::drive_http(stream, peer, accepted, router, state.clone(), intake)
+                                    }).await;
+                                    if result.is_err() {
+                                        request_rejected(&state, "socket_setup_failed");
+                                    }
+                                }
+                            }));
                         } else {
                             request_rejected(state, "connection_capacity");
                         }
                     } else if let Some(permit) = control.admission.acquire_request()
                         && stream.set_nodelay(true).is_ok()
                     {
-                        connections.spawn(BLOCKING_WORK.scope(
-                            pending_work.clone(),
-                            connection::drive(
-                                stream, peer, accepted, router.clone(), Arc::clone(&control), permit,
-                            ),
-                        ));
+                        let router = router.clone();
+                        let control = control.clone();
+                        let cancelled = cancelled.clone();
+                        connections.spawn(BLOCKING_WORK.scope(pending_work.clone(), async move {
+                            let _ = drain_connection(stream, cancelled, |stream| {
+                                connection::drive(stream, peer, accepted, router, control, permit)
+                            }).await;
+                        }));
                     }
                     break;
                 }
@@ -315,24 +327,51 @@ async fn serve(
     drop(pending_work);
     let cutoff = sleep_until(deadline);
     tokio::pin!(cutoff);
-    let mut aborted = false;
+    let mut transport_cancelled = false;
     while !connections.is_empty() {
         tokio::select! {
-            () = &mut cutoff, if !aborted => {
-                connections.abort_all();
-                aborted = true;
+            () = &mut cutoff, if !transport_cancelled => {
+                cancel_transport.send_replace(());
+                transport_cancelled = true;
             }
             completed = connections.join_next() => {
-                if let Some(Err(error)) = completed
-                    && !error.is_cancelled()
-                {
+                if let Some(Err(error)) = completed {
                     worker_failure.get_or_insert(error);
                 }
             }
         }
     }
     blocking_work.closed().await;
-    worker_failure.map_or(Ok(()), |error| Err(ServeError::Worker(error)))
+    if let Some(error) = worker_failure {
+        return Err(ServeError::Worker(error));
+    }
+    if !tokio::task::spawn_blocking(move || control.admission.wait_until_idle(deadline.into_std()))
+        .await
+        .map_err(ServeError::Worker)?
+    {
+        return Err(ServeError::AdmissionNotDrained);
+    }
+    Ok(())
+}
+
+async fn drain_connection<F: Future<Output = ()>>(
+    stream: TcpStream,
+    mut cancelled: watch::Receiver<()>,
+    drive: impl FnOnce(TcpStream) -> F,
+) -> io::Result<()> {
+    let stream = stream.into_std()?;
+    let socket = stream.try_clone()?;
+    let drive = drive(TcpStream::from_std(stream)?);
+    tokio::pin!(drive);
+    tokio::select! {
+        biased;
+        _ = cancelled.changed() => {
+            let _ = socket.shutdown(Shutdown::Both);
+            drive.await;
+        }
+        () = &mut drive => {}
+    }
+    Ok(())
 }
 
 async fn accept_with_retry<T, F: Future<Output = io::Result<T>>>(

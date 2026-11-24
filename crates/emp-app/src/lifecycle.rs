@@ -18,6 +18,7 @@ use std::thread::{self, JoinHandle};
 pub(crate) struct ServerHandle {
     local_addr: SocketAddr,
     pub(crate) state: Arc<ServerState>,
+    listener: Option<JoinHandle<Result<(), crate::server::ServeError>>>,
     workers: Vec<JoinHandle<()>>,
     _service_owner: emp_state::IntegrationFileLock,
 }
@@ -45,7 +46,7 @@ impl ServerHandle {
 
     #[cfg(all(test, unix))]
     pub(crate) fn listener_finished(&self) -> bool {
-        self.workers[0].is_finished()
+        self.listener.as_ref().is_some_and(JoinHandle::is_finished)
     }
 
     pub fn local_addr(&self) -> SocketAddr {

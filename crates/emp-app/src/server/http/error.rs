@@ -42,6 +42,9 @@ pub(crate) type JsonReply = HttpReply;
 #[derive(Clone)]
 pub(in crate::server) struct EntryWire(pub(in crate::server) Bytes);
 
+#[derive(Clone, Copy)]
+pub(in crate::server) struct BufferedResponse;
+
 pub(super) async fn present_entry_errors(
     State(state): State<Arc<ServerState>>,
     request: Request,
@@ -112,6 +115,7 @@ impl HttpReply {
     pub(crate) fn into_http_response(self) -> Response {
         let mut builder = response_head(self.status, &self.content_type)
             .header("content-length", self.body.len())
+            .extension(BufferedResponse)
             .extension(hyper::ext::ReasonPhrase::from_static(
                 self.status_text.as_bytes(),
             ));
@@ -170,6 +174,7 @@ pub(crate) fn response_head(status: u16, content_type: &str) -> axum::http::resp
 
 pub(super) fn no_response() -> Response {
     let mut response = Response::new(Body::empty());
+    response.extensions_mut().insert(BufferedResponse);
     response.extensions_mut().insert(EntryWire(Bytes::new()));
     response
 }

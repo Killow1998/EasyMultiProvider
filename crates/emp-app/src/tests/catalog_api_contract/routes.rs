@@ -1,6 +1,7 @@
 use super::*;
 use crate::server::http::tests::{
-    assert_sse_wire, assert_status, assert_wire, exchange_wire, json_body, json_request, request,
+    assert_entry_error, assert_sse_wire, assert_status, assert_wire, exchange_wire, json_body,
+    json_request, request, wire_contract::assert_json_reply,
 };
 use crate::tests::internal_events_contract::final_journal;
 use tokio::{
@@ -99,9 +100,9 @@ fn catalog_reads_preserve_visibility_etag_and_auth() {
             ),
         ] {
             let wire = request(port, method, path, headers, b"");
-            let reply = assert_wire(endpoint, &wire, false, status).await;
-            assert!(String::from_utf8_lossy(&reply).contains(no_store));
             if status == 200 {
+                let reply = assert_wire(endpoint, &wire, false, status).await;
+                assert!(String::from_utf8_lossy(&reply).contains(no_store));
                 let body = json_body(&reply);
                 if path == "/v1/models" {
                     assert_eq!(body["object"], "list");
@@ -118,6 +119,38 @@ fn catalog_reads_preserve_visibility_etag_and_auth() {
                     assert_eq!(body["cached"], true);
                     assert_eq!(body["models"].as_array().unwrap().len(), 2);
                 }
+            } else if method == "HEAD" || path == "/api/providers/demo/models" {
+                assert_entry_error(endpoint, &wire, status).await;
+            } else {
+                let (status, error) = match (path, status) {
+                    ("/v1/models/absent", 404) => (
+                        "404 Not Found",
+                        json!({"message":"unknown model: absent","origin":"emp"}),
+                    ),
+                    ("/v1/models/", 404) => (
+                        "404 Not Found",
+                        json!({"message":"unknown model: ","origin":"emp"}),
+                    ),
+                    ("/api/providers/absent/models", 400) => (
+                        "400 Bad Request",
+                        json!({"message":"provider is missing or disabled: absent","origin":"emp"}),
+                    ),
+                    ("/api/providers//models", 400) => (
+                        "400 Bad Request",
+                        json!({"message":"provider is missing or disabled: ","origin":"emp"}),
+                    ),
+                    ("/api/providers/models", 400) => (
+                        "400 Bad Request",
+                        json!({"message":"Subscription account is unavailable","origin":"emp"}),
+                    ),
+                    (_, 403) => (
+                        "403 Forbidden",
+                        json!({"message":"cross-origin model catalog request rejected"}),
+                    ),
+                    _ => unreachable!("{method} {path}: {status}"),
+                };
+                let reply = exchange_wire(endpoint, &wire, false).await;
+                assert_json_reply(path, &reply, status, &json!({"error":error}));
             }
         }
         let rich = request(port, "GET", rich_path, &[], b"");
@@ -146,7 +179,13 @@ fn catalog_reads_preserve_visibility_etag_and_auth() {
             .backend
             .modules
             .mark_unavailable(emp_modules::Module::Gateway, "test");
-        assert_wire(endpoint, &gateway, false, 403).await;
+        let rejected = exchange_wire(endpoint, &gateway, false).await;
+        assert_json_reply(
+            rich_path,
+            &rejected,
+            "403 Forbidden",
+            &json!({"error":{"message":"cross-origin model catalog request rejected"}}),
+        );
         assert_eq!(assert_wire(endpoint, &rich, false, 200).await, reply);
         assert!(upstream.requests.try_recv().is_err());
     });
@@ -163,31 +202,36 @@ fn metadata_preserves_read_write_and_body_contracts() {
         let port = endpoint.port();
         let session = session_header(server);
         let path = "/api/models/metadata";
-        for (headers, body, status) in [
-            ([].as_slice(), b"invalid".as_slice(), 401),
-            (
-                [&*session, &*session].as_slice(),
-                b"invalid".as_slice(),
-                401,
-            ),
+        for (headers, status) in [
+            ([].as_slice(), 401),
+            ([&*session, &*session].as_slice(), 401),
             (
                 [&*session, "Origin: https://outside.invalid"].as_slice(),
-                b"invalid".as_slice(),
                 403,
             ),
-            ([&*session].as_slice(), b"[]".as_slice(), 400),
-            (
-                [&*session].as_slice(),
-                br#"{"provider":"absent","model":"x"}"#.as_slice(),
-                400,
-            ),
-            ([&*session].as_slice(), b"{}".as_slice(), 400),
         ] {
-            let wire = json_request(port, path, headers, body);
-            assert_wire(endpoint, &wire, false, status).await;
+            let wire = json_request(port, path, headers, b"invalid");
+            assert_entry_error(endpoint, &wire, status).await;
+        }
+        for (body, message) in [
+            (b"[]".as_slice(), "request body must be a JSON object"),
+            (
+                br#"{"provider":"absent","model":"x"}"#.as_slice(),
+                "provider is missing or disabled: absent",
+            ),
+            (b"{}".as_slice(), "provider and model are required"),
+        ] {
+            let wire = json_request(port, path, &[&session], body);
+            let reply = exchange_wire(endpoint, &wire, false).await;
+            assert_json_reply(
+                path,
+                &reply,
+                "400 Bad Request",
+                &json!({"error":{"message":message,"origin":"emp"}}),
+            );
         }
         let head = request(port, "HEAD", path, &[&session], b"");
-        assert_wire(endpoint, &head, false, 404).await;
+        assert_entry_error(endpoint, &head, 404).await;
         let partial = request(
             port,
             "POST",
@@ -199,10 +243,12 @@ fn metadata_preserves_read_write_and_body_contracts() {
             ],
             b"{",
         );
-        let reply = assert_wire(endpoint, &partial, true, 400).await;
-        assert_eq!(
-            json_body(&reply)["error"]["message"],
-            "request body is incomplete"
+        let reply = exchange_wire(endpoint, &partial, true).await;
+        assert_json_reply(
+            path,
+            &reply,
+            "400 Bad Request",
+            &json!({"error":{"message":"request body is incomplete","origin":"emp"}}),
         );
         assert!(upstream.requests.try_recv().is_err());
 

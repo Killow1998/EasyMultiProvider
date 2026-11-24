@@ -146,7 +146,7 @@ pub(crate) async fn assert_wire(
     reply
 }
 
-async fn assert_entry_error(address: SocketAddr, wire: &[u8], status: u16) {
+pub(crate) async fn assert_entry_error(address: SocketAddr, wire: &[u8], status: u16) {
     let (status_line, message) = match status {
         401 => ("401 Unauthorized", "management session is required"),
         403 => ("403 Forbidden", "management session is required"),
@@ -251,6 +251,20 @@ pub(crate) fn json_request(port: u16, path: &str, headers: &[&str], body: &[u8])
     let mut headers = headers.to_vec();
     headers.extend(["Content-Type: application/json", length.as_str()]);
     request(port, "POST", path, &headers, body)
+}
+
+#[cfg(unix)]
+fn shutdown_with_stalled_response(
+    server: RunningServer,
+    slow: crate::server::raw_tcp::RawClient,
+) -> Result<(), crate::error::AppError> {
+    let (complete, finished) = std::sync::mpsc::channel();
+    let shutdown = std::thread::spawn(move || complete.send(server.shutdown()).unwrap());
+    let result = finished
+        .recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::DEADLINE);
+    drop(slow);
+    shutdown.join().unwrap();
+    result.expect("shutdown completed with the slow client still connected")
 }
 
 struct Fixture {
@@ -987,24 +1001,31 @@ fn team_reads_preserve_identity_and_auth() {
             ] {
                 assert_entry_error(address, &valid(path, headers), status).await;
             }
-            assert_wire(
-                address,
-                &valid(&format!("{path}/missing"), &[&session]),
-                false,
-                if post { 400 } else { 404 },
-            )
-            .await;
+            let missing = format!("{path}/missing");
+            let wire = valid(&missing, &[&session]);
+            if post {
+                let reply = exchange_wire(address, &wire, false).await;
+                let body = br#"{"error":{"code":"invalid_workspace_request","message":"Workspace request could not be completed","origin":"emp"}}"#;
+                let head = format!(
+                    wire_contract::json_head!("400 Bad Request", "{}", "Cache-Control: no-store"),
+                    body.len()
+                );
+                wire_contract::assert_reply(&missing, &reply, &head, body);
+            } else {
+                assert_entry_error(address, &wire, 404).await;
+            }
             assert_entry_error(address, &request(port, "HEAD", path, &[&session], b""), 404).await;
         }
         let path = "/api/team/publish_source";
-        assert_wire(
-            address,
-            &json_request(port, path, &[&session], b"[]"),
-            false,
-            400,
-        )
-        .await;
-        assert_wire(address, &json_request(port, path, &[], b"[]"), false, 401).await;
+        let wire = json_request(port, path, &[&session], b"[]");
+        let reply = exchange_wire(address, &wire, false).await;
+        wire_contract::assert_json_reply(
+            path,
+            &reply,
+            "400 Bad Request",
+            &json!({"error":{"message":"request body must be a JSON object","origin":"emp"}}),
+        );
+        assert_entry_error(address, &json_request(port, path, &[], b"[]"), 401).await;
 
         fixture
             .server
@@ -1454,8 +1475,13 @@ fn closing_report_input_cancels_json_queries() {
             ),
         ] {
             let wire = request(fixture.port(), "GET", path, &[&session], b"");
-            let reply = assert_wire(address, &wire, true, 503).await;
-            assert_eq!(json_body(&reply)["error"]["message"], message);
+            let reply = exchange_wire(address, &wire, true).await;
+            wire_contract::assert_json_reply(
+                path,
+                &reply,
+                "503 Service Unavailable",
+                &json!({"error":{"message":message,"origin":"emp"}}),
+            );
             let reply = assert_wire(address, &wire, false, 200).await;
             assert!(!json_body(&reply)[field].is_null(), "{path}");
         }
@@ -1857,10 +1883,12 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
             &[headers.as_slice(), &["Content-Length: 2"]].concat(),
             b"{",
         );
-        let reply = assert_wire(address, &incomplete, true, 400).await;
-        assert_eq!(
-            json_body(&reply)["error"]["message"],
-            "request body is incomplete"
+        let reply = exchange_wire(address, &incomplete, true).await;
+        wire_contract::assert_json_reply(
+            "incomplete language request",
+            &reply,
+            "400 Bad Request",
+            &json!({"error":{"message":"request body is incomplete","origin":"emp"}}),
         );
 
         let timed_out = request(
@@ -1960,17 +1988,20 @@ fn bootstrap_and_export_confirmations_are_consumed_once() {
                     json!({"confirmation":value}).to_string().as_bytes(),
                 )
             };
+            let assert_confirmation_required = |reply: &[u8]| {
+                wire_contract::assert_json_reply(
+                    "/api/migration/export", reply, "403 Forbidden",
+                    &json!({"error":{"code":"export_confirmation_required","message":"export confirmation is missing or expired; confirm the export again","origin":"emp"}}),
+                );
+            };
             if first_is_valid {
                 assert_status(&exchange_wire(address, &export(&good), false).await, 200);
             } else {
                 let rejected = exchange_wire(address, &export("wrong"), false).await;
-                assert_status(&rejected, 403);
+                assert_confirmation_required(&rejected);
             }
-            let rejected = assert_wire(address, &export(&good), false, 403).await;
-            assert_eq!(
-                json_body(&rejected)["error"]["code"],
-                "export_confirmation_required"
-            );
+            let rejected = exchange_wire(address, &export(&good), false).await;
+            assert_confirmation_required(&rejected);
         }
     });
 }
@@ -2104,41 +2135,41 @@ fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
                     "GET",
                     "/",
                     vec!["Host: outside.invalid"],
-                    403,
+                    "403 Forbidden",
                     "origin_rejected",
                 ),
                 (
                     "GET",
                     "/api/recovery",
                     vec![],
-                    401,
+                    "401 Unauthorized",
                     "recovery_session_required",
                 ),
                 (
                     "POST",
                     "/api/recovery/reset",
                     vec!["Content-Length: 999"],
-                    401,
+                    "401 Unauthorized",
                     "recovery_session_required",
                 ),
                 (
                     "POST",
                     "/api/recovery/reset",
                     vec!["X-EMP-Recovery: recovery-fixture", "Content-Length: 999"],
-                    400,
+                    "400 Bad Request",
                     "invalid_request",
                 ),
                 (
                     "POST",
                     "/api/recovery/reset",
                     vec!["X-EMP-Recovery: recovery-fixture", "Content-Length: 0"],
-                    409,
+                    "409 Error",
                     "confirmation_required",
                 ),
             ] {
                 let wire = request(port, method, path, &headers, b"");
-                let reply = assert_wire(address, &wire, false, status).await;
-                assert_eq!(json_body(&reply), json!({"error":code}));
+                let reply = exchange_wire(address, &wire, false).await;
+                wire_contract::assert_json_reply(path, &reply, status, &json!({"error":code}));
             }
             assert!(
                 exchange_wire(address, b"PUT / HTTP/1.1\r\n\r\n", false)

@@ -375,6 +375,7 @@ impl ServerHandle {
         let mut handle = Self {
             local_addr,
             state,
+            listener: None,
             workers: Vec::new(),
             _service_owner: service_owner,
         };
@@ -384,14 +385,18 @@ impl ServerHandle {
                 let _entered = handle.state.backend.transport.runtime.enter();
                 tokio::net::TcpListener::from_std(listener)?
             };
-            handle.spawn_worker("emp-http", move |state| {
-                state
-                    .backend
-                    .transport
-                    .runtime
-                    .block_on(crate::server::serve_http(listener, Arc::clone(&state)))
-                    .expect("HTTP server worker");
-            })?;
+            let state = handle.state.clone();
+            handle.listener = Some(
+                std::thread::Builder::new()
+                    .name("emp-http".to_owned())
+                    .spawn(move || {
+                        state
+                            .backend
+                            .transport
+                            .runtime
+                            .block_on(crate::server::serve_http(listener, state.clone()))
+                    })?,
+            );
             if enable_catalog_refresh_worker {
                 handle.spawn_worker("emp-catalog-refresh", |state| {
                     crate::services::account_catalog::run_refresh_worker(&state);

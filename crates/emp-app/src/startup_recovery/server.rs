@@ -166,6 +166,7 @@ pub(super) fn serve(
                     drop(error);
                     AppError::ServerStopped
                 }
+                crate::server::ServeError::AdmissionNotDrained => AppError::ServerStopped,
             })?;
         Ok(stopped.wait().await == ShutdownReason::RecoveryReset)
     })

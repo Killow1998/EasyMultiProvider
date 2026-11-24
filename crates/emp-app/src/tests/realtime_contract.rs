@@ -75,7 +75,7 @@ impl RealtimeUpstream {
     }
 
     pub(super) fn assert_no_more_requests(mut self) {
-        self.finish().expect("finish Voice fake upstream");
+        finish_upstream(self.address, &mut self.worker).expect("finish Voice fake upstream");
         assert!(
             matches!(
                 self.request.try_recv(),
@@ -88,22 +88,11 @@ impl RealtimeUpstream {
     pub(crate) fn no_request(&self) -> bool {
         matches!(self.request.try_recv(), Err(mpsc::TryRecvError::Empty))
     }
-
-    fn finish(&mut self) -> std::io::Result<()> {
-        let Some(worker) = self.worker.take() else {
-            return Ok(());
-        };
-        let wake = TcpStream::connect(self.address).map(drop);
-        worker
-            .join()
-            .map_err(|_| std::io::Error::other("Voice fake upstream panicked"))??;
-        wake
-    }
 }
 
 impl Drop for RealtimeUpstream {
     fn drop(&mut self) {
-        let _ = self.finish();
+        let _ = finish_upstream(self.address, &mut self.worker);
     }
 }
 

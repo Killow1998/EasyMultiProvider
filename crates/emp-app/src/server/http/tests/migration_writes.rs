@@ -295,24 +295,7 @@ fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
         );
         (slow, quit_at)
     });
-    let (complete, finished) = std::sync::mpsc::channel();
-    let server = fixture.server;
-    let shutdown = std::thread::spawn(move || complete.send(server.shutdown()));
-    let result = finished
-        .recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::DEADLINE);
-    let result = match result {
-        Ok(result) => result,
-        Err(error) => {
-            drop(slow);
-            shutdown.join().unwrap().unwrap();
-            panic!("shutdown did not complete with the export client connected: {error}");
-        }
-    };
-    shutdown.join().unwrap().unwrap();
-    assert!(matches!(
-        result,
-        Ok(()) | Err(crate::error::AppError::ServerStopped)
-    ));
+    let result = shutdown_with_stalled_response(fixture.server, slow);
     assert!(quit_at.elapsed() >= crate::server::REQUEST_DRAIN_TIMEOUT);
     let lock = emp_state::IntegrationFileLock::acquire(
         &root.join("state/service.lock"),
@@ -324,7 +307,23 @@ fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
         vault.read_encrypted_json(&auth_path).unwrap()["tokens"]["access_token"],
         "rotated"
     );
-    drop(slow);
+    let journal = crate::tests::live_journal(&root);
+    let receipt = journal
+        .iter()
+        .find(|entry| {
+            entry["event"] == "http_request_completed"
+                && entry["fields"]["path"] == "/api/migration/export"
+        })
+        .expect("export completed");
+    assert_eq!(
+        (
+            result.is_ok(),
+            &receipt["fields"]["status"],
+            &receipt["fields"]["result"]
+        ),
+        (true, &json!(200), &json!("write_failed")),
+        "{result:?}, {receipt}"
+    );
 }
 
 #[test]

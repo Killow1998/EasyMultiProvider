@@ -408,6 +408,19 @@ fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
     }
 }
 
+fn finish_upstream(
+    address: SocketAddr,
+    worker: &mut Option<JoinHandle<std::io::Result<()>>>,
+) -> std::io::Result<()> {
+    let Some(worker) = worker.take() else {
+        return Ok(());
+    };
+    let _ = TcpStream::connect(address);
+    worker
+        .join()
+        .map_err(|_| std::io::Error::other("fake upstream panicked"))?
+}
+
 pub(crate) struct OneShotUpstream {
     address: SocketAddr,
     observed: mpsc::Receiver<(String, BTreeMap<String, String>, Value)>,

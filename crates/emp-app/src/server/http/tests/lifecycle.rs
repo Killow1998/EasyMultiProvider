@@ -24,16 +24,9 @@ fn raw_management_paths_follow_route_matching_without_writes() {
         ] {
             assert_entry_error(endpoint, &json_request(port, path, &[&session], b"{}"), 404).await;
         }
-        for path in ["/api/native/login/start#x", "/api/accounts/login/finish#x"] {
-            assert_wire(
-                endpoint,
-                &json_request(port, path, &[&session], b"{}"),
-                false,
-                409,
-            )
-            .await;
-        }
+        let unknown_operation = json!({"error":{"code":"login_unknown_operation","message":"login_unknown_operation","origin":"emp"}});
         for suffix in [
+            "x",
             "x<y",
             "x>y",
             "x`y",
@@ -51,17 +44,14 @@ fn raw_management_paths_follow_route_matching_without_writes() {
         ] {
             for route in ["/api/native/login/start", "/api/accounts/login/finish"] {
                 let path = format!("{route}#{suffix}");
-                let reply = assert_wire(
+                let reply = exchange_wire(
                     endpoint,
                     &json_request(port, &path, &[&session], b"{}"),
                     false,
-                    409,
                 )
                 .await;
-                assert_eq!(
-                    json_body(&reply)["error"]["code"],
-                    "login_unknown_operation",
-                    "{path}"
+                wire_contract::assert_json_reply(
+                    &path, &reply, "409 Conflict", &unknown_operation,
                 );
             }
             for path in [
@@ -97,13 +87,16 @@ fn raw_management_paths_follow_route_matching_without_writes() {
             "/api/native/login/start#x y",
             "/api/native/login/start?probe=x y",
         ] {
-            assert_wire(
+            let reply = exchange_wire(
                 endpoint,
                 &json_request(port, path, &[&session], b"{}"),
                 false,
-                400,
             )
             .await;
+            wire_contract::assert_json_reply(
+                path, &reply, "400 Bad Request",
+                &json!({"error":{"message":"invalid HTTP request"}}),
+            );
         }
         for (headers, status) in [
             (vec![], 401),
@@ -127,7 +120,7 @@ fn raw_management_paths_follow_route_matching_without_writes() {
 #[test]
 fn unknown_provider_read_returns_not_found() {
     Fixture::new().run_wire(async |fixture, endpoint| {
-        assert_wire(
+        assert_entry_error(
             endpoint,
             &request(
                 fixture.port(),
@@ -136,7 +129,6 @@ fn unknown_provider_read_returns_not_found() {
                 &[&fixture.session()],
                 b"",
             ),
-            false,
             404,
         )
         .await;
@@ -209,14 +201,13 @@ fn wrong_methods_keep_status_before_and_during_update_drain() {
             "/v1/alpha/search",
             "/api/quit",
         ] {
-            let reply = assert_wire(
+            let reply = exchange_wire(
                 endpoint,
                 &request(port, "DELETE", path, &[&session], b""),
                 false,
-                503,
             )
             .await;
-            assert!(String::from_utf8_lossy(&reply).contains("\r\nRetry-After: "));
+            wire_contract::assert_updating_reply(path, &reply);
         }
     });
 }
@@ -287,21 +278,21 @@ fn lifecycle_and_unmatched_requests_keep_method_and_auth_policy() {
             "/api/quit",
             "/api/providers/balance",
         ] {
-            for (headers, status) in [
-                (vec![], 401),
-                (vec![&session[..], "Origin: https://other.invalid"], 403),
-                (vec![&session[..]], 400),
-            ] {
-                assert_wire(
-                    endpoint,
-                    &json_request(port, path, &headers, b"{"),
-                    false,
-                    status,
-                )
-                .await;
-            }
+            let invalid = |headers: &[&str]| json_request(port, path, headers, b"{");
+            assert_entry_error(endpoint, &invalid(&[]), 401).await;
+            assert_entry_error(
+                endpoint,
+                &invalid(&[&session, "Origin: https://other.invalid"]),
+                403,
+            )
+            .await;
+            let reply = exchange_wire(endpoint, &invalid(&[&session]), false).await;
+            wire_contract::assert_json_reply(
+                path, &reply, "400 Bad Request",
+                &json!({"error":{"message":"request body must be valid JSON: EOF while parsing an object at line 1 column 1","origin":"emp"}}),
+            );
         }
-        assert_wire(
+        let bad_force = exchange_wire(
             endpoint,
             &json_request(
                 port,
@@ -310,9 +301,12 @@ fn lifecycle_and_unmatched_requests_keep_method_and_auth_policy() {
                 br#"{"force":"yes"}"#,
             ),
             false,
-            400,
         )
         .await;
+        wire_contract::assert_json_reply(
+            "invalid balance force", &bad_force, "400 Bad Request",
+            &json!({"error":{"message":"force must be boolean","origin":"emp"}}),
+        );
         let missing_balance = json_request(port, "/api/providers/balance", &[&session], b"{}");
         {
             let address = endpoint;
@@ -323,23 +317,33 @@ fn lifecycle_and_unmatched_requests_keep_method_and_auth_policy() {
             );
         }
 
-        assert_wire(
+        let unavailable = exchange_wire(
             endpoint,
             &json_request(port, "/api/updates/install", &[&session], b"{}"),
             false,
-            409,
         )
         .await;
+        wire_contract::assert_json_reply(
+            "unavailable update", &unavailable, "409 Error",
+            &json!({"error":{"code":"update_unavailable","message":"update_unavailable","origin":"emp"}}),
+        );
         for path in ["/", "/index.html", "/healthz"] {
             for method in ["POST", "DELETE"] {
                 assert_wire(endpoint, &request(port, method, path, &[], b""), false, 200).await;
-                assert_wire(
+                let denied = exchange_wire(
                     endpoint,
                     &request(port, method, path, &["Origin: https://other.invalid"], b""),
                     false,
-                    403,
                 )
                 .await;
+                let message = if path == "/healthz" {
+                    "cross-origin health request rejected"
+                } else {
+                    "cross-origin Web UI request rejected"
+                };
+                wire_contract::assert_json_reply(
+                    path, &denied, "403 Forbidden", &json!({"error":{"message":message}}),
+                );
             }
         }
         for (method, path, status) in [
@@ -360,16 +364,19 @@ fn lifecycle_and_unmatched_requests_keep_method_and_auth_policy() {
             ("GET", "/not-present", 404),
             ("GET", "/v1/responses", 404),
         ] {
-            assert_wire(
-                endpoint,
-                &request(port, method, path, &[&session], b""),
-                false,
-                status,
-            )
-            .await;
+            let wire = request(port, method, path, &[&session], b"");
+            if status == 404 {
+                assert_entry_error(endpoint, &wire, status).await;
+            } else {
+                let reply = exchange_wire(endpoint, &wire, false).await;
+                wire_contract::assert_json_reply(
+                    path, &reply, "400 Bad Request",
+                    &json!({"error":{"message":"invalid quota history period","origin":"emp"}}),
+                );
+            }
             if path.starts_with("/api/") {
                 assert_entry_error(endpoint, &request(port, method, path, &[], b""), 401).await;
-                assert_wire(
+                assert_entry_error(
                     endpoint,
                     &request(
                         port,
@@ -378,7 +385,6 @@ fn lifecycle_and_unmatched_requests_keep_method_and_auth_policy() {
                         &[&session, "Origin: https://other.invalid"],
                         b"",
                     ),
-                    false,
                     403,
                 )
                 .await;

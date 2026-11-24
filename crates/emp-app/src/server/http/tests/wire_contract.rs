@@ -79,10 +79,20 @@ pub(crate) fn assert_reply(name: &str, reply: &[u8], expected_head: &str, expect
     );
 }
 
-pub(super) fn assert_json_reply(name: &str, reply: &[u8], status: &str, body: &Value) {
+pub(crate) fn assert_json_reply(name: &str, reply: &[u8], status: &str, body: &Value) {
     let body = body.to_string();
     let head = format!(json_head!("{}", "{}"), status, body.len());
     assert_reply(name, reply, &head, body.as_bytes());
+}
+
+#[cfg(unix)]
+pub(super) fn assert_updating_reply(name: &str, reply: &[u8]) {
+    assert_reply(
+        name,
+        reply,
+        json_head!("503 Service Unavailable", "107", "Retry-After: 2"),
+        br#"{"error":{"code":"updating","message":"EMP is installing an update. Please retry shortly.","origin":"emp"}}"#,
+    );
 }
 
 #[test]
@@ -404,14 +414,22 @@ fn management_sse_and_update_drain() {
             let stream = RawClient::request(
                 address,
                 &request(port, "GET", "/api/accounts/events", &[&session], b""),
-            ).await;
-            assert_head( "management SSE", &stream.head, HEAD);
+            )
+            .await;
+            assert_head("management SSE", &stream.head, HEAD);
             drop(stream);
 
-            assert!(fixture.server.state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(
+                fixture
+                    .server
+                    .state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(Duration::ZERO)
+            );
             let wire = json_request(port, "/api/language", &[&session], br#"{"language":"en"}"#);
             let reply = exchange_wire(address, &wire, false).await;
-            assert_reply("update drain", &reply, json_head!("503 Service Unavailable", "107", "Retry-After: 2"), br#"{"error":{"code":"updating","message":"EMP is installing an update. Please retry shortly.","origin":"emp"}}"#);
+            assert_updating_reply("update drain", &reply);
         });
     }
 }

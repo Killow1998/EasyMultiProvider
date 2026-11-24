@@ -3,7 +3,7 @@ use super::*;
 
 struct NativeErrorSseUpstream {
     address: SocketAddr,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<std::io::Result<()>>>,
 }
 impl NativeErrorSseUpstream {
     fn start(wire: Vec<u8>) -> Self {
@@ -14,14 +14,19 @@ impl NativeErrorSseUpstream {
         let address = listener.local_addr().unwrap();
         let worker = thread::spawn(move || {
             for _ in 0..requests {
-                let (mut stream, _) = listener.accept().unwrap();
+                let (mut stream, _) = listener.accept()?;
+                stream.set_read_timeout(Some(crate::server::raw_tcp::DEADLINE))?;
+                if stream.peek(&mut [0])? == 0 {
+                    return Ok(());
+                }
                 let _ = receive_native_request(&mut stream);
-                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")?;
                 for chunk in wire.chunks(13) {
-                    stream.write_all(chunk).unwrap();
-                    stream.flush().unwrap();
+                    stream.write_all(chunk)?;
+                    stream.flush()?;
                 }
             }
+            Ok(())
         });
         Self {
             address,
@@ -31,12 +36,14 @@ impl NativeErrorSseUpstream {
     fn base_url(&self) -> String {
         format!("http://{}/v1", self.address)
     }
+
+    fn finish(mut self) {
+        finish_upstream(self.address, &mut self.worker).expect("finish Native SSE fake upstream");
+    }
 }
 impl Drop for NativeErrorSseUpstream {
     fn drop(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            worker.join().unwrap();
-        }
+        let _ = finish_upstream(self.address, &mut self.worker);
     }
 }
 
@@ -131,6 +138,7 @@ fn native_sse_incomplete_preserves_usage_and_deduplicates_response_id() {
             usage["output_tokens"].as_u64().unwrap_or(0),
             "{totals}"
         );
+        upstream.finish();
         server.shutdown().unwrap();
     }
 }
@@ -232,6 +240,7 @@ fn native_sse_context_and_incomplete_boundaries_match_codex_http_behavior() {
                 "{response}"
             );
         }
+        upstream.finish();
         server.shutdown().unwrap();
     }
 }
@@ -265,6 +274,7 @@ fn native_sse_retry_headers_survive_pre_output_http_conversion() {
             response.contains(&format!("Retry-After: {expected}\r\n")),
             "{response}"
         );
+        upstream.finish();
         server.shutdown().unwrap();
     }
 }
@@ -408,6 +418,7 @@ fn responses_sse_filters_codex_extensions_only_for_generic_clients() {
         if !codex {
             assert!(frames.iter().any(|frame| frame == ": keepalive\n"));
         }
+        upstream.finish();
         server.shutdown().unwrap();
     }
 }
