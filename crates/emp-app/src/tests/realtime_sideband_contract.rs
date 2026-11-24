@@ -231,7 +231,9 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     let mut one_write = request.into_bytes();
     one_write.extend_from_slice(&first_client);
     let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
-    fake.deadlines.send(deadline).unwrap();
+    let handshake = fake
+        .observation
+        .begin(deadline, "fake sideband handshake and queued events");
     let mut downstream = deadline.io(downstream);
     downstream
         .write_all(&one_write)
@@ -255,12 +257,18 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
             );
         }
     }
-    assert_eq!(
-        fake.first_client
-            .recv_timeout(Duration::from_millis(250))
-            .expect("downstream command is serviced while upstream events are queued"),
-        br#"{"type":"client.first"}"#
+    let command = fake.observation.begin(
+        Deadline::after(test_timeout(Duration::from_millis(250))),
+        "downstream command is serviced while upstream events are queued",
     );
+    let SidebandObservation::FirstClient(first) = command.wait().unwrap() else {
+        panic!("expected first sideband client message");
+    };
+    assert_eq!(first, br#"{"type":"client.first"}"#);
+    assert!(matches!(
+        handshake.wait().unwrap(),
+        SidebandObservation::Handshake
+    ));
     for index in SIDEBAND_EVENT_CAPACITY - 1..11 {
         let (opcode, payload) = read_ws_frame(&mut downstream);
         assert_eq!(opcode, 1);
@@ -280,7 +288,9 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
 
     let second_client = masked_frame(1, br#"{"type":"client.second"}"#);
     let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
-    fake.deadlines.send(deadline).unwrap();
+    let closed = fake
+        .observation
+        .begin(deadline, "fake sideband observed complete relay");
     downstream.set_deadline(&deadline);
     downstream
         .write_all(&second_client)
@@ -292,7 +302,9 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     assert_eq!(opcode, 8);
     assert_eq!(payload, [3, 232]);
 
-    let observed = fake.finish(&deadline);
+    let SidebandObservation::Closed(observed) = closed.wait().unwrap() else {
+        panic!("expected completed sideband relay");
+    };
     assert_eq!(
         observed.client_texts,
         [
@@ -390,10 +402,13 @@ fn sideband_connection_refused_maps_to_502_and_releases_admission() {
 
 struct FakeSideband {
     url: String,
-    deadlines: mpsc::Sender<Deadline>,
-    first_client: mpsc::Receiver<Vec<u8>>,
-    observed: mpsc::Receiver<FakeSidebandObserved>,
-    worker: Option<JoinHandle<()>>,
+    observation: Observation<SidebandObservation>,
+}
+
+enum SidebandObservation {
+    Handshake,
+    FirstClient(Vec<u8>),
+    Closed(FakeSidebandObserved),
 }
 
 struct FakeSidebandObserved {
@@ -410,13 +425,15 @@ impl FakeSideband {
             "ws://{}/v1/live/rtc_relay_contract",
             listener.local_addr().unwrap()
         );
-        let (first_client_tx, first_client) = mpsc::channel();
-        let (sender, observed) = mpsc::channel();
-        let (deadlines, operation) = mpsc::channel::<Deadline>();
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept fake sideband");
-            let request_head = read_request_head(&mut stream).expect("read upstream handshake");
-            let request = parse_request(&request_head.head).expect("parse upstream handshake");
+        listener.set_nonblocking(true).unwrap();
+        let observation = Observation::spawn(move |probe| {
+            let Some(handshake) = probe.next_request() else {
+                return;
+            };
+            let socket = accept_before(&listener, handshake.deadline());
+            let mut stream = handshake.deadline().io(socket);
+            let request_head = read_http_head(&mut stream);
+            let request = parse_request(&request_head).expect("parse upstream handshake");
             let path = request.target.to_owned();
             let headers = request
                 .headers
@@ -428,10 +445,6 @@ impl FakeSideband {
             let accept = websocket_accept(&headers["sec-websocket-key"]).unwrap();
             write!(stream, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
             stream.flush().unwrap();
-            let Ok(deadline) = operation.recv() else {
-                return;
-            };
-            let mut stream = deadline.io(stream);
             write_ws_frame(
                 &mut stream,
                 1,
@@ -441,16 +454,25 @@ impl FakeSideband {
                 let event = format!("{{ \"type\" : \"session.progress\", \"index\" : {index} }}");
                 write_ws_frame(&mut stream, 1, event.as_bytes());
             }
+            handshake.complete(SidebandObservation::Handshake);
+            let Some(first_request) = probe.next_request() else {
+                return;
+            };
+            stream.set_deadline(first_request.deadline());
             let (opcode, first) = read_ws_frame(&mut stream);
             assert_eq!(opcode, 1);
-            first_client_tx.send(first.clone()).unwrap();
+            first_request.complete(SidebandObservation::FirstClient(first.clone()));
+
+            let ping = Deadline::after(test_timeout(Duration::from_secs(2)));
+            stream.set_deadline(&ping);
             write_ws_frame(&mut stream, 9, b"up-ping");
             let (opcode, pong) = read_ws_frame(&mut stream);
             assert_eq!(opcode, 10);
-            let Ok(deadline) = operation.recv() else {
+
+            let Some(second_request) = probe.next_request() else {
                 return;
             };
-            stream.set_deadline(&deadline);
+            stream.set_deadline(second_request.deadline());
             let (opcode, second) = read_ws_frame(&mut stream);
             assert_eq!(opcode, 1);
             write_ws_frame(
@@ -462,35 +484,14 @@ impl FakeSideband {
             let (opcode, close) = read_ws_frame(&mut stream);
             assert_eq!(opcode, 8);
             assert_eq!(close, [3, 232]);
-            sender
-                .send(FakeSidebandObserved {
-                    path,
-                    headers,
-                    client_texts: vec![first, second],
-                    upstream_pong: pong,
-                })
-                .unwrap();
+            second_request.complete(SidebandObservation::Closed(FakeSidebandObserved {
+                path,
+                headers,
+                client_texts: vec![first, second],
+                upstream_pong: pong,
+            }));
         });
-        Self {
-            url,
-            deadlines,
-            first_client,
-            observed,
-            worker: Some(worker),
-        }
-    }
-
-    fn finish(mut self, deadline: &Deadline) -> FakeSidebandObserved {
-        let observed = self
-            .observed
-            .recv_timeout(deadline.remaining())
-            .expect("fake sideband observed complete relay");
-        self.worker
-            .take()
-            .unwrap()
-            .join()
-            .expect("join fake sideband");
-        observed
+        Self { url, observation }
     }
 }
 
@@ -545,7 +546,7 @@ fn direct_sideband_request(server: &ServerHandle, call_id: &str, fake_url: &str)
     response_until_close(&mut client)
 }
 
-fn read_http_head(stream: &mut impl Read) -> String {
+fn read_http_head(stream: &mut DeadlineIo<TcpStream>) -> String {
     let mut bytes = Vec::new();
     while !bytes.ends_with(b"\r\n\r\n") {
         let mut byte = [0_u8; 1];
@@ -553,7 +554,10 @@ fn read_http_head(stream: &mut impl Read) -> String {
         bytes.push(byte[0]);
         assert!(bytes.len() < 16 * 1024, "HTTP head bounded");
     }
-    String::from_utf8(bytes).unwrap()
+    stream
+        .deadline()
+        .accept(String::from_utf8(bytes).unwrap(), "sideband HTTP handshake")
+        .unwrap()
 }
 
 fn masked_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
@@ -582,7 +586,7 @@ fn write_ws_frame(stream: &mut impl Write, opcode: u8, payload: &[u8]) {
     stream.flush().unwrap();
 }
 
-fn read_ws_frame(stream: &mut impl Read) -> (u8, Vec<u8>) {
+fn read_ws_frame(stream: &mut DeadlineIo<TcpStream>) -> (u8, Vec<u8>) {
     let mut header = [0_u8; 2];
     stream
         .read_exact(&mut header)
@@ -613,5 +617,8 @@ fn read_ws_frame(stream: &mut impl Read) -> (u8, Vec<u8>) {
             *byte ^= mask[index % mask.len()];
         }
     }
-    (opcode, payload)
+    stream
+        .deadline()
+        .accept((opcode, payload), "complete sideband WebSocket frame")
+        .unwrap()
 }

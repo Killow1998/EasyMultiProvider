@@ -541,9 +541,10 @@ fn image_disconnect_cancels_upstream_without_retry() {
     write!(socket,"POST /v1/images/generations HTTP/1.1\r\nHost: {}\r\n{}\r\nx-codex-image-turn-id: cancel-turn\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", server.local_addr(), session_header(&server), body.len()).unwrap();
     assert!(upstream.next().path.ends_with("/images/generations"));
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let cancellation = upstream.observe_cancellation(deadline);
     drop(socket);
     assert!(
-        upstream.observe_cancellation(deadline).wait().unwrap(),
+        cancellation.wait().unwrap(),
         "gateway must disconnect the image upstream"
     );
     server.shutdown().unwrap();

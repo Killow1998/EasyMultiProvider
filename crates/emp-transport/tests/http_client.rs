@@ -307,7 +307,7 @@ fn serve_connection(
     shutdown: Arc<AtomicBool>,
 ) {
     loop {
-        let Some((head, _body)) = read_request(&stream, &shutdown) else {
+        let Some((head, _body)) = read_request(&stream, &shutdown, || {}) else {
             return;
         };
         let text = String::from_utf8(head).expect("HTTP request is ASCII");
@@ -425,8 +425,14 @@ fn serve_connection(
     }
 }
 
-fn read_request(stream: &TcpStream, shutdown: &AtomicBool) -> Option<(Vec<u8>, Vec<u8>)> {
-    let interval = test_timeout(Duration::from_millis(50));
+const IDLE_POLL: Duration = Duration::from_millis(50);
+
+fn read_request(
+    stream: &TcpStream,
+    shutdown: &AtomicBool,
+    first_read: impl FnOnce(),
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let interval = test_timeout(IDLE_POLL);
     let mut buffer = [0_u8; 4096];
     let count = loop {
         match Deadline::after(interval).io(stream).read(&mut buffer) {
@@ -440,6 +446,7 @@ fn read_request(stream: &TcpStream, shutdown: &AtomicBool) -> Option<(Vec<u8>, V
     };
     let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
     let mut received = buffer[..count].to_vec();
+    first_read();
     let header_end = loop {
         if let Some(position) = received.windows(4).position(|part| part == b"\r\n\r\n") {
             break position + 4;
@@ -479,14 +486,14 @@ async fn request_header_can_straddle_the_idle_shutdown_poll() {
     let (stream, _) = listener.accept().unwrap();
     let (started, ready) = tokio::sync::oneshot::channel();
     let request = tokio::task::spawn_blocking(move || {
-        started.send(tokio::time::Instant::now()).unwrap();
-        read_request(&stream, &AtomicBool::new(false))
+        read_request(&stream, &AtomicBool::new(false), || {
+            started.send(tokio::time::Instant::now()).unwrap();
+        })
     });
 
-    let start = ready.await.unwrap();
-    tokio::time::sleep_until(start + test_timeout(Duration::from_millis(45))).await;
     client.write_all(b"POST /split HTTP/1.1\r\nCont").unwrap();
-    tokio::time::sleep_until(start + test_timeout(Duration::from_millis(55))).await;
+    let consumed = ready.await.unwrap();
+    tokio::time::sleep_until(consumed + test_timeout(IDLE_POLL + Duration::from_millis(10))).await;
     client.write_all(b"ent-Length: 2\r\n\r\nOK").unwrap();
     let (head, body) = request.await.unwrap().expect("complete split HTTP request");
     assert_eq!(head, b"POST /split HTTP/1.1\r\nContent-Length: 2\r\n\r\n");

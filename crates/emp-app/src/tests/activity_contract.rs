@@ -1,7 +1,5 @@
 //! Real HTTP and management SSE contracts for request activity.
 use super::*;
-use std::sync::atomic::AtomicUsize;
-use std::sync::mpsc::Receiver;
 use std::sync::mpsc::SyncSender;
 
 struct HeldReply {
@@ -9,35 +7,35 @@ struct HeldReply {
     body: Vec<u8>,
 }
 
+type ObservedRequest = (usize, String, BTreeMap<String, String>, Value);
+
 struct HeldUpstream {
     address: SocketAddr,
-    connections: usize,
-    accepted: Arc<AtomicUsize>,
-    observed: Receiver<(usize, String, BTreeMap<String, String>, Value)>,
     releases: Vec<SyncSender<HeldReply>>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl HeldUpstream {
-    fn start(connections: usize) -> Self {
+    fn start(connections: usize) -> Observation<ObservedRequest, Self> {
+        Observation::with_worker(|probe| Self::serve(connections, probe))
+    }
+
+    fn serve(connections: usize, probe: Probe<ObservedRequest>) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind held upstream");
         let address = listener.local_addr().expect("held upstream address");
-        let (observed_sender, observed) = mpsc::sync_channel(connections.max(1));
+        listener.set_nonblocking(true).unwrap();
         let (release_senders, release_receivers): (Vec<_>, Vec<_>) =
             (0..connections).map(|_| mpsc::sync_channel(1)).unzip();
-        let accepted = Arc::new(AtomicUsize::new(0));
-        let accepted_worker = Arc::clone(&accepted);
         let worker = thread::spawn(move || {
             let mut handlers = Vec::with_capacity(connections);
             for (index, release) in release_receivers.into_iter().enumerate() {
-                let Ok((mut stream, _)) = listener.accept() else {
+                let Some(observed) = probe.next_request() else {
                     break;
                 };
-                accepted_worker.fetch_add(1, Ordering::AcqRel);
-                let observed_sender = observed_sender.clone();
+                let mut stream = accept_before(&listener, observed.deadline());
+                let (path, headers, body) = receive_upstream_request(&mut stream);
+                observed.complete((index, path, headers, body));
                 handlers.push(thread::spawn(move || {
-                    let (path, headers, body) = receive_upstream_request(&mut stream);
-                    let _ = observed_sender.send((index, path, headers, body));
                     let reply = release.recv_timeout(Duration::from_secs(8)).unwrap_or_else(|_| {
                         HeldReply {
                             status: 200,
@@ -66,9 +64,6 @@ impl HeldUpstream {
         });
         Self {
             address,
-            connections,
-            accepted,
-            observed,
             releases: release_senders,
             worker: Some(worker),
         }
@@ -76,12 +71,6 @@ impl HeldUpstream {
 
     fn base_url(&self) -> String {
         format!("http://{}/v1", self.address)
-    }
-
-    fn observed(&self) -> (usize, String, BTreeMap<String, String>, Value) {
-        self.observed
-            .recv_timeout(Duration::from_secs(5))
-            .expect("upstream received dispatched request")
     }
 
     fn release(&self, index: usize, status: u16, body: Vec<u8>) {
@@ -93,65 +82,12 @@ impl HeldUpstream {
 
 impl Drop for HeldUpstream {
     fn drop(&mut self) {
-        for release in &self.releases {
-            let _ = release.send(HeldReply {
-                status: 200,
-                body: success_response_body(),
-            });
-        }
-        let accepted = self.accepted.load(Ordering::Acquire);
-        for _ in accepted..self.connections {
-            if let Ok(mut stream) = TcpStream::connect(self.address) {
-                let _ =
-                    stream.write_all(b"POST /v1/responses HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}");
+        self.releases.clear();
+        if let Some(worker) = self.worker.take() {
+            let result = worker.join();
+            if !thread::panicking() {
+                result.expect("join held upstream");
             }
-        }
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("join held upstream");
-        }
-    }
-}
-
-struct CancelableUpstream {
-    address: SocketAddr,
-    observed: Receiver<(String, BTreeMap<String, String>, Value)>,
-    probe: Option<mpsc::Sender<CancellationProbe>>,
-    worker: Option<JoinHandle<()>>,
-}
-
-impl CancelableUpstream {
-    fn start() -> Self {
-        let listener =
-            TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind cancelable upstream");
-        let address = listener.local_addr().expect("cancelable upstream address");
-        let (observed_sender, observed) = mpsc::sync_channel(1);
-        let (probe, canceled) = mpsc::channel();
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept cancelable request");
-            let request = receive_upstream_request(&mut stream);
-            let _ = observed_sender.send(request);
-            report_cancellation(&canceled, |deadline| {
-                upstream_closed_before(&stream, deadline)
-            });
-        });
-        Self {
-            address,
-            observed,
-            probe: Some(probe),
-            worker: Some(worker),
-        }
-    }
-
-    fn base_url(&self) -> String {
-        format!("http://{}/v1", self.address)
-    }
-}
-
-impl Drop for CancelableUpstream {
-    fn drop(&mut self) {
-        drop(self.probe.take());
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("join cancelable upstream");
         }
     }
 }
@@ -184,7 +120,7 @@ fn activity_request_body(stream: bool) -> Vec<u8> {
 }
 
 fn next_activity_snapshot(
-    events: &mut impl BufRead,
+    events: &mut SseReader,
     mut matches: impl FnMut(&Value) -> bool,
 ) -> Value {
     loop {
@@ -236,18 +172,20 @@ fn assert_public_route_shape(route: &Value) {
 fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
     let upstream = HeldUpstream::start(2);
     let (_directory, server) =
-        configured_protocol_server(&upstream.base_url(), "responses", "api_key");
+        configured_protocol_server(&upstream.worker().base_url(), "responses", "api_key");
     let session = session_header(&server);
     let mut events = open_quota_events(&server, &session);
     let body = activity_request_body(false);
 
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let observed = upstream.begin(deadline, "first activity request");
     let mut first = open_post_stream(
         &server,
         "/v1/responses",
         &body,
         &[&session, "Content-Type: application/json"],
     );
-    let (first_index, path, headers, upstream_body) = upstream.observed();
+    let (first_index, path, headers, upstream_body) = observed.wait().unwrap();
     assert_eq!(first_index, 0);
     assert_eq!(path, "/v1/responses");
     assert_eq!(headers["authorization"], "Bearer upstream-secret");
@@ -255,13 +193,14 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
 
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     set_sse_deadline(&mut events, &deadline);
+    let observed = upstream.begin(deadline, "second activity request");
     let mut second = open_post_stream(
         &server,
         "/v1/responses",
         &body,
         &[&session, "Content-Type: application/json"],
     );
-    let (second_index, path, _, _) = upstream.observed();
+    let (second_index, path, _, _) = observed.wait().unwrap();
     assert_eq!(second_index, 1);
     assert_eq!(path, "/v1/responses");
 
@@ -280,8 +219,10 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
     assert!(!encoded.contains("upstream-secret"));
     assert!(!encoded.contains("127.0.0.1"));
 
-    upstream.release(0, 200, success_response_body());
-    upstream.release(1, 200, success_response_body());
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    set_sse_deadline(&mut events, &deadline);
+    upstream.worker().release(0, 200, success_response_body());
+    upstream.worker().release(1, 200, success_response_body());
     let first_response = thread::spawn(move || response_until_close(&mut first));
     let second_response = thread::spawn(move || response_until_close(&mut second));
     assert!(
@@ -310,25 +251,28 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
 fn upstream_error_finishes_the_activity_guard() {
     let upstream = HeldUpstream::start(1);
     let (_directory, server) =
-        configured_protocol_server(&upstream.base_url(), "responses", "api_key");
+        configured_protocol_server(&upstream.worker().base_url(), "responses", "api_key");
     let session = session_header(&server);
     let mut events = open_quota_events(&server, &session);
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     set_sse_deadline(&mut events, &deadline);
+    let observed = upstream.begin(deadline, "activity request before upstream error");
     let mut downstream = open_post_stream(
         &server,
         "/v1/responses",
         &activity_request_body(false),
         &[&session, "Content-Type: application/json"],
     );
-    let (_, path, _, _) = upstream.observed();
+    let (_, path, _, _) = observed.wait().unwrap();
     assert_eq!(path, "/v1/responses");
 
     let active = next_activity_snapshot(&mut events, |snapshot| {
         snapshot["routes"][0]["in_flight"] == 1
     });
     assert_eq!(only_route(&active)["model_id"], "demo/model");
-    upstream.release(
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    set_sse_deadline(&mut events, &deadline);
+    upstream.worker().release(
         0,
         503,
         br#"{"error":{"message":"fixture upstream failure"}}"#.to_vec(),
@@ -346,20 +290,24 @@ fn upstream_error_finishes_the_activity_guard() {
 
 #[test]
 fn client_cancellation_releases_a_streaming_activity_guard() {
-    let upstream = CancelableUpstream::start();
+    let upstream = OneShotUpstream::serve_observed(|stream, probe| {
+        if probe.observe(|_| true) {
+            probe.observe(|deadline| upstream_closed_before(stream, deadline));
+        }
+    });
     let (_directory, server) =
-        configured_protocol_server(&upstream.base_url(), "responses", "api_key");
+        configured_protocol_server(&upstream.worker().base_url(), "responses", "api_key");
     let session = session_header(&server);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let observed = upstream.begin(deadline, "stream request reached fake upstream");
     let downstream = open_post_stream(
         &server,
         "/v1/responses",
         &activity_request_body(true),
         &[&session, "Content-Type: application/json"],
     );
-    let (path, _, _) = upstream
-        .observed
-        .recv_timeout(Duration::from_secs(5))
-        .expect("stream request reached fake upstream");
+    assert!(observed.wait().unwrap());
+    let (path, _, _) = upstream.worker().observed();
     assert_eq!(path, "/v1/responses");
 
     // Dispatch has reached the held upstream. Observe cancellation separately
@@ -372,9 +320,10 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
     assert_eq!(only_route(&active)["in_flight"], 1);
     assert_eq!(only_route(&active)["model_id"], "demo/model");
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let cancellation = upstream.begin(deadline, "upstream cancellation");
     drop(downstream);
     assert!(
-        wait_for_cancellation(upstream.probe.as_ref().unwrap(), &deadline),
+        cancellation.wait().unwrap(),
         "downstream cancellation did not close the pending upstream request"
     );
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
@@ -403,8 +352,10 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
 fn completed_http_call_is_persisted_with_original_model_usage_and_delivery() {
     let upstream = HeldUpstream::start(1);
     let (_directory, server) =
-        configured_protocol_server(&upstream.base_url(), "responses", "api_key");
+        configured_protocol_server(&upstream.worker().base_url(), "responses", "api_key");
     let session = session_header(&server);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let observed = upstream.begin(deadline, "upstream received activity request");
     let mut socket = open_post_stream(
         &server,
         "/v1/responses",
@@ -415,10 +366,12 @@ fn completed_http_call_is_persisted_with_original_model_usage_and_delivery() {
             "thread-id: fixture-thread",
         ],
     );
-    let (index, _, _, _) = upstream.observed();
+    let (index, _, _, _) = observed.wait().unwrap();
     let mut body: Value = serde_json::from_slice(&success_response_body()).unwrap();
     body["model"] = json!("reported-revision");
-    upstream.release(index, 200, serde_json::to_vec(&body).unwrap());
+    upstream
+        .worker()
+        .release(index, 200, serde_json::to_vec(&body).unwrap());
     assert!(response_until_close(&mut socket).starts_with("HTTP/1.1 200"));
     assert!(request(&server, "/api/calls", &[]).starts_with("HTTP/1.1 401"));
     let response = request(&server, "/api/calls?start=0&end=9999999999", &[&session]);
@@ -446,15 +399,17 @@ fn completed_http_call_is_persisted_with_original_model_usage_and_delivery() {
 fn real_sse_records_raw_model_conflicts_reasoning_ttft_and_cache_usage() {
     let upstream = HeldUpstream::start(1);
     let (_directory, server) =
-        configured_protocol_server(&upstream.base_url(), "responses", "api_key");
+        configured_protocol_server(&upstream.worker().base_url(), "responses", "api_key");
     let session = session_header(&server);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let observed = upstream.begin(deadline, "upstream received activity request");
     let mut socket = open_post_stream(
         &server,
         "/v1/responses",
         &activity_request_body(true),
         &[&session, "Content-Type: application/json"],
     );
-    let (index, _, _, _) = upstream.observed();
+    let (index, _, _, _) = observed.wait().unwrap();
     let mut terminal: Value = serde_json::from_slice(&success_response_body()).unwrap();
     terminal["model"] = json!("terminal-model");
     terminal["usage"] =
@@ -479,7 +434,7 @@ fn real_sse_records_raw_model_conflicts_reasoning_ttft_and_cache_usage() {
         reason = "固定延迟上游完成响应，保留活动时长计量窗口"
     )]
     thread::sleep(Duration::from_millis(20));
-    upstream.release(index, 200, raw.into_bytes());
+    upstream.worker().release(index, 200, raw.into_bytes());
     let delivered = response_until_close(&mut socket);
     assert!(delivered.contains("response.completed"), "{delivered}");
     let wire = request(&server, "/api/calls?start=0&end=9999999999", &[&session]);

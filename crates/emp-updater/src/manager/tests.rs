@@ -2,7 +2,7 @@
 use super::probe_candidate_version;
 use super::{UpdateManager, nonce_with};
 use crate::release::UpdateEndpoints;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, accept_blocking, test_timeout};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Barrier};
@@ -183,7 +183,7 @@ fn concurrent_checks_start_only_one_release_job() {
         let deadline = Deadline::after(test_timeout(Duration::from_millis(300)));
         let mut requests = 1;
         while !deadline.is_expired() {
-            match listener.accept() {
+            match accept_blocking(&listener) {
                 Ok((extra, _)) => {
                     requests += 1;
                     let mut extra = deadline.io(extra);

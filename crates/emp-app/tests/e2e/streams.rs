@@ -133,8 +133,9 @@ fn downstream_sse_disconnect_closes_the_still_gated_upstream() {
             next_kind(&mut client, "response.output_text.delta")["delta"],
             "First visible answer"
         );
+        let closed = gate.observe_close(Deadline::after(test_timeout(Duration::from_secs(5))));
         drop(client);
-        gate.assert_closed();
+        closed.wait().unwrap();
         upstream.assert_idle();
     }
 }
@@ -169,8 +170,9 @@ fn downstream_disconnect_closes_external_sse_with_a_blocking_registry_override()
         next_kind(&mut client, "response.output_text.delta")["delta"],
         "First visible answer"
     );
+    let closed = gate.observe_close(Deadline::after(test_timeout(Duration::from_secs(5))));
     drop(client);
-    gate.assert_closed();
+    closed.wait().unwrap();
 }
 
 #[test]
@@ -258,17 +260,18 @@ fn responses_websocket_reuses_upstream_across_turns_and_closes_it_on_client_clos
             body["previous_response_id"] = json!(previous);
         }
         let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-        upstream.begin_observation(&deadline);
+        let observation = upstream.begin(deadline, "upstream WS turn");
         client.send_json(&body, &deadline);
+        let observed = observation.wait().unwrap().expect("upstream WS turn");
         if index == 0 {
-            let handshake = upstream.handshake(&deadline);
+            let handshake = observed.handshake.expect("upstream WS handshake");
             assert_eq!(handshake.path, "/v1/responses");
             assert_eq!(
                 handshake.headers["authorization"],
                 format!("Bearer {NATIVE_TOKEN}")
             );
         }
-        let turn = upstream.next_turn(&deadline);
+        let turn = observed.request;
         assert_eq!(turn["type"], "response.create");
         assert_eq!(turn["model"], "upstream-model");
         assert_eq!(
@@ -305,7 +308,7 @@ fn responses_websocket_reuses_upstream_across_turns_and_closes_it_on_client_clos
         }
     }
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-    upstream.begin_observation(&deadline);
+    let closed = upstream.begin(deadline, "downstream close must close upstream WS");
     client.close(&deadline);
-    upstream.assert_closed(&deadline);
+    assert!(closed.wait().unwrap().is_none());
 }

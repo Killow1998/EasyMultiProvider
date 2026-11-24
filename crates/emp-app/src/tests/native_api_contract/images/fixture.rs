@@ -3,9 +3,8 @@ use super::*;
 pub(super) struct ImageUpstream {
     pub(super) address: SocketAddr,
     pub(super) observed: mpsc::Receiver<ObservedNativeRequest>,
-    probe: Option<mpsc::Sender<CancellationProbe>>,
+    observation: Observation<bool>,
     stop: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
 }
 
 impl ImageUpstream {
@@ -14,10 +13,9 @@ impl ImageUpstream {
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let (sender, observed) = mpsc::channel();
-        let (probe, cancelled) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
-        let worker = thread::spawn(move || {
+        let observation = Observation::spawn(move |probe| {
             while !stopped.load(Ordering::Acquire) {
                 let (mut socket, _) = match listener.accept() {
                     Ok(socket) => socket,
@@ -75,7 +73,7 @@ impl ImageUpstream {
                 let streaming = request.body["stream"] == true;
                 sender.send(request).unwrap();
                 if image && status == 499 {
-                    report_cancellation(&cancelled, |deadline| {
+                    probe.observe(|deadline| {
                         deadline
                             .io(&socket)
                             .read(&mut [0])
@@ -111,9 +109,8 @@ impl ImageUpstream {
         Self {
             address,
             observed,
-            probe: Some(probe),
+            observation,
             stop,
-            worker: Some(worker),
         }
     }
 
@@ -124,18 +121,18 @@ impl ImageUpstream {
         self.observed.recv_timeout(Duration::from_secs(5)).unwrap()
     }
 
-    pub(super) fn observe_cancellation(&self, deadline: Deadline) -> CancellationObservation {
-        start_cancellation_probe(self.probe.as_ref().unwrap(), deadline)
+    pub(super) fn observe_cancellation(
+        &self,
+        deadline: Deadline,
+    ) -> emp_test_support::ObservationResult<bool> {
+        self.observation
+            .begin(deadline, "image upstream cancellation")
     }
 }
 
 impl Drop for ImageUpstream {
     fn drop(&mut self) {
-        self.probe.take();
         self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take() {
-            worker.join().unwrap();
-        }
     }
 }
 

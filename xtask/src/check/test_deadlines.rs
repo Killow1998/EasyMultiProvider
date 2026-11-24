@@ -8,7 +8,7 @@ use syn::{
     visit::{self, Visit},
 };
 
-const ALLOWED: &[(&str, usize)] = &[("emp-app", 70), ("emp-codex", 2), ("emp-transport", 9)];
+const ALLOWED: &[(&str, usize)] = &[("emp-app", 62), ("emp-codex", 2), ("emp-transport", 9)];
 
 const SOCKET_TIMEOUTS: &[(&str, usize)] = &[("emp-app", 5)];
 
@@ -55,7 +55,7 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
     Ok(())
 }
 
-fn check_baseline(
+pub(super) fn check_baseline(
     rule: &str,
     group: &str,
     locations: &[String],
@@ -74,7 +74,7 @@ fn check_baseline(
     }
 }
 
-fn group(path: &str) -> Option<&str> {
+pub(super) fn group(path: &str) -> Option<&str> {
     if !path.ends_with(".rs") {
         return None;
     }
@@ -282,23 +282,8 @@ fn deadline_name(name: &syn::Ident) -> bool {
 
 impl<'ast> Visit<'ast> for Deadlines {
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        let Some(name) = invocation.path.segments.last() else {
-            return;
-        };
-        let expressions = match name.ident.to_string().as_str() {
-            "assert" | "assert_eq" | "assert_ne" | "debug_assert" | "debug_assert_eq"
-            | "debug_assert_ne" => Punctuated::<Expr, syn::Token![,]>::parse_terminated
-                .parse2(invocation.tokens.clone())
-                .map(|args| args.into_iter().collect()),
-            "matches" | "assert_matches" | "debug_assert_matches" => {
-                parse_match_arguments.parse2(invocation.tokens.clone())
-            }
-            _ => return,
-        };
-        if let Ok(expressions) = expressions {
-            for expression in &expressions {
-                self.visit_expr(expression);
-            }
+        for expression in &assertion_expressions(invocation) {
+            self.visit_expr(expression);
         }
     }
 
@@ -366,6 +351,23 @@ impl<'ast> Visit<'ast> for Deadlines {
         }
         visit::visit_local(self, local);
     }
+}
+
+pub(super) fn assertion_expressions(invocation: &syn::Macro) -> Vec<Expr> {
+    let Some(name) = invocation.path.segments.last() else {
+        return Vec::new();
+    };
+    let expressions = match name.ident.to_string().as_str() {
+        "assert" | "assert_eq" | "assert_ne" | "debug_assert" | "debug_assert_eq"
+        | "debug_assert_ne" => Punctuated::<Expr, syn::Token![,]>::parse_terminated
+            .parse2(invocation.tokens.clone())
+            .map(|args| args.into_iter().collect()),
+        "matches" | "assert_matches" | "debug_assert_matches" => {
+            parse_match_arguments.parse2(invocation.tokens.clone())
+        }
+        _ => return Vec::new(),
+    };
+    expressions.unwrap_or_default()
 }
 
 fn parse_match_arguments(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Expr>> {

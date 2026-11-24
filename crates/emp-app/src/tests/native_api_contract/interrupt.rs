@@ -5,7 +5,10 @@ use emp_test_support::{Deadline, DeadlineIo, test_timeout};
 use emp_transport::ClientWebSocket;
 
 fn accept_upstream(listener: TcpListener) -> TcpStream {
-    let (mut stream, _) = listener.accept().unwrap();
+    complete_upgrade(listener.accept().unwrap().0)
+}
+
+pub(super) fn complete_upgrade(mut stream: TcpStream) -> TcpStream {
     let raw = read_request_head(&mut stream).unwrap();
     let request = parse_request(&raw.head).unwrap();
     let accept = websocket_accept(request.header("Sec-WebSocket-Key").unwrap()).unwrap();
@@ -309,15 +312,19 @@ fn interrupt_is_forwarded_during_generation_and_its_response_can_be_continued() 
 fn disconnect_cancels_a_native_websocket_while_its_upstream_is_silent() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
-    let (probe, cancelled) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        let stream = accept_upstream(listener);
+    listener.set_nonblocking(true).unwrap();
+    let observation = Observation::spawn(move |probe| {
+        let Some(dispatch) = probe.next_request() else {
+            return;
+        };
+        let stream = complete_upgrade(accept_before(&listener, dispatch.deadline()));
+        dispatch.complete(true);
         let mut io = Deadline::after(test_timeout(Duration::from_secs(5))).io(&stream);
         let mut ws = WebSocketConnection::new(&mut io);
         request(&mut ws);
         ws.send_json(&json!({"type":"response.created","response":{"id":"resp_waiting"}}))
             .unwrap();
-        report_cancellation(&cancelled, |deadline| {
+        probe.observe(|deadline| {
             ws.get_mut().set_deadline(deadline);
             matches!(
                 ws.poll_text(),
@@ -327,17 +334,18 @@ fn disconnect_cancels_a_native_websocket_while_its_upstream_is_silent() {
     });
     let (_root, server) = native_alias_server(&base_url);
     let mut client = connect(&server);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let upgraded = observation.begin(deadline, "native upstream WebSocket upgrade");
     client
         .send_json(&json!({"type":"response.create","model":"native/alias","input":"wait"}))
         .unwrap();
+    assert!(upgraded.wait().unwrap());
     event(&mut client, "response.created");
     let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
+    let cancellation = observation.begin(deadline, "upstream cancellation");
     drop(client);
-    assert!(
-        wait_for_cancellation(&probe, &deadline),
-        "upstream was not cancelled"
-    );
-    worker.join().unwrap();
+    assert!(cancellation.wait().unwrap(), "upstream was not cancelled");
+    drop(observation);
     server.shutdown().unwrap();
 }
 

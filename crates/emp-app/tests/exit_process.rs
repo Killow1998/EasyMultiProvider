@@ -117,6 +117,7 @@ fn exit_restores_while_runtime_observation_is_stalled() {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
     let mut socket = loop {
         if let Ok((socket, _)) = listener.accept() {
+            socket.set_nonblocking(false).unwrap();
             break deadline
                 .accept(socket, "runtime observation started")
                 .unwrap();

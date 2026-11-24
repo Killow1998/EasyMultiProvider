@@ -1,27 +1,32 @@
 //! Real WebSocket activity lifecycle checks.
 use super::*;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Sender;
+
+type ObservedRequest = (String, BTreeMap<String, String>, Value);
 
 struct HeldActivityUpstream {
     address: SocketAddr,
-    requests: Receiver<(String, BTreeMap<String, String>, Value)>,
-    release: Sender<()>,
+    release: Option<Sender<()>>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl HeldActivityUpstream {
-    fn start(request_count: usize) -> Self {
+    fn start(request_count: usize) -> Observation<ObservedRequest, Self> {
+        Observation::with_worker(|probe| Self::serve(request_count, probe))
+    }
+
+    fn serve(request_count: usize, probe: Probe<ObservedRequest>) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind held upstream");
         let address = listener.local_addr().expect("held upstream address");
-        let (request_sender, requests) = mpsc::sync_channel(request_count);
+        listener.set_nonblocking(true).unwrap();
         let (release, releases) = mpsc::channel();
         let worker = thread::spawn(move || {
             for index in 0..request_count {
-                let Ok((mut stream, _)) = listener.accept() else {
+                let Some(observed) = probe.next_request() else {
                     break;
                 };
-                let (path, headers, body) = receive_upstream_request(&mut stream);
-                let _ = request_sender.send((path, headers, body));
+                let mut stream = accept_before(&listener, observed.deadline());
+                observed.complete(receive_upstream_request(&mut stream));
 
                 let id = format!("resp_activity_{index}");
                 let created = json!({
@@ -50,9 +55,11 @@ impl HeldActivityUpstream {
                     .write_all(prefix.as_bytes())
                     .expect("write response.created event");
                 stream.flush().expect("flush response.created event");
-                releases
-                    .recv_timeout(Duration::from_secs(10))
-                    .expect("release held upstream response");
+                match releases.recv_timeout(Duration::from_secs(10)) {
+                    Ok(()) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    Err(error) => panic!("release held upstream response: {error}"),
+                }
                 stream
                     .write_all(terminal.as_bytes())
                     .expect("write response.completed event");
@@ -62,8 +69,7 @@ impl HeldActivityUpstream {
 
         Self {
             address,
-            requests,
-            release,
+            release: Some(release),
             worker: Some(worker),
         }
     }
@@ -72,36 +78,26 @@ impl HeldActivityUpstream {
         format!("http://{}/v1", self.address)
     }
 
-    fn next_request(&self, deadline: &Deadline) -> (String, BTreeMap<String, String>, Value) {
-        self.requests
-            .recv_timeout(deadline.remaining())
-            .expect("held upstream request")
-    }
-
     fn release_one(&self) {
-        self.release.send(()).expect("release upstream response");
+        self.release
+            .as_ref()
+            .unwrap()
+            .send(())
+            .expect("release upstream response");
     }
 }
 
 impl Drop for HeldActivityUpstream {
     fn drop(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            for _ in 0..2 {
-                let _ = self.release.send(());
-            }
-            if !worker.is_finished()
-                && let Ok(mut stream) = TcpStream::connect(self.address)
-            {
-                let _ = stream.write_all(
-                    b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
-                );
-            }
-            worker.join().expect("join held upstream");
+        drop(self.release.take());
+        let result = self.worker.take().unwrap().join();
+        if !thread::panicking() {
+            result.expect("join held upstream");
         }
     }
 }
 
-fn next_activity_snapshot(reader: &mut impl BufRead, in_flight: u64) -> Value {
+fn next_activity_snapshot(reader: &mut SseReader, in_flight: u64) -> Value {
     loop {
         let frame = read_sse_frame(reader);
         let Some(data) = frame.strip_prefix("event: activity-updated\ndata: ") else {
@@ -159,7 +155,7 @@ fn assert_one_finished_route(snapshot: &Value) {
 fn websocket_idle_connection_is_inactive_and_each_turn_has_its_own_activity() {
     let upstream = HeldActivityUpstream::start(2);
     let (_directory, server) =
-        configured_protocol_server(&upstream.base_url(), "responses", "api_key");
+        configured_protocol_server(&upstream.worker().base_url(), "responses", "api_key");
     let url = format!("ws://{}/v1/responses", server.local_addr());
     let session = session_header(&server);
     let headers = BTreeMap::from([(
@@ -174,12 +170,13 @@ fn websocket_idle_connection_is_inactive_and_each_turn_has_its_own_activity() {
     for input in ["first activity turn", "second activity turn"] {
         let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
         set_sse_deadline(&mut activity, &deadline);
+        let observed = upstream.begin(deadline, "held upstream activity turn");
         send_turn(&mut socket, input);
-        let (path, _, body) = upstream.next_request(&deadline);
+        let (path, _, body) = observed.wait().unwrap();
         assert_eq!(path, "/v1/responses");
         assert_eq!(body["stream"], true);
         assert_one_active_route(&next_activity_snapshot(&mut activity, 1));
-        upstream.release_one();
+        upstream.worker().release_one();
         receive_completed_turn(&mut socket, &deadline);
         assert_one_finished_route(&next_activity_snapshot(&mut activity, 0));
     }

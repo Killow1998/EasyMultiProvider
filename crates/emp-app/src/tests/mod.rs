@@ -3,7 +3,7 @@
 mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
 use base64::engine::general_purpose::STANDARD;
-use emp_test_support::{Deadline, DeadlineIo, test_timeout};
+use emp_test_support::{Deadline, DeadlineIo, Observation, Probe, accept_blocking, test_timeout};
 
 use crate::cli::Cli;
 use crate::cli::parse_cli;
@@ -119,10 +119,10 @@ fn response_timeout() -> Duration {
 
 fn complete_response(stream: &mut TcpStream) -> String {
     let deadline = Deadline::after(response_timeout());
-    complete_response_from(&mut deadline.io(&*stream))
+    complete_response_from(&mut deadline.io(&*stream), &deadline)
 }
 
-fn complete_response_from(stream: &mut impl Read) -> String {
+fn complete_response_from(stream: &mut impl Read, deadline: &Deadline) -> String {
     let mut response = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
@@ -142,7 +142,12 @@ fn complete_response_from(stream: &mut impl Read) -> String {
         let expected = separator + 4 + content_length;
         assert!(response.len() <= expected, "unexpected pipelined bytes");
         if response.len() == expected {
-            return String::from_utf8(response).expect("UTF-8 response");
+            return deadline
+                .accept(
+                    String::from_utf8(response).expect("UTF-8 response"),
+                    "complete HTTP response",
+                )
+                .expect("complete HTTP response");
         }
     }
 }
@@ -152,7 +157,12 @@ fn response_until_close(stream: &mut TcpStream) -> String {
     let mut stream = deadline.io(&*stream);
     let mut response = Vec::new();
     stream.read_to_end(&mut response).expect("read response");
-    String::from_utf8(response).expect("UTF-8 response")
+    deadline
+        .accept(
+            String::from_utf8(response).expect("UTF-8 response"),
+            "complete HTTP response at EOF",
+        )
+        .unwrap()
 }
 
 fn request(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
@@ -188,7 +198,7 @@ fn request_before(
                 .as_bytes(),
         )
         .expect("write request");
-    complete_response_from(&mut stream)
+    complete_response_from(&mut stream, deadline)
 }
 
 fn post(server: &ServerHandle, target: &str, body: &[u8], headers: &[&str]) -> String {
@@ -239,7 +249,7 @@ fn post_before(
             )
             .expect("write request head");
     stream.write_all(body).expect("write request body");
-    complete_response_from(&mut stream)
+    complete_response_from(&mut stream, deadline)
 }
 
 fn delete(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
@@ -259,6 +269,7 @@ fn delete(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
 
 struct ChunkedSse<R> {
     input: R,
+    deadline: Deadline,
     remaining: usize,
     ended: bool,
 }
@@ -266,7 +277,9 @@ struct ChunkedSse<R> {
 type SseReader = BufReader<ChunkedSse<BufReader<DeadlineIo<TcpStream>>>>;
 
 fn set_sse_deadline(reader: &mut SseReader, deadline: &Deadline) {
-    reader.get_mut().input.get_mut().set_deadline(deadline);
+    let stream = reader.get_mut();
+    stream.input.get_mut().set_deadline(deadline);
+    stream.deadline = *deadline;
 }
 
 impl<R: BufRead> Read for ChunkedSse<R> {
@@ -303,7 +316,10 @@ impl<R: BufRead> Read for ChunkedSse<R> {
     }
 }
 
-fn read_sse_head<R: BufRead>(mut input: R) -> (String, BufReader<ChunkedSse<R>>) {
+fn read_sse_head<R: BufRead>(
+    mut input: R,
+    deadline: &Deadline,
+) -> (String, BufReader<ChunkedSse<R>>) {
     let mut head = String::new();
     loop {
         let mut line = String::new();
@@ -315,31 +331,40 @@ fn read_sse_head<R: BufRead>(mut input: R) -> (String, BufReader<ChunkedSse<R>>)
         head.push_str(&line);
     }
     assert!(head.contains("Transfer-Encoding: chunked\r\n"), "{head}");
+    let head = deadline
+        .accept(head, "complete SSE response headers")
+        .unwrap();
     (
         head,
         BufReader::new(ChunkedSse {
             input,
+            deadline: *deadline,
             remaining: 0,
             ended: false,
         }),
     )
 }
 
-fn read_sse_frame(reader: &mut impl BufRead) -> String {
+fn read_sse_frame<R: BufRead>(reader: &mut BufReader<ChunkedSse<R>>) -> String {
     let mut frame = String::new();
     loop {
         let mut line = String::new();
         let count = reader.read_line(&mut line).expect("read SSE frame");
         assert!(count > 0, "SSE stream ended before a complete frame");
         if line == "\r\n" || line == "\n" {
-            return frame;
+            return reader
+                .get_ref()
+                .deadline
+                .accept(frame, "complete SSE frame")
+                .unwrap();
         }
         frame.push_str(&line);
     }
 }
 
 fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
-    let mut stream = TcpStream::connect(server.local_addr()).expect("connect SSE");
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let mut stream = deadline.io(deadline.connect(server.local_addr()).expect("connect SSE"));
     stream
             .write_all(
                 format!(
@@ -349,9 +374,7 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
                 .as_bytes(),
             )
             .expect("write SSE request");
-    let (head, mut reader) = read_sse_head(BufReader::new(
-        Deadline::after(test_timeout(Duration::from_secs(5))).io(stream),
-    ));
+    let (head, mut reader) = read_sse_head(BufReader::new(stream), &deadline);
     assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
     assert!(head.contains("Content-Type: text/event-stream\r\n"));
     assert!(head.contains("Cache-Control: no-store\r\n"));
@@ -485,54 +508,6 @@ fn websocket_event_before(
     }
 }
 
-type CancellationProbe = (Deadline, mpsc::Sender<std::io::Result<bool>>);
-
-struct CancellationObservation {
-    deadline: Deadline,
-    observed: mpsc::Receiver<std::io::Result<bool>>,
-}
-
-impl CancellationObservation {
-    fn wait(self) -> std::io::Result<bool> {
-        self.observed
-            .recv_timeout(self.deadline.remaining())
-            .map_err(|error| match error {
-                mpsc::RecvTimeoutError::Timeout => std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "no upstream cancellation result before deadline",
-                ),
-                mpsc::RecvTimeoutError::Disconnected => std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "upstream cancellation probe disconnected",
-                ),
-            })?
-    }
-}
-
-fn report_cancellation(
-    probe: &mpsc::Receiver<CancellationProbe>,
-    observe: impl FnOnce(&Deadline) -> bool,
-) {
-    if let Ok((deadline, result)) = probe.recv() {
-        let _ = result.send(deadline.accept(observe(&deadline), "upstream cancellation"));
-    }
-}
-
-fn start_cancellation_probe(
-    probe: &mpsc::Sender<CancellationProbe>,
-    deadline: Deadline,
-) -> CancellationObservation {
-    let (result, observed) = mpsc::channel();
-    probe
-        .send((deadline, result))
-        .expect("start cancellation probe");
-    CancellationObservation { deadline, observed }
-}
-
-fn wait_for_cancellation(probe: &mpsc::Sender<CancellationProbe>, deadline: &Deadline) -> bool {
-    start_cancellation_probe(probe, *deadline).wait().unwrap()
-}
-
 fn upstream_closed_before(stream: &TcpStream, deadline: &Deadline) -> bool {
     match deadline.io(stream).peek(&mut [0]) {
         Ok(0) => true,
@@ -541,6 +516,23 @@ fn upstream_closed_before(stream: &TcpStream, deadline: &Deadline) -> bool {
             std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
         ),
         Ok(_) => false,
+    }
+}
+
+fn accept_before(listener: &TcpListener, deadline: &Deadline) -> TcpStream {
+    loop {
+        deadline.accept((), "upstream accept").unwrap();
+        match accept_blocking(listener) {
+            Ok((stream, _)) => return deadline.accept(stream, "upstream accept").unwrap(),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                )]
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("upstream accept: {error}"),
+        }
     }
 }
 
@@ -662,6 +654,12 @@ impl OneShotUpstream {
                 stream.flush().expect("flush upstream response body");
             }
         })
+    }
+
+    pub(crate) fn serve_observed<T: Send + 'static>(
+        mut reply: impl FnMut(&mut TcpStream, &Probe<T>) + Send + 'static,
+    ) -> Observation<T, Self> {
+        Observation::with_worker(|probe| Self::serve(1, move |stream| reply(stream, &probe)))
     }
 
     pub(crate) fn serve(

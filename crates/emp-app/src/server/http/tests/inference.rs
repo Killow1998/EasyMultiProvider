@@ -5,7 +5,6 @@ use crate::{
 };
 use emp_test_support::{Deadline, test_timeout};
 use std::{collections::BTreeMap, io::Read, sync::mpsc};
-use tokio::sync::oneshot;
 
 const RESPONSE: &[u8] = br#"{ "id":"resp_fixture","object":"response","status":"completed","model":"upstream","output":[], "z":1.2300e+2, "a":null }"#;
 const COMPACT: &[u8] =
@@ -646,10 +645,6 @@ pub(super) struct SseClient {
 }
 
 impl SseClient {
-    async fn open(address: SocketAddr, wire: &[u8]) -> Self {
-        Self::from_raw(RawClient::request(address, wire).await)
-    }
-
     pub(super) fn from_raw(raw: RawClient) -> Self {
         let RawClient { io, head } = raw;
         let mut head = ResponseHead::parse(&head);
@@ -722,8 +717,8 @@ impl SseClient {
         }
     }
 
-    async fn first_output(&mut self) -> Vec<Value> {
-        timeout(wire_timeout(), async {
+    async fn first_output(&mut self, deadline: &Deadline) -> Vec<Value> {
+        let events = timeout(deadline.remaining(), async {
             let mut events = Vec::new();
             loop {
                 let event = self.next().await.expect("first visible SSE event");
@@ -738,7 +733,8 @@ impl SseClient {
             }
         })
         .await
-        .expect("first SSE output arrived while the upstream tail was gated")
+        .expect("first SSE output arrived while the upstream tail was gated");
+        deadline.accept(events, "first visible SSE output").unwrap()
     }
 }
 
@@ -795,8 +791,7 @@ async fn assert_settled(
 #[test]
 fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
     {
-        let (release, released) = mpsc::channel();
-        let upstream = OneShotUpstream::serve(1, move |socket| {
+        let upstream = OneShotUpstream::serve_observed(move |socket, probe| {
             upstream_reply(
                 socket,
                 200,
@@ -805,20 +800,19 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
                 "",
             );
             socket.write_all(FIRST).unwrap();
-            released
-                .recv_timeout(wire_timeout())
-                .expect("client received visible output before release");
-            socket.write_all(LAST).unwrap();
+            probe.observe(|deadline| deadline.io(socket).write_all(LAST).unwrap());
         });
-        fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+        fixture(&upstream.worker().base_url()).run_wire(async move |fixture, address| {
             let wire = json_request(
                 fixture.port(),
                 "/v1/responses",
                 &[&fixture.session()],
                 STREAM_REQUEST,
             );
-            let mut downstream = SseClient::open(address, &wire).await;
-            let mut events = downstream.first_output().await;
+            let deadline = Deadline::after(wire_timeout());
+            let mut downstream =
+                SseClient::from_raw(RawClient::request_before(address, &wire, &deadline).await);
+            let mut events = downstream.first_output(&deadline).await;
             assert!(
                 !fixture
                     .server
@@ -828,14 +822,21 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
                     .drain_for_test(Duration::ZERO),
                 "SSE released the update permit before its body ended"
             );
-            release.send(()).unwrap();
-            timeout(wire_timeout(), async {
+            let deadline = Deadline::after(wire_timeout());
+            upstream
+                .begin(deadline, "release upstream SSE tail")
+                .wait()
+                .unwrap();
+            timeout(deadline.remaining(), async {
                 while let Some(event) = downstream.next().await {
                     events.push(event);
                 }
             })
             .await
             .unwrap();
+            deadline
+                .accept((), "complete downstream SSE response")
+                .unwrap();
             assert_eq!(events.last().unwrap()["type"], "response.completed");
             assert_eq!(events.last().unwrap()["response"]["status"], "completed");
             assert_eq!(
@@ -862,7 +863,7 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
             assert_eq!(events[4]["text"], "answer");
             assert_eq!(events[5]["part"]["text"], "answer");
             assert_eq!(events[6]["item"]["content"][0]["text"], "answer");
-            let id = upstream.observed().1["x-emp-request-id"].clone();
+            let id = upstream.worker().observed().1["x-emp-request-id"].clone();
             let receipt = assert_settled(fixture, id, true, 1).await;
             assert_eq!(receipt["delivery"], "terminal_written", "{receipt}");
             assert!(
@@ -885,10 +886,7 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
 #[test]
 fn inference_stream_disconnect_closes_upstream_and_settles_once() {
     {
-        let (closed, closure) = oneshot::channel();
-        let (probe, cancelled) = mpsc::channel();
-        let mut closed = Some(closed);
-        let upstream = OneShotUpstream::serve(1, move |socket| {
+        let upstream = OneShotUpstream::serve_observed(move |socket, probe| {
             upstream_reply(
                 socket,
                 200,
@@ -897,32 +895,28 @@ fn inference_stream_disconnect_closes_upstream_and_settles_once() {
                 "",
             );
             socket.write_all(FIRST).unwrap();
-            let Ok(deadline) = cancelled.recv() else {
-                return;
-            };
-            assert_upstream_cancelled(socket, &deadline);
-            closed.take().unwrap().send(()).unwrap();
+            probe.observe(|deadline| assert_upstream_cancelled(socket, deadline));
         });
-        let receipt = fixture(&upstream.base_url()).run_wire(async |fixture, address| {
-            let wire = json_request(
-                address.port(),
-                "/v1/responses",
-                &[&fixture.session()],
-                STREAM_REQUEST,
-            );
-            let mut downstream = SseClient::open(address, &wire).await;
-            downstream.first_output().await;
-            downstream.io.get_ref().set_zero_linger().unwrap();
-            let deadline = Deadline::after(wire_timeout());
-            probe.send(deadline).unwrap();
-            drop(downstream);
-            timeout(deadline.remaining(), closure)
-                .await
-                .expect("upstream was closed")
-                .unwrap();
-            let id = upstream.observed().1["x-emp-request-id"].clone();
-            assert_settled(fixture, id, false, 0).await
-        });
+        let receipt =
+            fixture(&upstream.worker().base_url()).run_wire(async move |fixture, address| {
+                let wire = json_request(
+                    address.port(),
+                    "/v1/responses",
+                    &[&fixture.session()],
+                    STREAM_REQUEST,
+                );
+                let deadline = Deadline::after(wire_timeout());
+                let mut downstream =
+                    SseClient::from_raw(RawClient::request_before(address, &wire, &deadline).await);
+                downstream.first_output(&deadline).await;
+                downstream.io.get_ref().set_zero_linger().unwrap();
+                let deadline = Deadline::after(wire_timeout());
+                let closure = upstream.begin(deadline, "upstream was closed");
+                drop(downstream);
+                closure.wait().unwrap();
+                let id = upstream.worker().observed().1["x-emp-request-id"].clone();
+                assert_settled(fixture, id, false, 0).await
+            });
         assert_eq!(
             receipt.get("delivery"),
             Some(&json!("partial")),
@@ -957,47 +951,46 @@ fn inference_stream_disconnect_closes_upstream_and_settles_once() {
 fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
     for (path, cancel) in [("/v1/responses/compact", true), ("/v1/responses", false)] {
         {
-            let (dispatched, dispatch) = oneshot::channel();
-            let mut dispatched = Some(dispatched);
-            let upstream = OneShotUpstream::serve(1, move |socket| {
-                let (release, released) = mpsc::channel();
-                let (closed, closure) = oneshot::channel();
-                dispatched.take().unwrap().send((release, closure)).unwrap();
-                let Ok(deadline) = released.recv() else {
+            let upstream = OneShotUpstream::serve_observed(move |socket, probe| {
+                if !probe.observe(|_| ()) {
                     return;
-                };
-                if cancel {
-                    assert_upstream_cancelled(socket, &deadline);
-                } else {
-                    upstream_reply(socket, 200, "application/json", CHAT_COMPLETE.len(), "");
-                    socket.write_all(CHAT_COMPLETE).unwrap();
                 }
-                closed.send(()).unwrap();
+                probe.observe(|deadline| {
+                    if cancel {
+                        assert_upstream_cancelled(socket, deadline);
+                    } else {
+                        upstream_reply(socket, 200, "application/json", CHAT_COMPLETE.len(), "");
+                        deadline.io(socket).write_all(CHAT_COMPLETE).unwrap();
+                    }
+                });
             });
-            let receipt = fixture(&upstream.base_url()).run_wire(async |fixture, address| {
-                let wire = json_request(
-                    address.port(),
-                    path,
-                    &[&fixture.session()],
-                    COMPLETE_REQUEST,
-                );
-                let mut downstream = TcpStream::connect(address).await.unwrap();
-                downstream.write_all(&wire).await.unwrap();
-                let (release, closure) = timeout(wire_timeout(), dispatch)
-                    .await
-                    .expect("EMP dispatched upstream")
-                    .unwrap();
-                downstream.set_zero_linger().unwrap();
-                let deadline = Deadline::after(wire_timeout());
-                drop(downstream);
-                release.send(deadline).unwrap();
-                timeout(deadline.remaining(), closure)
-                    .await
-                    .expect("upstream finished")
-                    .unwrap();
-                let id = upstream.observed().1["x-emp-request-id"].clone();
-                assert_settled(fixture, id, false, u64::from(!cancel)).await
-            });
+            let receipt =
+                fixture(&upstream.worker().base_url()).run_wire(async move |fixture, address| {
+                    let wire = json_request(
+                        address.port(),
+                        path,
+                        &[&fixture.session()],
+                        COMPLETE_REQUEST,
+                    );
+                    let deadline = Deadline::after(wire_timeout());
+                    let dispatch = upstream.begin(deadline, "EMP dispatched upstream");
+                    let mut downstream = timeout(deadline.remaining(), TcpStream::connect(address))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    timeout(deadline.remaining(), downstream.write_all(&wire))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    dispatch.wait().unwrap();
+                    downstream.set_zero_linger().unwrap();
+                    let deadline = Deadline::after(wire_timeout());
+                    let closure = upstream.begin(deadline, "upstream finished");
+                    drop(downstream);
+                    closure.wait().unwrap();
+                    let id = upstream.worker().observed().1["x-emp-request-id"].clone();
+                    assert_settled(fixture, id, false, u64::from(!cancel)).await
+                });
             assert_eq!(
                 receipt.get("delivery"),
                 Some(&json!(if cancel {

@@ -205,15 +205,14 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     .unwrap();
     let session = session_header(&server);
     let mut events = TcpStream::connect(server.local_addr()).unwrap();
+    let subscribe = Deadline::after(test_timeout(Duration::from_secs(3)));
     write!(
         events,
         "GET /api/accounts/events HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{session}\r\n\r\n",
         server.local_addr().port()
     )
     .unwrap();
-    let (head, mut reader) = read_sse_head(BufReader::new(
-        Deadline::after(test_timeout(Duration::from_secs(3))).io(events),
-    ));
+    let (head, mut reader) = read_sse_head(BufReader::new(subscribe.io(events)), &subscribe);
     assert!(head.starts_with("HTTP/1.1 200"));
     // Queue before starting the worker: admission must not imply completion.
     let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));

@@ -26,7 +26,10 @@ pub struct RawClient {
 
 impl RawClient {
     pub async fn request(address: SocketAddr, request: &[u8]) -> Self {
-        let deadline = Deadline::after(wire_timeout());
+        Self::request_before(address, request, &Deadline::after(wire_timeout())).await
+    }
+
+    pub async fn request_before(address: SocketAddr, request: &[u8], deadline: &Deadline) -> Self {
         let client = timeout(deadline.remaining(), async {
             let mut io = TcpStream::connect(address).await.unwrap();
             io.write_all(request).await.unwrap();

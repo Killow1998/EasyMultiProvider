@@ -6,28 +6,33 @@ use super::*;
 fn cancelled_compaction_does_not_claim_a_terminal_write() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
-    let (accepted, ready) = mpsc::sync_channel(1);
-    let (probe, cancelled) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let observation = Observation::spawn(move |probe| {
+        let Some(dispatch) = probe.next_request() else {
+            return;
+        };
+        let mut stream = accept_before(&listener, dispatch.deadline());
         receive_upstream_request(&mut stream);
-        accepted.send(()).unwrap();
-        report_cancellation(&cancelled, |deadline| {
-            matches!(deadline.io(stream).read(&mut [0]), Ok(0))
-        });
+        dispatch.complete(true);
+        probe.observe(|deadline| matches!(deadline.io(stream).read(&mut [0]), Ok(0)));
     });
     let (root, server) = configured_server(&format!("http://{address}/v1"));
+    let dispatched = observation.begin(
+        Deadline::after(test_timeout(Duration::from_secs(3))),
+        "upstream request ready",
+    );
     let downstream = open_post_stream(
         &server,
         "/v1/responses",
         br#"{"model":"demo/model","input":[{"role":"user","content":"synthetic input"},{"type":"compaction_trigger"}],"stream":true}"#,
         &[&session_header(&server)],
     );
-    ready.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(dispatched.wait().unwrap());
     let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
+    let cancellation = observation.begin(deadline, "upstream cancellation");
     drop(downstream);
-    let upstream_closed = wait_for_cancellation(&probe, &deadline);
-    worker.join().unwrap();
+    let upstream_closed = cancellation.wait().unwrap();
+    drop(observation);
     let records = finished(root.path(), 1);
     server.shutdown().unwrap();
     assert!(upstream_closed);

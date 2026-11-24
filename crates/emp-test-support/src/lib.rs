@@ -2,11 +2,20 @@ use std::{
     borrow::Borrow,
     fmt::Display,
     io::{self, Read, Write},
-    net::{SocketAddr, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
     sync::OnceLock,
     time::{Duration, Instant},
 };
+
+mod observation;
+pub use observation::{Observation, ObservationResult, Probe};
+
+pub fn accept_blocking(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
+    let (stream, peer) = listener.accept()?;
+    stream.set_nonblocking(false)?;
+    Ok((stream, peer))
+}
 
 pub fn fixture_root() -> PathBuf {
     std::env::var_os("EMP_TEST_TMPDIR")
@@ -72,6 +81,10 @@ pub struct DeadlineIo<T> {
 }
 
 impl<T> DeadlineIo<T> {
+    pub fn deadline(&self) -> &Deadline {
+        &self.deadline
+    }
+
     pub fn set_deadline(&mut self, deadline: &Deadline) {
         self.deadline = *deadline;
     }

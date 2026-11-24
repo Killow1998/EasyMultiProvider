@@ -72,7 +72,7 @@ impl VertexFixture {
         let stopped = Arc::clone(&stop);
         let worker = thread::spawn(move || {
             while !stopped.load(Ordering::Acquire) {
-                let Ok((stream, _)) = listener.accept() else {
+                let Ok((stream, _)) = accept_blocking(&listener) else {
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "假上游以固定间隔重试非阻塞 accept，避免空转"

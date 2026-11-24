@@ -132,8 +132,8 @@ impl Drop for Subscription {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emp_test_support::{Deadline, test_timeout};
-    use std::sync::{Arc, mpsc};
+    use emp_test_support::{Deadline, Observation, test_timeout};
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn subscriber_coalesces_changes_and_releases_capacity() {
@@ -166,35 +166,43 @@ mod tests {
     fn pending_or_waiting_subscriber_wakes_on_change_and_close() {
         let feed = Arc::new(ManagementEvents::default());
         let waiting = Arc::clone(&feed);
-        let (ready, began) = mpsc::channel();
-        let (sent, received) = mpsc::channel();
-        let (probe, observation) = mpsc::channel::<Deadline>();
-        let worker = std::thread::spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
+        let subscription = Observation::spawn(move |probe| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
                 .build()
-                .unwrap()
-                .block_on(async {
-                    let mut subscription = waiting.subscribe().unwrap();
-                    subscription.next(Duration::ZERO).await.unwrap();
-                    ready.send(()).unwrap();
-                    let deadline = observation.recv().unwrap();
-                    let change = subscription.next(deadline.remaining()).await.unwrap();
-                    sent.send(deadline.accept(change.activity, "activity publication"))
-                        .unwrap();
-                    let deadline = observation.recv().unwrap();
-                    assert!(subscription.next(deadline.remaining()).await.is_none());
-                });
+                .unwrap();
+            let mut subscription = waiting.subscribe().unwrap();
+            runtime.block_on(subscription.next(Duration::ZERO)).unwrap();
+            if !probe.observe(|_| true) {
+                return;
+            }
+            if !probe.observe(|deadline| {
+                runtime
+                    .block_on(subscription.next(deadline.remaining()))
+                    .unwrap()
+                    .activity
+            }) {
+                return;
+            }
+            probe.observe(|deadline| {
+                runtime
+                    .block_on(subscription.next(deadline.remaining()))
+                    .is_none()
+            });
         });
-        began.recv_timeout(Duration::from_secs(1)).unwrap();
         let deadline = Deadline::after(test_timeout(Duration::from_secs(1)));
-        probe.send(deadline).unwrap();
+        subscription
+            .begin(deadline, "subscriber ready")
+            .wait()
+            .unwrap();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(1)));
+        let changed = subscription.begin(deadline, "activity publication");
         feed.publish(Change::Activity);
-        let changed = received.recv_timeout(deadline.remaining());
+        let changed = changed.wait();
         let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-        probe.send(deadline).unwrap();
+        let closed = subscription.begin(deadline, "subscriber closed");
         feed.close();
-        worker.join().unwrap();
-        assert!(changed.unwrap().unwrap());
+        assert!(closed.wait().unwrap());
+        assert!(changed.unwrap());
     }
 }

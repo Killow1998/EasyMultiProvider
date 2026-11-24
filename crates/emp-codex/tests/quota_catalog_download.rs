@@ -48,7 +48,7 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
         let mut shared_usage_authenticated = false;
         let mut shared_reset_authenticated = false;
         while !stopping.load(Ordering::Acquire) {
-            let (stream, _) = match listener.accept() {
+            let (stream, _) = match emp_test_support::accept_blocking(&listener) {
                 Ok(connection) => connection,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     #[expect(

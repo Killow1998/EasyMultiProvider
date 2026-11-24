@@ -1,10 +1,7 @@
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, Observation, ObservationResult, accept_blocking, test_timeout};
 use std::io::{self, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::net::{TcpListener, TcpStream};
+use std::thread;
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -37,8 +34,7 @@ impl WebSocket {
         }
     }
 
-    fn accept(mut stream: TcpStream) -> (Self, UpstreamRequest) {
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    fn accept(stream: TcpStream, deadline: &Deadline) -> (Self, UpstreamRequest) {
         let request = read_request(&mut deadline.io(&stream));
         assert_eq!(request.method, "GET");
         assert_eq!(request.headers["upgrade"].to_ascii_lowercase(), "websocket");
@@ -49,7 +45,7 @@ impl WebSocket {
         );
         let digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, key.as_bytes());
         let accept = STANDARD.encode(digest.as_ref());
-        write!(stream,
+        write!(deadline.io(&stream),
             "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
         ).expect("upstream WS handshake");
         (
@@ -178,13 +174,12 @@ impl WebSocket {
 
 pub struct WebSocketUpstream {
     port: u16,
-    handshakes: Receiver<UpstreamRequest>,
-    turns: Receiver<Value>,
-    closed: Receiver<()>,
-    observation_deadline: Option<mpsc::Sender<Deadline>>,
-    stop: Arc<AtomicBool>,
-    socket: Arc<Mutex<Option<TcpStream>>>,
-    worker: Option<JoinHandle<()>>,
+    observation: Observation<Option<ObservedTurn>>,
+}
+
+pub struct ObservedTurn {
+    pub handshake: Option<UpstreamRequest>,
+    pub request: Value,
 }
 
 impl WebSocketUpstream {
@@ -192,20 +187,13 @@ impl WebSocketUpstream {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind WS upstream");
         let port = listener.local_addr().expect("WS upstream address").port();
         listener.set_nonblocking(true).expect("WS listener polling");
-        let (handshake_sender, handshakes) = mpsc::channel();
-        let (turn_sender, turns) = mpsc::channel();
-        let (closed_sender, closed) = mpsc::channel();
-        let (observation_deadline, deadlines) = mpsc::channel();
-        let stop = Arc::new(AtomicBool::new(false));
-        let socket = Arc::new(Mutex::new(None));
-        let worker_stop = Arc::clone(&stop);
-        let worker_socket = Arc::clone(&socket);
-        let worker = thread::spawn(move || {
+        let observation = Observation::spawn(move |probe| {
+            let Some(mut pending) = probe.next_request() else {
+                return;
+            };
             let stream = loop {
-                if worker_stop.load(Ordering::Acquire) {
-                    return;
-                }
-                match listener.accept() {
+                pending.deadline().accept((), "accept upstream WS").unwrap();
+                match accept_blocking(&listener) {
                     Ok((stream, _)) => break stream,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         #[expect(
@@ -217,92 +205,47 @@ impl WebSocketUpstream {
                     Err(error) => panic!("accept upstream WS: {error}"),
                 }
             };
-            *worker_socket.lock().expect("upstream socket") =
-                Some(stream.try_clone().expect("clone upstream socket"));
-            let (mut websocket, request) = WebSocket::accept(stream);
-            handshake_sender
-                .send(request)
-                .expect("record upstream handshake");
+            let (mut websocket, request) = WebSocket::accept(stream, pending.deadline());
+            let mut handshake = Some(request);
             for events in replies {
-                let Ok(deadline) = deadlines.recv() else {
-                    return;
-                };
-                let turn = websocket
+                let deadline = *pending.deadline();
+                let request = websocket
                     .next_json(&deadline)
                     .expect("upstream WS request")
                     .expect("upstream closed before turn");
-                turn_sender.send(turn).expect("record upstream turn");
+                pending.complete(Some(ObservedTurn {
+                    handshake: handshake.take(),
+                    request,
+                }));
                 for event in events {
                     websocket.send_json(&event, &deadline);
                 }
+                let Some(next) = probe.next_request() else {
+                    return;
+                };
+                pending = next;
             }
-            let Ok(deadline) = deadlines.recv() else {
-                return;
-            };
             assert!(
                 websocket
-                    .next_json(&deadline)
+                    .next_json(pending.deadline())
                     .expect("wait for upstream WS close")
                     .is_none(),
                 "unexpected extra WS turn"
             );
-            let _ = closed_sender.send(());
+            pending.complete(None);
         });
-        Self {
-            port,
-            handshakes,
-            turns,
-            closed,
-            observation_deadline: Some(observation_deadline),
-            stop,
-            socket,
-            worker: Some(worker),
-        }
+        Self { port, observation }
     }
 
     pub fn base_url(&self) -> String {
         format!("http://127.0.0.1:{}/v1", self.port)
     }
 
-    pub fn begin_observation(&self, deadline: &Deadline) {
-        self.observation_deadline
-            .as_ref()
-            .unwrap()
-            .send(*deadline)
-            .expect("start upstream WS observation");
-    }
-
-    pub fn handshake(&self, deadline: &Deadline) -> UpstreamRequest {
-        self.handshakes
-            .recv_timeout(deadline.remaining())
-            .expect("upstream WS handshake")
-    }
-
-    pub fn next_turn(&self, deadline: &Deadline) -> Value {
-        self.turns
-            .recv_timeout(deadline.remaining())
-            .expect("upstream WS turn")
-    }
-
-    pub fn assert_closed(&self, deadline: &Deadline) {
-        self.closed
-            .recv_timeout(deadline.remaining())
-            .expect("downstream close must close upstream WS");
-    }
-}
-
-impl Drop for WebSocketUpstream {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        drop(self.observation_deadline.take());
-        if let Some(socket) = self.socket.lock().expect("upstream socket").as_ref() {
-            let _ = socket.shutdown(Shutdown::Both);
-        }
-        if let Some(worker) = self.worker.take() {
-            let result = worker.join();
-            if !thread::panicking() {
-                result.expect("WS upstream worker");
-            }
-        }
+    pub fn begin(
+        &self,
+        deadline: Deadline,
+        context: &'static str,
+    ) -> ObservationResult<Option<ObservedTurn>> {
+        self.observation.begin(deadline, context)
     }
 }

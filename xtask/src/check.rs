@@ -6,6 +6,7 @@ mod modules;
 mod prose;
 mod test_deadlines;
 mod test_fixture_root;
+mod test_thread_observations;
 mod workflows;
 
 use crate::{Result, project_root};
@@ -33,6 +34,7 @@ pub fn run(args: &[String]) -> Result {
     cfg_test::check(&root, &paths, &mut errors)?;
     test_deadlines::check(&root, &paths, &mut errors)?;
     test_fixture_root::check(&root, &paths, &mut errors)?;
+    test_thread_observations::check(&root, &paths, &mut errors)?;
     for path in paths {
         if !root.join(&path).is_file() {
             continue;
@@ -51,7 +53,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, test-deadlines, test-socket-timeouts, test-fixture-root passed"
+            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations passed"
         );
         Ok(())
     } else {

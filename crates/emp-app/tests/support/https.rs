@@ -1,4 +1,4 @@
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, accept_blocking, test_timeout};
 use std::io::{self, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -78,7 +78,7 @@ impl HttpsProxy {
         let worker_stop = Arc::clone(&stop);
         let worker = thread::spawn(move || {
             while !worker_stop.load(Ordering::Acquire) {
-                let (stream, _) = match listener.accept() {
+                let (stream, _) = match accept_blocking(&listener) {
                     Ok(accepted) => accepted,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         #[expect(

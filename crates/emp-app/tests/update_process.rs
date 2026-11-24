@@ -4,7 +4,7 @@
 mod support;
 
 use emp_state::VaultStore;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, accept_blocking, test_timeout};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -303,7 +303,7 @@ fn release_server_with_mode(
             FakeReleaseMode::TemporaryPackageError => 6,
         };
         while handled < expected_requests && !deadline.is_expired() {
-            let (stream, _) = match listener.accept() {
+            let (stream, _) = match accept_blocking(&listener) {
                 Ok(connection) => connection,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     #[expect(

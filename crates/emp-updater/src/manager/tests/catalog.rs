@@ -1,7 +1,7 @@
 //! Cache persistence and HTTP validators through the real updater client.
 use super::*;
 use crate::release::MAX_RELEASE_BYTES;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, accept_blocking, test_timeout};
 
 fn release(base: &str, notes: &str) -> String {
     let name = crate::release::current_asset_name().unwrap();
@@ -57,7 +57,7 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
         let deadline = Deadline::after(test_timeout(Duration::from_secs(12)));
         for (status, etag, body, expected) in responses {
             let stream = loop {
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((stream, _)) => {
                         break deadline.accept(stream, "release check arrived").unwrap();
                     }

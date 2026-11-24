@@ -17,7 +17,7 @@ pub(super) fn spawn(
                     !deadline.is_expired(),
                     "image fixture upstream deadline at stage {stage}"
                 );
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((socket, _)) => {
                         break deadline
                             .accept(socket, "fixture accepted upstream connection")

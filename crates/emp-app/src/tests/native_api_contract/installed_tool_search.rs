@@ -48,7 +48,7 @@ fn tool_search(protocol: &'static str, native: bool, websocket: bool) {
             let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
             let mut socket = loop {
                 assert!(!deadline.is_expired(), "Tool Search upstream deadline");
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((socket, _)) => {
                         break deadline
                             .accept(socket, "fixture accepted upstream connection")

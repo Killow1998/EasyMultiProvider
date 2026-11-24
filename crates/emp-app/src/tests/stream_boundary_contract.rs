@@ -180,10 +180,12 @@ fn streaming_flushes_before_upstream_eof() {
 fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream");
     let address = listener.local_addr().expect("upstream address");
-    let (head_sent, head_ready) = mpsc::sync_channel(1);
-    let (probe, cancelled) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept upstream");
+    listener.set_nonblocking(true).unwrap();
+    let observation = Observation::spawn(move |probe| {
+        let Some(dispatch) = probe.next_request() else {
+            return;
+        };
+        let mut stream = accept_before(&listener, dispatch.deadline());
         let _ = receive_upstream_request(&mut stream);
         stream
             .write_all(
@@ -191,10 +193,8 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
             )
             .expect("write upstream response head");
         stream.flush().expect("flush upstream response head");
-        head_sent.send(()).expect("announce upstream head");
-        report_cancellation(&cancelled, |deadline| {
-            upstream_closed_before(&stream, deadline)
-        });
+        dispatch.complete(true);
+        probe.observe(|deadline| upstream_closed_before(&stream, deadline));
     });
     let (_directory, server) = configured_server(&format!("http://{address}/v1"));
     let body = serde_json::to_vec(&json!({
@@ -202,18 +202,21 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
         "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
     }))
     .expect("request JSON");
+    let dispatched = observation.begin(
+        Deadline::after(test_timeout(Duration::from_secs(2))),
+        "upstream response head",
+    );
     let downstream = open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
-    head_ready
-        .recv_timeout(test_timeout(Duration::from_secs(2)))
-        .expect("upstream response head");
+    assert!(dispatched.wait().unwrap());
     let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
+    let cancellation = observation.begin(deadline, "upstream cancellation");
     drop(downstream);
     assert!(
-        wait_for_cancellation(&probe, &deadline),
+        cancellation.wait().unwrap(),
         "EMP kept the upstream stream open after its downstream disconnected"
     );
     server.shutdown().expect("shutdown");
-    worker.join().expect("join upstream");
+    drop(observation);
 }
 
 #[test]

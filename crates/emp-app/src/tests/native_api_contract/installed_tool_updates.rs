@@ -40,7 +40,7 @@ fn switch_and_resume(protocol: &'static str) {
             let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
             let mut socket = loop {
                 assert!(!deadline.is_expired(), "revision request deadline");
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((socket, _)) => {
                         break deadline
                             .accept(socket, "fixture accepted upstream connection")

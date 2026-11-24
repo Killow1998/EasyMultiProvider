@@ -344,7 +344,7 @@ fn accept(listener: &TcpListener) -> TcpStream {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     loop {
         assert!(!deadline.is_expired(), "upstream accept deadline");
-        match listener.accept() {
+        match accept_blocking(listener) {
             Ok((socket, _)) => return deadline.accept(socket, "upstream accept").unwrap(),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 #[expect(

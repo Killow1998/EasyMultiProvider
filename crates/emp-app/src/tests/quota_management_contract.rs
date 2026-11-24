@@ -124,15 +124,15 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
         read_sse_frame(&mut streams[0]),
         "event: quota-updated\ndata: {}\n"
     );
-    set_sse_deadline(
-        &mut streams[0],
-        &Deadline::after(test_timeout(Duration::from_secs(5))),
-    );
+    deadline.accept((), "second quota notification").unwrap();
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    set_sse_deadline(&mut streams[0], &deadline);
     server.shutdown().expect("shutdown");
     let mut tail = Vec::new();
     streams[0]
         .read_to_end(&mut tail)
         .expect("quota stream closes during shutdown");
+    deadline.accept((), "quota stream EOF").unwrap();
 }
 
 #[cfg(unix)]

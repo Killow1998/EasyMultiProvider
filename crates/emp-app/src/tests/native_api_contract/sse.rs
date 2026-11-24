@@ -58,8 +58,8 @@ impl Drop for NativeErrorSseUpstream {
     }
 }
 
-fn read_native_sse(input: impl BufRead) -> (String, Vec<String>) {
-    let (head, mut stream) = read_sse_head(input);
+fn read_native_sse(input: impl BufRead, deadline: &Deadline) -> (String, Vec<String>) {
+    let (head, mut stream) = read_sse_head(input, deadline);
     assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
     let mut frames = Vec::new();
     while !stream.fill_buf().unwrap().is_empty() {
@@ -69,10 +69,9 @@ fn read_native_sse(input: impl BufRead) -> (String, Vec<String>) {
 }
 
 fn post_native_sse(server: &ServerHandle, body: &[u8], headers: &[&str]) -> (String, Vec<String>) {
+    let deadline = Deadline::after(response_timeout());
     let stream = open_post_stream(server, "/v1/responses", body, headers);
-    read_native_sse(BufReader::new(
-        Deadline::after(response_timeout()).io(stream),
-    ))
+    read_native_sse(BufReader::new(deadline.io(stream)), &deadline)
 }
 
 fn incomplete_sse_event(frames: &[String]) -> Value {
@@ -97,7 +96,10 @@ fn native_sse_finds_terminal_json_split_across_http_chunks() {
         wire.extend_from_slice(b"\r\n");
     }
     wire.extend_from_slice(b"0\r\n\r\n");
-    let (_, frames) = read_native_sse(std::io::Cursor::new(wire));
+    let (_, frames) = read_native_sse(
+        std::io::Cursor::new(wire),
+        &Deadline::after(response_timeout()),
+    );
     let decoded = incomplete_sse_event(&frames);
     assert_eq!(decoded["response"]["usage"]["input_tokens"], 17);
 }
@@ -235,7 +237,8 @@ fn native_sse_context_and_incomplete_boundaries_match_codex_http_behavior() {
         let status: u16 = response.split_whitespace().nth(1).unwrap().parse().unwrap();
         assert_eq!(status, expected, "{name}: {response}");
         if streamed {
-            let (_, frames) = read_native_sse(response.as_bytes());
+            let (_, frames) =
+                read_native_sse(response.as_bytes(), &Deadline::after(response_timeout()));
             assert!(
                 frames
                     .iter()
@@ -295,15 +298,15 @@ fn native_sse_retry_headers_survive_pre_output_http_conversion() {
 fn native_sse_downstream_disconnect_cancels_open_before_headers() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
-    let (request_sender, request_received) = mpsc::sync_channel(1);
-    let (probe, cancelled) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let observation = Observation::spawn(move |probe| {
+        let Some(dispatch) = probe.next_request() else {
+            return;
+        };
+        let mut stream = accept_before(&listener, dispatch.deadline());
         let _ = receive_native_request(&mut stream);
-        request_sender.send(()).unwrap();
-        report_cancellation(&cancelled, |deadline| {
-            upstream_closed_before(&stream, deadline)
-        });
+        dispatch.complete(true);
+        probe.observe(|deadline| upstream_closed_before(&stream, deadline));
     });
     let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
     let cookie = session_header(&server);
@@ -311,33 +314,38 @@ fn native_sse_downstream_disconnect_cancels_open_before_headers() {
         "model":"native/alias", "input":"hello", "stream":true
     }))
     .unwrap();
+    let dispatched = observation.begin(
+        Deadline::after(test_timeout(Duration::from_secs(2))),
+        "upstream request ready",
+    );
     let downstream = open_post_stream(
         &server,
         "/v1/responses",
         &body,
         &[&cookie, "Authorization: Bearer caller"],
     );
-    request_received
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap();
+    assert!(dispatched.wait().unwrap());
     let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
+    let cancellation = observation.begin(deadline, "upstream cancellation");
     drop(downstream);
     assert!(
-        wait_for_cancellation(&probe, &deadline),
+        cancellation.wait().unwrap(),
         "Rust EMP retained native upstream while open_stream awaited response headers"
     );
     server.shutdown().unwrap();
-    worker.join().unwrap();
+    drop(observation);
 }
 
 #[test]
 fn native_sse_downstream_disconnect_cancels_upstream() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
-    let (head_sender, head_ready) = mpsc::sync_channel(1);
-    let (probe, cancelled) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let observation = Observation::spawn(move |probe| {
+        let Some(dispatch) = probe.next_request() else {
+            return;
+        };
+        let mut stream = accept_before(&listener, dispatch.deadline());
         let _ = receive_native_request(&mut stream);
         stream
             .write_all(
@@ -345,30 +353,33 @@ fn native_sse_downstream_disconnect_cancels_upstream() {
             )
             .unwrap();
         stream.flush().unwrap();
-        head_sender.send(()).unwrap();
-        report_cancellation(&cancelled, |deadline| {
-            upstream_closed_before(&stream, deadline)
-        });
+        dispatch.complete(true);
+        probe.observe(|deadline| upstream_closed_before(&stream, deadline));
     });
     let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
     let cookie = session_header(&server);
     let body =
         serde_json::to_vec(&json!({"model":"native/alias","input":"hello","stream":true})).unwrap();
+    let dispatched = observation.begin(
+        Deadline::after(test_timeout(Duration::from_secs(2))),
+        "upstream request ready",
+    );
     let downstream = open_post_stream(
         &server,
         "/v1/responses",
         &body,
         &[&cookie, "Authorization: Bearer caller"],
     );
-    head_ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(dispatched.wait().unwrap());
     let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
+    let cancellation = observation.begin(deadline, "upstream cancellation");
     drop(downstream);
     assert!(
-        wait_for_cancellation(&probe, &deadline),
+        cancellation.wait().unwrap(),
         "Rust EMP retained native upstream after Codex disconnected"
     );
     server.shutdown().unwrap();
-    worker.join().unwrap();
+    drop(observation);
 }
 
 #[test]

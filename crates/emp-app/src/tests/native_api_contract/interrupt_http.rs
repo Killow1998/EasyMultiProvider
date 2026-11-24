@@ -41,35 +41,31 @@ fn event_before(
     Err(format!("waiting for {kind}, last event {last_event}"))
 }
 
+fn interrupt_and_observe(
+    client: &mut ClientWebSocket,
+    interrupt: &Value,
+    upstream: &Observation<bool>,
+) -> (Result<Value, String>, std::io::Result<bool>) {
+    let upstream_deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
+    let downstream_deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let cancellation = upstream.begin(upstream_deadline, "HTTP upstream cancellation");
+    client.send_json(interrupt).unwrap();
+    let receipt = event_before(client, "response.incomplete", &downstream_deadline);
+    (receipt, cancellation.wait())
+}
+
 #[test]
 fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn() {
     for native in [false, true] {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
-        let (probe, cancelled) = mpsc::channel();
-        let worker = thread::spawn(move || {
-            let accept = || {
-                let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-                loop {
-                    assert!(!deadline.is_expired(), "upstream request did not arrive");
-                    match listener.accept() {
-                        Ok((socket, _)) => {
-                            return deadline.accept(socket, "upstream accept").unwrap();
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            #[expect(
-                                clippy::disallowed_methods,
-                                reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
-                            )]
-                            thread::sleep(Duration::from_millis(5));
-                        }
-                        Err(error) => panic!("{error}"),
-                    }
-                }
+        let upstream = Observation::spawn(move |probe| {
+            let Some(dispatch) = probe.next_request() else {
+                return;
             };
             if native {
-                let mut socket = accept();
+                let mut socket = accept_before(&listener, dispatch.deadline());
                 let raw = read_request_head(&mut socket).unwrap();
                 assert!(
                     parse_request(&raw.head)
@@ -79,8 +75,12 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
                 );
                 socket.write_all(b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
             }
+            let mut first = Some(dispatch);
             for (index, id) in ["resp_steer", "resp_after"].iter().enumerate() {
-                let mut socket = accept();
+                let Some(dispatch) = first.take().or_else(|| probe.next_request()) else {
+                    return;
+                };
+                let mut socket = accept_before(&listener, dispatch.deadline());
                 let request = receive_native_request(&mut socket);
                 assert_eq!(
                     request.body["input"],
@@ -90,10 +90,9 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
                 socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
                 write!(socket, "data: {}\n\n", json!({"type":"response.created", "response":{"id":id,"status":"in_progress","model":"upstream"}})).unwrap();
                 socket.flush().unwrap();
+                dispatch.complete(true);
                 if index == 0 {
-                    report_cancellation(&cancelled, |deadline| {
-                        upstream_closed_before(&socket, deadline)
-                    });
+                    probe.observe(|deadline| upstream_closed_before(&socket, deadline));
                 } else {
                     write!(socket, "data: {}\n\n", json!({"type":"response.completed", "response":{"id":id,"status":"completed","model":"upstream","output":[]}})).unwrap();
                     socket.flush().unwrap();
@@ -126,6 +125,10 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             Duration::from_secs(5),
         )
         .unwrap();
+        let first = upstream.begin(
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+            "first interrupt fixture request",
+        );
         client
             .send_json(&json!({"type":"response.create","model":model,"input":"first"}))
             .unwrap();
@@ -133,18 +136,14 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             event(&mut client, "response.created")["response"]["id"],
             "resp_steer"
         );
+        assert!(first.wait().unwrap());
         client.send_json(&json!({"type":"response.interrupt","response_id":"someone_else","mode":"discard_partial_items"})).unwrap();
         assert_eq!(
             event(&mut client, "error")["error"]["code"],
             "invalid_request"
         );
         let interrupt = json!({"type":"response.interrupt","response_id":"resp_steer","mode":"discard_partial_items"});
-        let upstream_deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
-        let downstream_deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-        let cancellation = start_cancellation_probe(&probe, upstream_deadline);
-        client.send_json(&interrupt).unwrap();
-        let receipt = event_before(&mut client, "response.incomplete", &downstream_deadline);
-        let closed = cancellation.wait();
+        let (receipt, closed) = interrupt_and_observe(&mut client, &interrupt, &upstream);
         let incomplete = receipt.unwrap_or_else(|error| {
             panic!("interrupt receipt: {error}; upstream cancellation: {closed:?}")
         });
@@ -171,6 +170,10 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             "previous_response_not_found"
         );
         client.send_json(&interrupt).unwrap(); // late control, then prefetched next frame.
+        let next = upstream.begin(
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+            "next interrupt fixture request",
+        );
         client
             .send_json(&json!({"type":"response.create","model":model,"input":"after"}))
             .unwrap();
@@ -178,6 +181,7 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             event(&mut client, "response.completed")["response"]["id"],
             if native { "resp_after" } else { "" }
         );
+        assert!(next.wait().unwrap());
         if !native {
             client.send_json(&json!({"type":"response.interrupt","response_id":"resp_after","mode":"discard_partial_items"})).unwrap();
             client
@@ -192,37 +196,56 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
         }
         client.close();
         server.shutdown().unwrap();
-        worker.join().unwrap();
+        drop(upstream);
     }
 }
 
-#[tokio::test]
-async fn interrupt_can_collect_an_on_time_upstream_close_after_a_later_receipt() {
+#[test]
+fn interrupt_can_collect_an_on_time_upstream_close_after_a_later_receipt() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (upstream, _) = listener.accept().unwrap();
-    let (probe, cancelled) = mpsc::channel();
-    let worker = tokio::task::spawn_blocking(move || {
-        report_cancellation(&cancelled, |deadline| {
-            upstream_closed_before(&upstream, deadline)
-        });
+    let http_client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (http_upstream, _) = listener.accept().unwrap();
+    let observation = Observation::spawn(move |probe| {
+        probe.observe(|deadline| upstream_closed_before(&http_upstream, deadline));
     });
-    let upstream_deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
-    let downstream_deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-    let cancellation = start_cancellation_probe(&probe, upstream_deadline);
-    let ((), receipt) = tokio::join!(
-        async {
-            tokio::time::sleep(test_timeout(Duration::from_secs(1))).await;
-            drop(client);
-        },
-        async {
-            tokio::time::sleep(test_timeout(Duration::from_secs(3))).await;
-            downstream_deadline.accept("response.incomplete", "interrupt receipt")
-        }
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = thread::spawn(move || {
+        let stream = super::interrupt::complete_upgrade(listener.accept().unwrap().0);
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let mut io = deadline.io(&stream);
+        let mut socket = WebSocketConnection::new(&mut io);
+        assert_eq!(
+            upstream_websocket_request(&mut socket, &deadline)["type"],
+            "response.interrupt"
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let start = tokio::time::Instant::now();
+            tokio::time::sleep_until(start + test_timeout(Duration::from_secs(1))).await;
+            drop(http_client);
+            tokio::time::sleep_until(start + test_timeout(Duration::from_secs(3))).await;
+        });
+        socket
+            .send_json(&json!({"type":"response.incomplete"}))
+            .unwrap();
+    });
+    let mut client = ClientWebSocket::connect(
+        &format!("ws://{address}/v1/responses"),
+        &BTreeMap::new(),
+        test_timeout(Duration::from_secs(5)),
+    )
+    .unwrap();
+    let (receipt, closed) = interrupt_and_observe(
+        &mut client,
+        &json!({"type":"response.interrupt"}),
+        &observation,
     );
-    assert!(upstream_deadline.is_expired());
-    let closed = cancellation.wait();
-    assert_eq!(receipt.unwrap(), "response.incomplete");
+    assert_eq!(receipt.unwrap()["type"], "response.incomplete");
     assert!(closed.unwrap());
-    worker.await.unwrap();
+    peer.join().unwrap();
 }

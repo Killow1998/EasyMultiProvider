@@ -1,4 +1,4 @@
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, Observation, ObservationResult, test_timeout};
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -31,59 +31,33 @@ struct Reply {
 struct GatedReply {
     tail: Option<Vec<u8>>,
     released: Mutex<Receiver<()>>,
-    closed: Option<Sender<()>>,
+    observe_socket: Option<Sender<TcpStream>>,
 }
 
 impl GatedReply {
     fn wait_for_tail(&self, stream: &TcpStream) -> bool {
-        let released = self.released.lock().expect("stream gate");
-        let Some(closed) = &self.closed else {
-            return released.recv().is_ok();
-        };
-        let poll_interval = test_timeout(Duration::from_millis(25));
-        loop {
-            match released.try_recv() {
-                Ok(()) => return true,
-                Err(mpsc::TryRecvError::Disconnected) => return false,
-                Err(mpsc::TryRecvError::Empty) => {}
-            }
-            match Deadline::after(poll_interval).io(stream).read(&mut [0]) {
-                Ok(0) => {}
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
-                    ) => {}
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    continue;
-                }
-                result => panic!("unexpected bytes/error on gated upstream: {result:?}"),
-            }
-            let _ = closed.send(());
-            return false;
+        if let Some(probe) = &self.observe_socket {
+            let _ = probe.send(stream.try_clone().expect("clone gated upstream socket"));
         }
+        self.released.lock().expect("stream gate").recv().is_ok()
     }
 }
 
 pub struct StreamGate {
     release: Sender<()>,
-    closed: Receiver<()>,
+    observation: Observation<()>,
 }
 
 impl StreamGate {
-    pub fn finish(&self) {
+    pub fn finish(self) {
         self.release.send(()).expect("release upstream tail");
     }
 
-    pub fn assert_closed(&self) {
-        self.closed
-            .recv_timeout(test_timeout(Duration::from_secs(5)))
-            .expect("EMP must close the upstream while its tail is still gated");
+    pub fn observe_close(&self, deadline: Deadline) -> ObservationResult<()> {
+        self.observation.begin(
+            deadline,
+            "EMP must close the upstream while its tail is still gated",
+        )
     }
 }
 
@@ -166,9 +140,28 @@ impl Upstream {
     }
 
     pub fn gate_stream(&self, first: String, tail: Option<String>) -> StreamGate {
-        let (closed_sender, closed) = mpsc::channel();
-        let release = self.configure_gated_stream(first, tail, Some(closed_sender));
-        StreamGate { release, closed }
+        let (socket, sockets) = mpsc::channel();
+        let release = self.configure_gated_stream(first, tail, Some(socket));
+        let observation = Observation::spawn(move |probe| {
+            probe.observe(|deadline| {
+                let stream = sockets
+                    .recv_timeout(deadline.remaining())
+                    .expect("gated upstream socket");
+                match deadline.io(stream).peek(&mut [0]) {
+                    Ok(0) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                        ) => {}
+                    result => panic!("upstream did not close while gated: {result:?}"),
+                }
+            });
+        });
+        StreamGate {
+            release,
+            observation,
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -180,14 +173,14 @@ impl Upstream {
         &self,
         first: String,
         tail: Option<String>,
-        closed: Option<Sender<()>>,
+        observe_socket: Option<Sender<TcpStream>>,
     ) -> Sender<()> {
         self.configure(200, "text/event-stream", first);
         let (release, released) = mpsc::channel();
         self.reply.lock().expect("reply").gate = Some(Arc::new(GatedReply {
             tail: tail.map(String::into_bytes),
             released: Mutex::new(released),
-            closed,
+            observe_socket,
         }));
         release
     }

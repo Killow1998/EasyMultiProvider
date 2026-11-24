@@ -1,7 +1,7 @@
 //! Real HTTP failures exercise the same retry path as the packaged updater.
 use super::*;
 use crate::{UpdateError, download::download_package, release::Asset};
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, accept_blocking, test_timeout};
 use sha2::{Digest, Sha256};
 
 pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) -> usize {
@@ -10,7 +10,7 @@ pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) ->
     for response in responses {
         let deadline = Deadline::after(test_timeout(Duration::from_secs(12)));
         let stream = loop {
-            match listener.accept() {
+            match accept_blocking(&listener) {
                 Ok((stream, _)) => {
                     break deadline.accept(stream, "updater request arrived").unwrap();
                 }

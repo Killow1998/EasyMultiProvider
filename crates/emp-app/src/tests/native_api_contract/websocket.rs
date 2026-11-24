@@ -142,10 +142,12 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
 fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
-    let (request_sender, request_ready) = mpsc::sync_channel::<()>(1);
-    let (probe, cancelled) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        let (mut upstream, _) = listener.accept().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let observation = Observation::spawn(move |probe| {
+        let Some(dispatch) = probe.next_request() else {
+            return;
+        };
+        let mut upstream = accept_before(&listener, dispatch.deadline());
         let raw = read_request_head(&mut upstream).unwrap();
         let request = parse_request(&raw.head).unwrap();
         assert_eq!(request.raw_path(), "/v1/responses");
@@ -154,26 +156,24 @@ fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() 
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(0);
         let mut body = raw.body_prefix;
+        let mut io = dispatch.deadline().io(&upstream);
         while body.len() < length {
             let mut buffer = [0_u8; 4096];
-            let count = upstream.read(&mut buffer).unwrap();
+            let count = io.read(&mut buffer).unwrap();
             assert_ne!(count, 0, "external request body ended early");
             body.extend_from_slice(&buffer[..count]);
         }
-        upstream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
-            )
-            .unwrap();
-        upstream.flush().unwrap();
-        upstream
+        io.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+        )
+        .unwrap();
+        io.flush().unwrap();
+        io
             .write_all(b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ws\",\"status\":\"in_progress\",\"model\":\"upstream\"}}\n\n")
             .unwrap();
-        upstream.flush().unwrap();
-        request_sender.send(()).unwrap();
-        report_cancellation(&cancelled, |deadline| {
-            upstream_closed_before(&upstream, deadline)
-        });
+        io.flush().unwrap();
+        dispatch.complete(true);
+        probe.observe(|deadline| upstream_closed_before(&upstream, deadline));
     });
     let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
@@ -200,6 +200,10 @@ fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() 
     request.extend_from_slice(&masked_websocket_text(
         &json!({"type":"response.create","model":"demo/model","input":"hello"}),
     ));
+    let dispatched = observation.begin(
+        Deadline::after(test_timeout(Duration::from_secs(2))),
+        "upstream request ready",
+    );
     stream.write_all(&request).unwrap();
     stream.flush().unwrap();
     let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
@@ -222,17 +226,16 @@ fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() 
         receive_websocket_json(&mut stream)["type"],
         "response.created"
     );
-    request_ready
-        .recv_timeout(test_timeout(Duration::from_secs(2)))
-        .unwrap();
+    assert!(dispatched.wait().unwrap());
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let cancellation = observation.begin(deadline, "upstream cancellation");
     drop(stream);
     assert!(
-        wait_for_cancellation(&probe, &deadline),
+        cancellation.wait().unwrap(),
         "EMP retained the external HTTP stream after the websocket client disconnected"
     );
     server.shutdown().unwrap();
-    worker.join().unwrap();
+    drop(observation);
 }
 
 #[test]
