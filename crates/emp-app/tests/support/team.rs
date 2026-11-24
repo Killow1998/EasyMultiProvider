@@ -14,7 +14,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
 pub const PASSWORD: &str = "team-e2e-password";
-pub const MODEL: &str = "team-fixture-model";
+pub const SHARED_MODEL: &str = "team-shared-fixture-model";
+const PERSONAL_MODEL: &str = "team-personal-fixture-model";
 
 pub fn poll<T>(description: &str, observe: impl FnMut() -> Option<T>) -> T {
     eventually(Duration::from_secs(30), description, observe)
@@ -193,8 +194,15 @@ impl TeamRelay {
                     let (line, headers, body) = super::http::read_message(&mut stream, false);
                     let method = line.split_whitespace().next().expect("Team HTTP method");
                     let path = line.split_whitespace().nth(1).expect("Team HTTP path");
-                    if method == "GET" && path.starts_with("/v1/models") {
-                        let catalog = catalog().to_string();
+                    if method == "GET" && path.split('?').next() == Some("/v1/models") {
+                        let model = if headers.get("chatgpt-account-id").map(String::as_str)
+                            == Some("m03-subscription")
+                        {
+                            SHARED_MODEL
+                        } else {
+                            PERSONAL_MODEL
+                        };
+                        let catalog = catalog(model).to_string();
                         write!(
                             stream,
                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{catalog}",
@@ -352,8 +360,8 @@ pub fn report(emp: &Emp, path: &str) -> Value {
     response.json()
 }
 
-fn catalog() -> Value {
-    json!({"models":[{"slug":MODEL,"display_name":"M03 fixture", "supported_in_api":true,
+fn catalog(model: &str) -> Value {
+    json!({"models":[{"slug":model,"display_name":"M03 fixture", "supported_in_api":true,
         "visibility":"list","context_window":256000}]})
 }
 
@@ -406,8 +414,16 @@ impl Team {
                 "auto_enable_on_start":false,"account_store_path":workspace.root.join("accounts"),
                 "providers":[{"id":"personal","name":"Personal API","base_url":fixture.personal.base_url(),
                     "protocol":"responses","auth_mode":"api_key","api_key":"m03-personal-key"}],
-                "models":[{"id":"personal/model","provider":"personal","upstream_id":MODEL,"enabled":true}]}));
-            write_file(&workspace.root.join("native.json"), &catalog().to_string());
+                "models":[{"id":"personal/model","provider":"personal","upstream_id":PERSONAL_MODEL,"enabled":true}]}));
+            let model = if index == 0 {
+                SHARED_MODEL
+            } else {
+                PERSONAL_MODEL
+            };
+            write_file(
+                &workspace.root.join("native.json"),
+                &catalog(model).to_string(),
+            );
             if index == 0 {
                 write_file(
                     &workspace.codex_home.join("auth.json"),
@@ -510,24 +526,50 @@ impl Team {
             .find(|row| row["id"] == id)
             .expect("shared account");
         let prefix = account["prefix"].as_str().expect("shared route prefix");
-        let route = format!("{prefix}/{MODEL}");
+        let route = format!("{prefix}/{SHARED_MODEL}");
+        let auth = json!({"tokens":{
+            "access_token":self.token,"account_id":"m03-subscription"
+        }});
+        let headers = emp_codex::account_auth_headers(&auth).expect("catalog owner headers");
+        let mut cached = catalog(SHARED_MODEL);
+        cached["account_owner"] = json!(emp_codex::native_catalog_owner(&headers));
+        cached["base_url"] = json!(format!("{}/v1", self.relay.base()));
+        write_file(
+            &self.workspaces[1]
+                .root
+                .join("accounts")
+                .join(id)
+                .join("models_cache.json"),
+            &cached.to_string(),
+        );
+        self.assert_shared_model_listed(true);
+        route
+    }
+
+    pub fn assert_shared_model_listed(&self, expected: bool) {
+        let model = format!("manager/{SHARED_MODEL}");
         let listed = self.devices[1].codex("GET", "/v1/models", None);
         assert_eq!(listed.status, 200, "{}", listed.text());
-        assert!(
+        assert_eq!(
             listed.json()["data"]
                 .as_array()
                 .expect("models")
                 .iter()
-                .any(|row| row["id"] == MODEL),
-            "shared subscription model missing from the pooled catalog: {}",
+                .any(|row| row["id"] == model),
+            expected,
+            "shared subscription model {model} visibility: {}",
             listed.text()
         );
-        route
     }
 
     pub fn call(&self, device: usize, route: &str, id: &str, upstream: &Upstream) -> String {
+        let model = if route == "personal/model" {
+            PERSONAL_MODEL
+        } else {
+            SHARED_MODEL
+        };
         upstream.reply_json(&json!({"id":id,"object":"response",
-            "status":"completed","model":MODEL,"output":[],
+            "status":"completed","model":model,"output":[],
             "usage":{"input_tokens":7,"output_tokens":3,"total_tokens":10}}));
         let token = if device == 0 {
             &self.token
@@ -551,7 +593,7 @@ impl Team {
         assert_eq!(response.json()["id"], id);
         let forwarded = upstream.next_forwarded();
         assert_eq!(forwarded.path, "/v1/responses");
-        assert_eq!(forwarded.body.expect("forwarded JSON")["model"], MODEL);
+        assert_eq!(forwarded.body.expect("forwarded JSON")["model"], model);
         assert_eq!(
             forwarded.headers["authorization"],
             if route == "personal/model" {
@@ -571,12 +613,12 @@ impl Team {
         self.subscription.assert_idle();
         let first = [
             json!({"type":"response.created","response":{"id":id,"object":"response",
-                "status":"in_progress","model":MODEL,"output":[]}}),
+                "status":"in_progress","model":SHARED_MODEL,"output":[]}}),
             json!({"type":"response.output_text.delta","item_id":"msg_team",
                 "output_index":0,"content_index":0,"delta":"M03 visible"}),
         ];
         let tail = json!({"type":"response.completed","response":{"id":id,"object":"response",
-            "status":"completed","model":MODEL,"output":[{
+            "status":"completed","model":SHARED_MODEL,"output":[{
                 "id":"msg_team","type":"message","role":"assistant","status":"completed",
                 "content":[{"type":"output_text","text":"M03 visible","annotations":[]}]}],
             "usage":{"input_tokens":7,"output_tokens":3,"total_tokens":10}}});

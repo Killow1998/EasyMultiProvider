@@ -1,8 +1,46 @@
 use super::*;
+use crate::sessions::repair::{REPAIR_DIRECTORY, inventory, paths::RolloutPaths, planning, tests};
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 const THREAD_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+#[test]
+fn commit_rejects_history_appended_after_planning() {
+    let fixture = tests::fixture(false, false, false);
+    let home = inventory::canonical_home(&fixture.home).unwrap();
+    let repair_root = home.join(REPAIR_DIRECTORY);
+    fs::create_dir_all(&repair_root).unwrap();
+    let info = inventory::threads(&home, Some(tests::PARENT_ID))
+        .unwrap()
+        .unwrap()
+        .remove(0);
+    let paths = RolloutPaths::new(&home).unwrap();
+    let workspace = RepairWorkspace::begin(&home, &repair_root).unwrap();
+    let (rewrite, converted) =
+        planning::plan_rewrite(&paths, &workspace.path().join("workspace"), &info)
+            .unwrap()
+            .unwrap();
+    let appended = b"{\"ordinal\":18,\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_name_updated\",\"name\":\"keep newer history\"}}\n";
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.parent_path)
+        .unwrap()
+        .write_all(appended)
+        .unwrap();
+
+    let error = workspace
+        .apply_rewrites(vec![rewrite], converted)
+        .unwrap_err();
+
+    assert_eq!(error.reason(), "repair_stale_snapshot");
+    assert_eq!(
+        fs::read(&fixture.parent_path).unwrap(),
+        [fixture.parent_plain.as_slice(), appended].concat()
+    );
+    assert_eq!(fs::read_dir(repair_root).unwrap().count(), 0);
+}
 
 struct Fixture {
     _temporary: tempfile::TempDir,

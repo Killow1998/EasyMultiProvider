@@ -105,6 +105,10 @@ history repair is a separate operation. `previous_response_id` is transport
 continuity, not permission to reconstruct history. Explicit thread identity is
 distinct from the `session-id` cache-affinity key, and WebSocket turn metadata
 comes from the current request rather than stale handshake metadata.
+Without explicit thread identity, EMP uses `session-id` to locate history only
+when the `version` header identifies a stable Codex 0.x release at or below
+`0.154.0`. If the version is missing, unrecognized, a prerelease, or above the
+cutoff, `session-id` alone leaves the history thread unidentified.
 
 Destination compaction preserves the active request and complete tool pairs,
 retains the newest complete history units and summarizes only older visible
@@ -209,6 +213,10 @@ reported with the remaining directory. Contracts live in
 | `services/quota/commands` | Validate account → hold existing account lock → read quota, or explicitly reset then read quota | Reset outcome (`reset`, no credit, nothing to reset, already redeemed) and follow-up read are separate. A failed follow-up read does not cause another reset. |
 | `services/integration/commands` | Confirm → temporarily drain admission for restore → hold operation lock → convert coordinated idle EMP history with backups → restore search/configuration → runtime observation → summary → reopen admission | Busy or unreadable history is counted as skipped; it does not create a pending-conversion notice. Confirmed EMP checkpoints awaiting conversion retain the native WebUI action. Each normal restore checks idle history again. Runtime observation failure does not undo a committed restore. Only Quit EMP requests process exit. |
 | `services/shutdown` | Check update and active-work constraints → restore owned integration → verify native configuration → return readiness | An applied or unresolved previous listener lease keeps EMP running. Readiness is not proof of process exit, client receipt or desktop recovery. HTTP, tray and lifecycle owners perform delivery and stopping. |
+
+During Claude CLI startup, slash commands may still be unregistered when
+`prompts/list` returns. Wait for terminal autocomplete to confirm the command
+before sending Enter.
 
 Desktop menus live in `src/tray`, with separate StatusNotifier, Windows and
 AppKit adapters. Both mouse buttons open the same three-item menu. The

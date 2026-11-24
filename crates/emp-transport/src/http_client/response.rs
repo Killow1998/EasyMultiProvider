@@ -19,6 +19,7 @@ pub struct HttpResponse {
     headers: HeaderMap,
     timeout_policy: TimeoutPolicy,
     non_stream_deadline: Instant,
+    stream: bool,
     output_emitted: bool,
 }
 
@@ -28,6 +29,7 @@ impl fmt::Debug for HttpResponse {
             .debug_struct("HttpResponse")
             .field("status", &self.status.as_u16())
             .field("header_names", &self.headers.keys().collect::<Vec<_>>())
+            .field("stream", &self.stream)
             .field("output_emitted", &self.output_emitted)
             .finish_non_exhaustive()
     }
@@ -41,6 +43,7 @@ impl HttpResponse {
             response: Some(response),
             timeout_policy: plan.timeout_policy,
             non_stream_deadline: plan.timeout_policy.non_stream_deadline(started_at),
+            stream: plan.stream,
             output_emitted: false,
         }
     }

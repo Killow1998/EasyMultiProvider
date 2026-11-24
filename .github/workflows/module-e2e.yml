@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           python3 -m venv "$RUNNER_TEMP/aero-packager"
-          "$RUNNER_TEMP/aero-packager/bin/python" -m pip install "pyinstaller==6.11.1"
+          "$RUNNER_TEMP/aero-packager/bin/python" -m pip install "pyinstaller==6.22.3"
           printf 'EMP_AERO_PYTHON=%s\n' "$RUNNER_TEMP/aero-packager/bin/python" >> "$GITHUB_ENV"
           path="$(cd "$RUNNER_TEMP" && pwd -P)/emp-modules"
           mkdir -p "$path"

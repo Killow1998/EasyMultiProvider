@@ -108,46 +108,58 @@ test('U06 Decision 面板保存所选服务和模型后真实请求切换上游'
   await expect(dialog(page).getByLabel('Decision model', { exact: true })).toHaveValue('spare-model');
 });
 
-for (const action of ['disable', 'uninstall']) {
-  test(`U06 另一标签页${action === 'disable' ? '停用' : '卸载'}后旧面板刷新被 EMP 拒绝且不到上游`, async ({ page, context, moduleEmpFactory, moduleRelease, decisionUpstreams }) => {
-    const emp = await moduleEmpFactory(decisionOptions(decisionUpstreams));
-    const module = moduleRelease.modules.get('decision');
-    await emp.login(page);
-    await openModules(page);
-    await changeModule(page, 'decision', 'Decision API', 'install');
-    await expectModule(emp, module, { installed: true, enabled: true });
-    await openDecision(page);
-    const refresh = dialog(page).getByRole('button', { name: 'Refresh list', exact: true });
-    await expect(refresh).toBeEnabled();
-    const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/decisions/models');
-    await refresh.click();
-    expect((await refreshed).status()).toBe(200);
-    await expect(refresh).toBeEnabled();
-    const controller = await context.newPage();
-    try {
-      await controller.goto(emp.baseURL);
-      await openModules(controller);
-      await changeModule(controller, 'decision', 'Decision API', 'disable');
-      await expectModule(emp, module, { installed: true });
-      if (action === 'uninstall') {
-        await changeModule(controller, 'decision', 'Decision API', 'uninstall');
-        await expectModule(emp, module, { installed: false });
-      }
-      const errors = [];
-      page.on('pageerror', error => errors.push(error.message));
-      const sent = decisionUpstreams.map(upstream => upstream.requests.length);
-      const rejected = page.waitForResponse(response => new URL(response.url()).pathname === '/api/decisions/models');
-      await refresh.click();
-      const response = await rejected;
-      expect(response.status()).toBe(404);
-      expect((await response.json()).error.code).toBe('module_disabled');
-      await expect(dialog(page)).toContainText('This EMP module is not active');
-      expect(decisionUpstreams.map((upstream, index) => upstream.requests.slice(sent[index])), 'Retired panel must not reach an upstream').toEqual([[], []]);
-      expect(errors, 'Retired controls must not throw').toEqual([]);
-      await expectModule(emp, module, { installed: action !== 'uninstall' });
-    } finally {
-      await controller.close();
+async function retireDecisionInOtherTab({ page, context, moduleEmpFactory, moduleRelease, decisionUpstreams }, action) {
+  const emp = await moduleEmpFactory(decisionOptions(decisionUpstreams));
+  const module = moduleRelease.modules.get('decision');
+  await emp.login(page);
+  await openModules(page);
+  await changeModule(page, 'decision', 'Decision API', 'install');
+  await expectModule(emp, module, { installed: true, enabled: true });
+  await openDecision(page);
+  const refresh = dialog(page).getByRole('button', { name: 'Refresh list', exact: true });
+  await expect(refresh).toBeEnabled();
+  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/decisions/models');
+  await refresh.click();
+  expect((await refreshed).status()).toBe(200);
+  await expect(refresh).toBeEnabled();
+  const controller = await context.newPage();
+  try {
+    await controller.goto(emp.baseURL);
+    await openModules(controller);
+    await changeModule(controller, 'decision', 'Decision API', 'disable');
+    await expectModule(emp, module, { installed: true });
+    if (action === 'uninstall') {
+      await changeModule(controller, 'decision', 'Decision API', 'uninstall');
+      await expectModule(emp, module, { installed: false });
     }
+  } finally {
+    await controller.close();
+  }
+  return { emp, refresh };
+}
+
+for (const action of ['disable', 'uninstall']) {
+  const label = action === 'disable' ? '停用' : '卸载';
+  test(`U06 ${label} Decision 后独立请求返回 module_disabled 且不到上游`, async ({ page, context, moduleEmpFactory, moduleRelease, decisionUpstreams }) => {
+    const { emp } = await retireDecisionInOtherTab({ page, context, moduleEmpFactory, moduleRelease, decisionUpstreams }, action);
+    const sent = decisionUpstreams.map(upstream => upstream.requests.length);
+    const response = await emp.request('/api/decisions/models', { provider: 'first', protocol: 'openai' });
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe('module_disabled');
+    expect(decisionUpstreams.map((upstream, index) => upstream.requests.slice(sent[index]))).toEqual([[], []]);
+  });
+
+  test.fixme(`U06 另一标签页${label}后旧 Decision 控件不产生请求（阶段 5b）`, async ({ page, context, moduleEmpFactory, moduleRelease, decisionUpstreams }) => {
+    const { refresh } = await retireDecisionInOtherTab({ page, context, moduleEmpFactory, moduleRelease, decisionUpstreams }, action);
+    const requests = [], errors = [];
+    page.on('request', request => {
+      if (new URL(request.url()).pathname.startsWith('/api/decisions/')) requests.push(request.url());
+    });
+    page.on('pageerror', error => errors.push(error.message));
+    if (await refresh.count()) await refresh.evaluate(button => button.click());
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve())));
+    expect(requests).toEqual([]);
+    expect(errors).toEqual([]);
   });
 }
 

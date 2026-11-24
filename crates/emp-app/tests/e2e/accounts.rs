@@ -23,7 +23,7 @@ fn assert_removed(emp: &Emp, workspace: &Workspace, upstream: &Upstream) {
     upstream.assert_idle();
     let response = emp.responses(&json!({"model":"retained/model", "input":"retained route"}));
     assert_eq!(response.status, 200, "{}", response.text());
-    let request = upstream.next_forwarded();
+    let request = upstream.next_request();
     assert_eq!(request.path, "/v1/responses");
     assert_eq!(request.headers["authorization"], "Bearer retained-token");
     assert_eq!(request.headers["chatgpt-account-id"], "retained-owner");

@@ -50,13 +50,13 @@ impl StreamGate {
     }
 }
 
-/// Loopback provider that answers every request with the configured reply.
 impl UpstreamRequest {
     fn is_catalog_refresh(&self) -> bool {
-        self.method == "GET" && self.path.starts_with("/v1/models")
+        self.method == "GET" && self.path.split('?').next() == Some("/v1/models")
     }
 }
 
+/// Loopback provider that answers every request with the configured reply.
 pub struct Upstream {
     port: u16,
     reply: Arc<Mutex<Reply>>,
@@ -191,15 +191,12 @@ impl Upstream {
         }
     }
 
-    /// No further forwarded request arrived (e.g. no silent retry after a failure).
+    /// No further upstream request arrived (e.g. no silent retry after a failure).
     pub fn assert_idle(&self) {
-        loop {
-            match self.requests.recv_timeout(Duration::from_millis(100)) {
-                Err(RecvTimeoutError::Timeout) => return,
-                Ok(request) if request.is_catalog_refresh() => {}
-                Ok(request) => panic!("unexpected upstream request: {request:?}"),
-                Err(RecvTimeoutError::Disconnected) => panic!("upstream stopped"),
-            }
+        match self.requests.recv_timeout(Duration::from_millis(100)) {
+            Err(RecvTimeoutError::Timeout) => {}
+            Ok(request) => panic!("unexpected upstream request: {request:?}"),
+            Err(RecvTimeoutError::Disconnected) => panic!("upstream stopped"),
         }
     }
 }

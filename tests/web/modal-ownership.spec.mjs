@@ -17,25 +17,47 @@ test('U03 关闭模型窗口取消尚未完成的读请求', async ({ page, emp,
   await dialog(page).getByRole('button', { name: 'Close', exact: true }).click();
   expect((await gate.cancelled).errorText).toMatch(/ABORTED|CANCELLED/i);
   gate.release();
-  await gate.finished;
   await expect(dialog(page)).toBeHidden();
   await serviceCard(page, 'first API').getByRole('button', { name: 'Manage models', exact: true }).click();
   await expect(dialog(page).getByText('first-model', { exact: true }).first()).toBeVisible();
   await expect(dialog(page).getByRole('button', { name: 'Update model list', exact: true })).toBeEnabled();
 });
 
-test('U03 旧模型回复不能覆盖新打开服务的窗口和搜索草稿', async ({ page, emp, responseGates }) => {
+test('U03 已完成的旧模型读取交付后保留新窗口和搜索草稿', async ({ page, emp }) => {
   await emp.login(page);
-  const gate = await responseGates('/api/providers/first/models');
+  await page.evaluate(path => {
+    const url = new URL(path, location.href).href;
+    const readText = Response.prototype.text;
+    let captured, release, delivered;
+    const released = new Promise(resolve => { release = resolve; });
+    window.oldModelRead = {
+      captured: new Promise(resolve => { captured = resolve; }),
+      delivered: new Promise(resolve => { delivered = resolve; }),
+      release,
+    };
+    Response.prototype.text = async function () {
+      if (this.url !== url) return readText.call(this);
+      Response.prototype.text = readText;
+      const text = await readText.call(this);
+      captured({ status: this.status, text });
+      await released;
+      requestAnimationFrame(() => delivered());
+      return text;
+    };
+  }, '/api/providers/first/models');
   await serviceCard(page, 'first API').getByRole('button', { name: 'Manage models', exact: true }).click();
-  await gate.arrived;
+  const oldRead = await page.evaluate(() => window.oldModelRead.captured);
+  expect(oldRead.status).toBe(200);
+  expect(JSON.parse(oldRead.text).models).toEqual(expect.any(Array));
   await dialog(page).getByRole('button', { name: 'Close', exact: true }).click();
   await serviceCard(page, 'second API').getByRole('button', { name: 'Manage models', exact: true }).click();
   await expect(dialog(page).getByText('second-model', { exact: true }).first()).toBeVisible();
   const search = dialog(page).getByPlaceholder('Search model name or ID', { exact: true });
   await search.fill('second');
-  gate.release();
-  await gate.finished;
+  await page.evaluate(async () => {
+    window.oldModelRead.release();
+    await window.oldModelRead.delivered;
+  });
   await expect(dialog(page)).toHaveAccessibleName('Manage models · second API');
   await expect(search).toHaveValue('second');
   await expect(dialog(page).getByText('second-model', { exact: true }).first()).toBeVisible();

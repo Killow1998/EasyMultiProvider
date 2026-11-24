@@ -28,20 +28,17 @@ pub fn run(args: &[String]) -> Result {
     }
     let root = project_root();
     let temporary = temporary_directory("emp-module-e2e-")?;
-    let next_root = std::env::var_os("CARGO_TARGET_DIR")
-        .map_or_else(|| root.join("target"), PathBuf::from)
+    let next_root = root
+        .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
         .join("module-e2e");
-    let source = next_root.join("source");
-    let next_target = next_root.join("target");
+    fs::create_dir_all(&next_root).map_err(|error| format!("{}: {error}", next_root.display()))?;
+    let candidate = tempfile::Builder::new()
+        .prefix("run-")
+        .tempdir_in(&next_root)
+        .map_err(|error| format!("{}: {error}", next_root.display()))?;
+    let source = candidate.path().join("source");
+    let next_target = candidate.path().join("target");
     build(&root, None, true)?;
-    if source.exists() {
-        execute(
-            Command::new("git")
-                .current_dir(&root)
-                .args(["worktree", "remove", "--force"])
-                .arg(&source),
-        )?;
-    }
     execute(
         Command::new("git")
             .current_dir(&root)

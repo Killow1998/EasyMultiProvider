@@ -201,3 +201,43 @@ fn doc_link(base: &Url, target: &str, image: bool) -> String {
     }
     "about:blank".to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::to_bytes, response::IntoResponse};
+
+    #[tokio::test]
+    async fn embedded_installation_guide_renders_the_linux_anchor() {
+        let reply = asset_reply("/guide/docs/self-update.md").expect("embedded installation guide");
+        let response = reply.into_response();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/html; charset=utf-8"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page = std::str::from_utf8(&bytes).unwrap();
+        assert!(page.contains(
+            r#"<h2 id="linux-installation-and-migration">Linux installation and migration</h2>"#
+        ));
+    }
+
+    #[tokio::test]
+    async fn markdown_filters_raw_html_and_unsafe_links_and_rewrites_relative_links() {
+        let response = render_doc(
+            "README.md",
+            b"# Offline guide\n\n<script>alert('ignored')</script>\n\n\
+              <em>Inline HTML</em> [Unsafe](javascript:alert%281%29) | [Guide](docs/tutorials.md)\n",
+        )
+        .into_response();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page = std::str::from_utf8(&bytes).unwrap();
+        assert!(page.contains(r#"<h1 id="offline-guide">Offline guide</h1>"#));
+        assert!(!page.contains("<script>"));
+        assert!(!page.contains("<em>"));
+        assert!(!page.contains("javascript:"));
+        assert!(page.contains(r#"href="about:blank">Unsafe</a>"#));
+        assert!(page.contains(r#"href="/guide/docs/tutorials.md">Guide</a>"#));
+    }
+}

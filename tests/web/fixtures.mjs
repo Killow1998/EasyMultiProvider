@@ -364,10 +364,13 @@ export const test = base.extend({
         const response = await route.fetch();
         arrived.resolve({ request, response });
         await released.promise;
+        if (request.failure()) return;
         try { await route.fulfill({ response }); }
         catch (error) {
           if (!request.failure()) throw error;
-        } finally { finished.resolve(); }
+          return;
+        }
+        finished.resolve();
       });
       return gate;
     });

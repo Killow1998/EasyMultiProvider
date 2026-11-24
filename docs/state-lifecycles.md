@@ -116,6 +116,8 @@ files/directories retain Unix 0600/0700 or the restricted Windows ACL/owner
 rules, including symlink/reparse-point checks and transactional rollback.
 Transaction snapshots revalidate the opened file's metadata after checking its
 path, rejecting substituted links or special files before reading their contents.
+After saving the new configuration, deletion of deactivated credential files
+is best-effort. A deletion failure leaves the save successful.
 
 ## Requests, transports and model execution
 

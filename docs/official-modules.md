@@ -100,11 +100,11 @@ Team 的 Rust 黑盒入口是 [`tests/e2e/team.rs`](../crates/emp-app/tests/e2e/
 | `two_devices_forward_shared_subscription_and_keep_personal_data_after_uninstall` | 共享订阅真实转发、两设备同成员账本、卸载保留个人服务、凭据和用量；错用凭据、记错成员或删除个人数据会失败 |
 | `offline_completion_retries_unacknowledged_usage_without_double_billing` | 已获准的流在服务端停机后完成，恢复后补报；真实服务端入账后丢弃一次回执，要求同事件重试且再次插入数为零；用量丢失、提前确认或重复计费会失败 |
 | `budget_and_revocation_block_shared_requests_before_the_upstream` | 预算上限、取消同步权限、禁用成员；拒绝后仍访问上游、共享模型仍可见或个人服务受损会失败 |
-| `hot_update_waits_for_reporting_and_delivers_each_usage_event_once` | 挂起真实上报回执时更新等待，更新后旧进程回收、Core 和另一设备保持运行；重复上报在服务端去重前按事件 ID 计数，会使测试失败 |
+| `hot_update_switches_workers_and_delivers_each_usage_event_once` | 放行真实上报回执后热更新，检查新版激活、旧进程回收，以及 Core 和另一设备保持运行；更新前后的事件按 ID 检查交付次数，重复上报会使测试失败 |
 
 用量和权限通过 HTTP 观察；本地转发夹具记录真实服务端接受的上报，在 Team 通道只控制回执时机。假上游的模型目录请求单独响应，业务响应按字节转发，门控流可在上游完成前到达 EMP。每个测试结束调用进程回收断言。取消同步权限场景先执行同步以刷新本地权限；禁用成员场景直接检查下一次请求被拒。共享调用在服务端离线时受预算核对约束，因此离线补报使用停机前已获准的流。
 
-热更新测试检查上报串行化、更新完成后的旧 PID 消失和更新窗口内同事件仅上报一次。严格的“旧进程退出先于新版激活”需要正式的有序生命周期事件接口；当前状态 API 只有激活版本快照，这项顺序不计入上述测试的覆盖。上报任务当前由 Core 执行，桌面模组提供策略。
+更新下载发生在 Team 更新锁之后，状态 API 只提供激活版本快照。验证更新在锁上等待在途上报，以及旧进程退出与新版激活的严格顺序，需要能在黑盒测试中观察对应的生命周期事件。上报任务由 Core 执行，桌面模组提供策略。
 
 ```sh
 cargo build --locked -p emp-app -p emp-mod-decision -p emp-mod-gateway -p emp-mod-aggregate -p emp-mod-team

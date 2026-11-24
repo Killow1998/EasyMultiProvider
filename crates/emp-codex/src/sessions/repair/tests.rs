@@ -14,18 +14,18 @@ use serde_json::{Map, Value};
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 
-const PARENT_ID: &str = "11111111-1111-4111-8111-111111111111";
+pub(super) const PARENT_ID: &str = "11111111-1111-4111-8111-111111111111";
 const CHILD_ID: &str = "22222222-2222-4222-8222-222222222222";
 const GRANDCHILD_ID: &str = "33333333-3333-4333-8333-333333333333";
 
 #[path = "restore_delay_tests.rs"]
 mod restore_delay;
 
-struct Fixture {
+pub(super) struct Fixture {
     _temporary: tempfile::TempDir,
-    home: PathBuf,
-    parent_path: PathBuf,
-    parent_plain: Vec<u8>,
+    pub(super) home: PathBuf,
+    pub(super) parent_path: PathBuf,
+    pub(super) parent_plain: Vec<u8>,
     child_path: Option<PathBuf>,
     child_plain: Option<Vec<u8>>,
 }
@@ -43,7 +43,7 @@ fn record(kind: &str, payload: Value) -> Map<String, Value> {
     ])
 }
 
-fn fixture(compressed_parent: bool, with_child: bool, unfinished: bool) -> Fixture {
+pub(super) fn fixture(compressed_parent: bool, with_child: bool, unfinished: bool) -> Fixture {
     let temporary = tempfile::tempdir().unwrap();
     let home = temporary.path().join("codex");
     let session_dir = home.join("sessions/2026/09/29");

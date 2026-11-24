@@ -92,7 +92,7 @@ U04 先经真实 `/v1/responses` 发送订阅账号、两个外部服务和不�
 | `migration.spec.mjs` / 迁移模式返回直接父层并保留各自草稿和选择 | U02 | `e2e_migration_navigation.py`、`e2e_navigation.py` 的 chooser→form→chooser、各模式草稿保留、根层关闭不写 | Back 跨级或直接关闭；重新进入模式时丢失服务选择、密码、文件或选项；导航偷偷保存 |
 | `migration.spec.mjs` / 加密文件预览只导入所选服务；提交时禁用 Back 和选择 | U02 | `e2e_migration_navigation.py` 的真实加密包、preview→form、选择重算和提交锁定；`e2e_onboarding.py` 的成功导入结果 | 预览就写入；错误导入未选服务；提交中允许改变选择/Back/Escape；导入后 UI 和持久化结果不一致 |
 | `modal-ownership.spec.mjs` / 关闭模型窗口取消尚未完成的读请求 | U03 | `e2e.py`、`e2e_navigation.py`、`e2e_modal_ownership.py` 的窗口读所有权；`e2e_model_manager.py` 的加载和刷新 | Close 未触发浏览器请求取消；离开后继续占有旧窗口；再开后刷新按钮一直禁用 |
-| `modal-ownership.spec.mjs` / 旧模型回复不能覆盖新打开服务的窗口和搜索草稿 | U03 | `e2e_modal_ownership.py` 的延迟回复隔离；`e2e_navigation.py` 的新窗口保留 | 第一服务的旧结果覆盖第二服务；新窗口搜索草稿被清空；旧回调改变新窗口控件 |
+| `modal-ownership.spec.mjs` / 已完成的旧模型读取交付后保留新窗口和搜索草稿 | U03 | `e2e_modal_ownership.py` 的延迟回复隔离；`e2e_navigation.py` 的新窗口保留 | 第一服务的旧结果覆盖第二服务；新窗口搜索草稿被清空；旧回调改变新窗口控件 |
 | `modal-ownership.spec.mjs` / 已提交写操作在关窗后完成；结果不关闭新窗口也不丢失 | U03 | `e2e_modal_completion.py`、`e2e_modal_ownership.py` 的已完成写入、Back/Close/新草稿隔离 | 关窗使已保存结果丢失；旧保存完成后关闭新窗口；覆盖新草稿或禁用新提交；重开看不到保存结果 |
 | `usage.spec.mjs` / 真实请求的账号、服务和会话账单；未知费用、时间范围与刷新 | U04 | `e2e_account_usage.py`、`e2e_service_usage.py`、`e2e_session_bills.py`、`e2e_report_cache.py` 的真实归属、缺失 usage、时间筛选和刷新 | 账号或服务记错；不同会话混账；缺失 usage 的 token 或费用显示成 0；时间范围无效；刷新仍读到旧记录；搜索未筛掉其他会话 |
 | `usage.spec.mjs` / 通知未读、历史重读与清空来自真实保存操作 | U04 | `e2e_notifications.py` 的信箱、已读变化、历史和清空持久化 | 保存无通知；打开后未读未消除；重载丢失历史或已读状态；清空后重载又出现历史 |
@@ -106,8 +106,8 @@ U04 先经真实 `/v1/responses` 发送订阅账号、两个外部服务和不�
 | `recovery.spec.mjs` / 启动恢复页退出真实进程并保留损坏数据 | U05 | `e2e_startup_recovery.py` 的独立恢复退出 | 退出请求成功但进程仍运行；退出误清除旧配置、密钥或 Native 文件 |
 | `modules.spec.mjs` / 模组安装、启停、设置入口与卸载对应真实状态和进程 | U06 生命周期与设置入口 | `e2e_official_modules.py` 的页面安装启停与面板入口 | UI 只显示成功而未安装；启用无进程、版本/digest 错误；停用进程仍存在；未启用也能进入面板；卸载状态或入口残留 |
 | `modules.spec.mjs` / Decision 面板保存所选服务和模型后真实请求切换上游 | U06 路由型模组设置与实际请求 | `e2e_decisions.py`、`e2e_routing.py` 的设置选择、保存与真实请求 | 保存或刷新后丢失选项；继续命中原服务；未转发新模型；使用错误服务凭据 |
-| `modules.spec.mjs` / 另一标签页停用后旧面板刷新被 EMP 拒绝且不到上游 | U06 停用后的旧回调 | `e2e_official_modules.py` 的旧面板生命周期 | 停用后 `/api/decisions/models` 仍返回模型或转发到上游；旧面板不提示失败或抛页面错误 |
-| `modules.spec.mjs` / 另一标签页卸载后旧面板刷新被 EMP 拒绝且不到上游 | U06 卸载后的旧回调 | `e2e_official_modules.py` 的卸载与旧面板生命周期 | 卸载后 `/api/decisions/models` 仍返回模型或转发到上游；旧面板不提示失败或抛页面错误 |
+| `modules.spec.mjs` / 停用或卸载 Decision 后独立请求返回 module_disabled 且不到上游 | U06 停用与卸载后的后端拒绝 | `e2e_official_modules.py` 的旧面板生命周期 | `/api/decisions/models` 未返回 `404 module_disabled`，或请求到达上游 |
+| `modules.spec.mjs` / 另一标签页停用或卸载后旧 Decision 控件不产生请求（`test.fixme`） | U06 旧面板跨标签页失效，登记到阶段 5b | `e2e_official_modules.py` 的旧面板生命周期 | 修复后启用用例，旧控件仍发出 Decision 请求或抛出页面异常时失败 |
 | `modules.spec.mjs` / Team 加入、管理员审核入口与成员同步获批共享订阅 | U06 Team 角色页面与共享结果 | `e2e_official_modules.py` 的团队加入、权限页面和共享订阅同步 | 成员申请直接生效；管理员缺少审核入口；成员看到审核操作；未审核就能同步；获批后无法同步、凭据缺失或页面刷新丢失账号 |
 
 此表是已迁移主题的映射，不是旧脚本整份覆盖完成的声明。开发路由拒绝、设备码/浏览器登录完整目的地矩阵、模型探测矩阵、Vertex、重名冲突、LAN、多服务窄屏、预览超时、模组设备写入和额度重置等独有场景尚未承接。所有原 Python 脚本保留，阶段 7 删除前仍需逐项核销
@@ -116,8 +116,12 @@ U04/U05 的其余缺口：通知自动消失计时、悬停暂停和存储阻断
 
 假上游由 Node 内置 `http` 提供，记录路径、鉴权、模型、请求序号和连接取消，支持显式 gate。管理请求使用 Playwright 路由门控：先向真实 EMP 发请求并取得结果，再暂停向页面交付响应。U03 的读取消观察浏览器 `requestfailed`，不声称覆盖 Rust 到上游的取消链；写入以真实 `/api/config` 和持久化文件为证。U02 导出源实例停止后才启动目标实例，减少驻留内存
 
-U06 的旧回调用例先证明刷新控件能完成真实请求，再在第二个标签页停用/卸载，原页面的 Decision 面板保持打开。页面没有跨标签页的模组状态推送，旧面板仍会发出 `/api/decisions/models`；契约是 EMP 返回 `404 module_disabled`、两个假上游都收不到请求、面板显示失败提示且没有页面异常。Decision 假上游的模型条目带 `architecture.output_modalities: ["decisions"]`，`openai` 协议的决策发现只收这类模型（`gpt-6-luna` 除外）
+U03 的迟到读取在页面读完第一服务的真实响应后暂停正文交付，等第二服务的窗口打开并输入搜索草稿后再交付。页面处理响应后检查窗口归属和草稿。
 
-U06 已由 coz 用真实 debug Core 和四个模组二进制运行 5/5 通过
+U06 在第二个标签页停用或卸载 Decision 后，通过独立请求验证后端返回 `404 module_disabled`，并检查两个假上游都未收到请求。阶段 5b 处理跨标签页失效后，启用旧控件无请求的浏览器用例。
+
+Decision 假上游的模型条目带 `architecture.output_modalities: ["decisions"]`，`openai` 协议的决策发现只收这类模型（`gpt-6-luna` 除外）
+
+R123fix 前的 U06 基线由 coz 用真实 debug Core 和四个模组二进制运行，5/5 通过
 
 本步骤没有覆盖更新前后 revision 切换、旧 revision 的在途读与定时器回收：当前只读取 `EMP_BIN` 同目录的单版本制品，缺少另一份版本更高、digest 不同且兼容同一宿主 API 的真实制品及其 CI 输入约定。安装、更新和面板入口本身已有，缺的是升级制品；同版本重复下载不能替代更新证据。Gateway/Aggregate 的业务面板、Team 的 VPS 维护者完整权限矩阵、局域网发现及完整用量由对应 M/U 场景继续承担，本步骤未写 U04/U05 或修改旧 Rust/Python 验收

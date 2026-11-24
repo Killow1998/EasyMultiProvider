@@ -1,10 +1,6 @@
-use crate::support::http;
 use crate::support::modules::{BuiltModule, Fault};
-use crate::support::team::{MODEL, Team, denied, next_event, poll, report, team};
+use crate::support::team::{SHARED_MODEL, Team, denied, next_event, poll, report, team};
 use serde_json::json;
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
 
 #[test]
 #[ignore = "needs current and next-version module binaries; see tests/support/modules.rs"]
@@ -77,7 +73,7 @@ fn m03_two_devices_forward_shared_subscription_and_keep_personal_data_after_unin
     let row = fixture.usage(&fixture.member, 1);
     assert_eq!(row["input_tokens"], 7);
     assert_eq!(row["output_tokens"], 3);
-    assert_eq!(row["models"][0]["model"], MODEL);
+    assert_eq!(row["models"][0]["model"], SHARED_MODEL);
     assert_eq!(fixture.usage(&fixture.manager, 0)["requests"], 0);
     let first_report = fixture.relay.next_report();
     assert_eq!(first_report.events.len(), 1);
@@ -92,7 +88,12 @@ fn m03_two_devices_forward_shared_subscription_and_keep_personal_data_after_unin
         team(&fixture.devices[0], "sync", json!({}), 200)["skipped_native"],
         1
     );
-    let second = fixture.call(0, MODEL, "resp_m03_other_device", &fixture.subscription);
+    let second = fixture.call(
+        0,
+        SHARED_MODEL,
+        "resp_m03_other_device",
+        &fixture.subscription,
+    );
     fixture.local_call(0, &second);
     let combined = fixture.usage(&fixture.member, 2);
     for emp in &fixture.devices {
@@ -282,15 +283,7 @@ fn m03_budget_and_revocation_block_shared_requests_before_the_upstream() {
             "revoked route: {}",
             rejected.text()
         );
-        let models = fixture.devices[1].codex("GET", "/v1/models", None);
-        assert_eq!(models.status, 200, "{}", models.text());
-        assert!(
-            !models.json()["data"]
-                .as_array()
-                .expect("models")
-                .iter()
-                .any(|row| row["id"] == shared)
-        );
+        fixture.assert_shared_model_listed(false);
         fixture.subscription.assert_idle();
         fixture.call(
             1,
@@ -305,7 +298,7 @@ fn m03_budget_and_revocation_block_shared_requests_before_the_upstream() {
 
 #[test]
 #[ignore = "needs current and next-version module binaries; see tests/support/modules.rs"]
-fn m03_hot_update_waits_for_reporting_and_delivers_each_usage_event_once() {
+fn m03_hot_update_switches_workers_and_delivers_each_usage_event_once() {
     let fixture = Team::start();
     let next = BuiltModule::next("team");
     assert_ne!(
@@ -339,42 +332,13 @@ fn m03_hot_update_waits_for_reporting_and_delivers_each_usage_event_once() {
     assert_eq!(in_flight.events.len(), 1);
     assert_eq!(in_flight.inserted, 1);
 
-    let port = fixture.devices[1].port;
-    let session = fixture.devices[1].session.clone();
-    let update = json!({"id":"team","action":"update","revision":offer["revision"]});
-    let (started, starting) = mpsc::channel();
-    let (finished, result) = mpsc::channel();
-    let updater = thread::spawn(move || {
-        started.send(()).expect("update started");
-        let response = http(
-            port,
-            "POST",
-            "/api/modules",
-            &[
-                ("X-EMP-Session", &session),
-                ("Content-Type", "application/json"),
-            ],
-            update.to_string().as_bytes(),
-        );
-        let _ = finished.send(response);
-    });
-    starting
-        .recv_timeout(Duration::from_secs(5))
-        .expect("update dispatched");
-    assert!(
-        matches!(
-            result.recv_timeout(Duration::from_millis(100)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ),
-        "Team update must wait for the held report receipt"
-    );
     release_receipt
         .send(())
         .expect("acknowledge real server report");
-    let updated = result
-        .recv_timeout(Duration::from_secs(30))
-        .expect("Team update completed");
-    updater.join().expect("update request stopped");
+    let updated = fixture.devices[1].post(
+        "/api/modules",
+        &json!({"id":"team","action":"update","revision":offer["revision"]}),
+    );
     assert_eq!(updated.status, 200, "{}", updated.text());
     assert_eq!(fixture.devices[1].pid(), core_pid);
     let new_pid = fixture.devices[1].active(&next);

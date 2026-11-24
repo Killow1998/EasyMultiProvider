@@ -1,4 +1,5 @@
 use super::*;
+use emp_updater::release::module_version;
 use std::collections::BTreeMap;
 
 pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result {
@@ -114,7 +115,11 @@ fn require_bump(
 ) {
     let old = version(before, key);
     let new = version(after, key);
-    if new.is_none() || old == new {
+    let increasing = old
+        .and_then(module_version)
+        .zip(new.and_then(module_version))
+        .is_some_and(|(old, new)| new > old);
+    if !increasing {
         errors.push(format!("[module-version] {source}: 模组制品按版本发布，改源码必须同时升版本；更新 {manifest} 中的 {key}（基线 {:?}，当前 {:?}）", old, new));
     }
 }
@@ -122,6 +127,21 @@ fn require_bump(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_version_rejects_a_downgrade() {
+        let mut errors = Vec::new();
+        require_bump(
+            "src/main.rs",
+            "Cargo.toml",
+            "version",
+            "[package]\nversion = \"0.10.2-beta\"",
+            "[package]\nversion = \"0.10.1-beta\"",
+            &mut errors,
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("改源码必须同时升版本"));
+    }
 
     #[test]
     fn module_version_requires_a_new_version() {
