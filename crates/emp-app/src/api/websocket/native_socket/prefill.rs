@@ -1,12 +1,12 @@
 //! Establish large native context using generation-free, connection-local turns.
 //! Never split an input item, break a tool pair, or replay a generated turn.
 use super::super::ObservedWebSocket;
-use super::super::duplex::{Duplex, Message};
 use super::errors::native_stream_error_value_for_route;
+use super::{Message, next_message};
 use crate::services::observation::continuation::ContinuationReason;
 use crate::services::request_outcome::RequestOutcome;
 use emp_domain::ResolvedRoute;
-use emp_transport::{ClientWebSocket, FailureClass};
+use emp_transport::{AsyncClientWebSocket, FailureClass};
 use serde_json::Value;
 
 mod plan;
@@ -25,11 +25,12 @@ impl Prefill<'_> {
     /// projected to the client and counted as inference/usage by its owner.
     pub(super) fn run(
         self,
-        client: &mut ClientWebSocket,
-        duplex: &mut Duplex,
-        websocket: &mut ObservedWebSocket<'_, '_>,
+        client: &mut AsyncClientWebSocket,
+        idle_deadline: &mut tokio::time::Instant,
+        websocket: &mut ObservedWebSocket<'_>,
         pending_request: &mut Option<String>,
     ) -> Result<Value, PrefillError> {
+        let runtime = &websocket.inner.runtime;
         let count = self.chunks.len();
         let mut previous = None;
         for (index, chunk) in self.chunks.into_iter().enumerate() {
@@ -47,13 +48,18 @@ impl Prefill<'_> {
             if bytes > self.budget {
                 return Err(PrefillError::InvalidResponse);
             }
-            client
-                .send_json(&payload)
+            runtime
+                .block_on(client.send_json(&payload))
                 .map_err(|error| PrefillError::Transport(std::io::Error::other(error)))?;
             websocket.observation.native_prefill_sent(bytes);
             loop {
-                let message = duplex
-                    .next(client, websocket.inner, pending_request.is_none())
+                let message = runtime
+                    .block_on(next_message(
+                        client,
+                        websocket.inner,
+                        pending_request.is_none(),
+                        idle_deadline,
+                    ))
                     .map_err(PrefillError::Transport)?
                     .ok_or_else(|| {
                         PrefillError::Transport(std::io::ErrorKind::UnexpectedEof.into())
@@ -66,7 +72,7 @@ impl Prefill<'_> {
                             .ok()
                             .is_some_and(|value| value["type"] == "response.interrupt")
                         {
-                            client.send_text(&text).map_err(|error| {
+                            runtime.block_on(client.send_text(&text)).map_err(|error| {
                                 PrefillError::Transport(std::io::Error::other(error))
                             })?;
                         } else {
@@ -118,7 +124,7 @@ impl PrefillError {
     pub(super) fn report(
         self,
         route: &ResolvedRoute,
-        websocket: &mut ObservedWebSocket<'_, '_>,
+        websocket: &mut ObservedWebSocket<'_>,
         usage: &mut RequestOutcome<'_>,
     ) {
         if let Self::Transport(error) = &self {

@@ -5,7 +5,7 @@ use crate::services::native_connections::RouteKey;
 use crate::services::observation::continuation::{ContinuationReason, NativeContinuation};
 use emp_router::native_http::NativeWebSocketPlan;
 use emp_router::native_metadata::native_response_headers;
-use emp_transport::{ClientWebSocket, MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError};
+use emp_transport::{AsyncClientWebSocket, MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -30,7 +30,8 @@ pub(super) struct NativeUpstreamConnection {
     proxy: Option<String>,
     identity: BTreeMap<String, String>,
     plaintext_collaboration: bool,
-    pub(super) client: ClientWebSocket,
+    pub(super) client: AsyncClientWebSocket,
+    runtime: tokio::runtime::Handle,
     pub(super) replay_inline_ids: bool,
 }
 
@@ -131,16 +132,18 @@ impl NativeSession {
             && let Ok(selected_proxy) = &proxy
         {
             facts.connect_attempts += 1;
-            match ClientWebSocket::connect_with_proxy(
-                &plan.url,
-                &plan.headers,
-                Duration::from_secs(15),
-                selected_proxy.as_deref(),
-            )
-            .and_then(|mut client| {
-                client.set_max_message_bytes(MAX_RESPONSES_WEBSOCKET_BYTES)?;
-                Ok(client)
-            }) {
+            let runtime = state.backend.transport.runtime.handle();
+            match runtime
+                .block_on(AsyncClientWebSocket::connect_with_proxy(
+                    &plan.url,
+                    &plan.headers,
+                    Duration::from_secs(15),
+                    selected_proxy.as_deref(),
+                ))
+                .and_then(|mut client| {
+                    client.set_max_message_bytes(MAX_RESPONSES_WEBSOCKET_BYTES)?;
+                    Ok(client)
+                }) {
                 Ok(client) => {
                     facts.connections_opened += 1;
                     facts.handshake_status = Some(101);
@@ -152,6 +155,7 @@ impl NativeSession {
                         identity: plan_identity.clone(),
                         plaintext_collaboration: plan.plaintext_collaboration,
                         client,
+                        runtime: runtime.clone(),
                         replay_inline_ids: false,
                     });
                     connected_now = true;
@@ -177,7 +181,7 @@ impl NativeUpstreamConnection {
         &self,
         plan: &NativeWebSocketPlan,
         connected_now: bool,
-        websocket: &mut ObservedWebSocket<'_, '_>,
+        websocket: &mut ObservedWebSocket<'_>,
     ) -> Result<(), WebSocketError> {
         let selected = native_response_headers(
             &serde_json::json!({"headers":self.client.response_headers()}),
@@ -199,5 +203,11 @@ impl NativeUpstreamConnection {
             )?;
         }
         Ok(())
+    }
+}
+
+impl Drop for NativeUpstreamConnection {
+    fn drop(&mut self) {
+        self.runtime.block_on(self.client.close(1000, ""));
     }
 }

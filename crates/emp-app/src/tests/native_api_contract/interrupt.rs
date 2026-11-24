@@ -17,7 +17,7 @@ fn accept_upstream(listener: TcpListener) -> TcpStream {
 }
 
 fn connect(server: &ServerHandle) -> ClientWebSocket {
-    let client = ClientWebSocket::connect(
+    let mut client = ClientWebSocket::connect(
         &format!("ws://{}/v1/responses", server.local_addr()),
         &BTreeMap::from([
             ("originator".into(), "codex_cli_rs".into()),
@@ -28,11 +28,7 @@ fn connect(server: &ServerHandle) -> ClientWebSocket {
         Duration::from_secs(5),
     )
     .unwrap();
-    client
-        .readiness_stream()
-        .unwrap()
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    client.set_read_timeout(Duration::from_secs(5));
     client
 }
 

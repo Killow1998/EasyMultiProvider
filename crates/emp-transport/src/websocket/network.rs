@@ -1,107 +1,55 @@
 use super::ClientWebSocketError;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{future::Future, io};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::net::{TcpStream, lookup_host};
+use tokio_rustls::TlsConnector;
 use url::Url;
 
-pub(super) trait ReadWrite: Read + Write + Send {
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
-    fn set_nonblocking(&self, _nonblocking: bool) -> std::io::Result<()> {
-        Err(std::io::ErrorKind::Unsupported.into())
-    }
-    fn poll_read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.set_nonblocking(true)?;
-        let result = self.read(buffer);
-        self.set_nonblocking(false)?;
-        result
-    }
-    fn readiness_stream(&self) -> std::io::Result<TcpStream> {
-        Err(std::io::ErrorKind::Unsupported.into())
-    }
-}
-type OpenedWebSocketTransport = (Box<dyn ReadWrite>, bool, Option<String>);
-impl ReadWrite for socket2::Socket {
-    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
-        socket2::Socket::set_nonblocking(self, nonblocking)
-    }
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
-        socket2::Socket::set_read_timeout(self, timeout)
-    }
-}
-impl ReadWrite for TcpStream {
-    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
-        TcpStream::set_nonblocking(self, nonblocking)
-    }
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
-        TcpStream::set_read_timeout(self, timeout)
-    }
-    fn readiness_stream(&self) -> std::io::Result<TcpStream> {
-        self.try_clone()
-    }
-}
-impl<S: ReadWrite> ReadWrite for rustls::StreamOwned<rustls::ClientConnection, S> {
-    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
-        self.sock.set_nonblocking(nonblocking)
-    }
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
-        self.sock.set_read_timeout(timeout)
-    }
-    fn readiness_stream(&self) -> std::io::Result<TcpStream> {
-        self.sock.readiness_stream()
-    }
-}
-impl ReadWrite for Box<dyn ReadWrite> {
-    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
-        self.as_ref().set_nonblocking(nonblocking)
-    }
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
-        self.as_ref().set_read_timeout(timeout)
-    }
-    fn readiness_stream(&self) -> std::io::Result<TcpStream> {
-        self.as_ref().readiness_stream()
-    }
+mod handshake;
+pub(super) use handshake::HandshakeIo;
+
+pub(super) trait Socket: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Socket for T {}
+type OpenedWebSocketTransport = (Box<dyn Socket>, bool, Option<String>);
+
+pub(super) async fn io_timeout<T>(
+    timeout: Duration,
+    io: impl Future<Output = io::Result<T>>,
+) -> io::Result<T> {
+    tokio::time::timeout(timeout, io)
+        .await
+        .map_err(|_| io::ErrorKind::TimedOut)?
 }
 
-pub(super) struct ReadyReader<'a>(pub(super) &'a mut dyn ReadWrite);
-
-impl Read for ReadyReader<'_> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.0.poll_read(buffer)
-    }
-}
-
-fn connect_tcp(
+async fn connect_tcp(
     host: &str,
     port: u16,
     timeout: Duration,
 ) -> Result<TcpStream, ClientWebSocketError> {
-    let addresses = (host, port).to_socket_addrs().map_err(|_| {
-        ClientWebSocketError::new(503, "native upstream websocket connection failed")
-    })?;
+    let failure = || ClientWebSocketError::new(503, "native upstream websocket connection failed");
+    let addresses = lookup_host((host, port)).await.map_err(|_| failure())?;
     for address in addresses {
-        if let Ok(tcp) = TcpStream::connect_timeout(&address, timeout) {
-            tcp.set_read_timeout(Some(timeout)).map_err(|_| {
-                ClientWebSocketError::new(503, "native upstream websocket connection failed")
-            })?;
-            tcp.set_write_timeout(Some(timeout)).map_err(|_| {
-                ClientWebSocketError::new(503, "native upstream websocket connection failed")
-            })?;
+        if let Ok(tcp) = io_timeout(timeout, TcpStream::connect(address)).await {
             return Ok(tcp);
         }
     }
-    Err(ClientWebSocketError::new(
-        503,
-        "native upstream websocket connection failed",
-    ))
+    Err(failure())
 }
 
-fn tls_stream(
-    stream: Box<dyn ReadWrite>,
+async fn tls_stream(
+    stream: Box<dyn Socket>,
     host: &str,
-) -> Result<Box<dyn ReadWrite>, ClientWebSocketError> {
-    let loaded = rustls_native_certs::load_native_certs();
+    timeout: Duration,
+    handshake_error: &'static str,
+) -> Result<Box<dyn Socket>, ClientWebSocketError> {
+    let loaded = tokio::task::spawn_blocking(rustls_native_certs::load_native_certs)
+        .await
+        .map_err(|_| {
+            ClientWebSocketError::new(503, "native upstream websocket TLS setup failed")
+        })?;
     let mut roots = rustls::RootCertStore::empty();
     for certificate in loaded.certs {
         let _ = roots.add(certificate);
@@ -118,14 +66,18 @@ fn tls_stream(
     let server_name = rustls::pki_types::ServerName::try_from(host.to_owned()).map_err(|_| {
         ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
     })?;
-    let connection =
-        rustls::ClientConnection::new(Arc::new(config), server_name).map_err(|_| {
-            ClientWebSocketError::new(503, "native upstream websocket TLS setup failed")
-        })?;
-    Ok(Box::new(rustls::StreamOwned::new(connection, stream)))
+    let connector = TlsConnector::from(Arc::new(config));
+    let mut stream = connector
+        .connect(server_name, HandshakeIo::new(stream, timeout))
+        .await
+        .map_err(|_| ClientWebSocketError::new(503, handshake_error))?;
+    stream.get_mut().0.finish();
+    Ok(Box::new(stream))
 }
 
-pub(super) fn read_http_head(stream: &mut dyn ReadWrite) -> Result<Vec<u8>, ClientWebSocketError> {
+pub(super) async fn read_http_head(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> Result<Vec<u8>, ClientWebSocketError> {
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         if head.len() >= 64 * 1024 {
@@ -134,11 +86,10 @@ pub(super) fn read_http_head(stream: &mut dyn ReadWrite) -> Result<Vec<u8>, Clie
                 "native websocket handshake is too large",
             ));
         }
-        let mut byte = [0_u8; 1];
-        stream.read_exact(&mut byte).map_err(|_| {
+        let byte = stream.read_u8().await.map_err(|_| {
             ClientWebSocketError::new(503, "native upstream websocket handshake failed")
         })?;
-        head.push(byte[0]);
+        head.push(byte);
     }
     Ok(head)
 }
@@ -154,22 +105,27 @@ fn proxy_authorization(proxy: &Url) -> Option<String> {
     })
 }
 
-fn socks_connect(
-    stream: &mut dyn ReadWrite,
+async fn socks_connect(
+    stream: &mut dyn Socket,
     proxy: &Url,
     host: &str,
     port: u16,
+    timeout: Duration,
 ) -> Result<(), ClientWebSocketError> {
+    let mut stream = HandshakeIo::new(stream, timeout);
     let proxy_io = || ClientWebSocketError::new(503, "native websocket proxy failed");
     let credential = (!proxy.username().is_empty() || proxy.password().is_some())
         .then(|| (proxy.username(), proxy.password().unwrap_or_default()));
     let methods: &[u8] = if credential.is_some() { &[0, 2] } else { &[0] };
     stream
-        .write_all(&[&[5, methods.len() as u8], methods].concat())
-        .and_then(|_| stream.flush())
+        .write_flushed(&[&[5, methods.len() as u8], methods].concat())
+        .await
         .map_err(|_| proxy_io())?;
     let mut selected = [0_u8; 2];
-    stream.read_exact(&mut selected).map_err(|_| proxy_io())?;
+    stream
+        .read_exact(&mut selected)
+        .await
+        .map_err(|_| proxy_io())?;
     if selected[0] != 5 || selected[1] == 255 {
         return Err(ClientWebSocketError::new(
             503,
@@ -191,11 +147,14 @@ fn socks_connect(
         request.push(password.len() as u8);
         request.extend_from_slice(password.as_bytes());
         stream
-            .write_all(&request)
-            .and_then(|_| stream.flush())
+            .write_flushed(&request)
+            .await
             .map_err(|_| proxy_io())?;
         let mut response = [0_u8; 2];
-        stream.read_exact(&mut response).map_err(|_| proxy_io())?;
+        stream
+            .read_exact(&mut response)
+            .await
+            .map_err(|_| proxy_io())?;
         if response != [1, 0] {
             return Err(ClientWebSocketError::new(
                 503,
@@ -218,11 +177,14 @@ fn socks_connect(
     request.extend_from_slice(host.as_bytes());
     request.extend_from_slice(&port.to_be_bytes());
     stream
-        .write_all(&request)
-        .and_then(|_| stream.flush())
+        .write_flushed(&request)
+        .await
         .map_err(|_| proxy_io())?;
     let mut response = [0_u8; 4];
-    stream.read_exact(&mut response).map_err(|_| proxy_io())?;
+    stream
+        .read_exact(&mut response)
+        .await
+        .map_err(|_| proxy_io())?;
     if response[0] != 5 || response[1] != 0 {
         return Err(ClientWebSocketError::new(
             503,
@@ -234,7 +196,10 @@ fn socks_connect(
         4 => 16,
         3 => {
             let mut length = [0_u8; 1];
-            stream.read_exact(&mut length).map_err(|_| proxy_io())?;
+            stream
+                .read_exact(&mut length)
+                .await
+                .map_err(|_| proxy_io())?;
             usize::from(length[0])
         }
         _ => {
@@ -245,10 +210,14 @@ fn socks_connect(
         }
     };
     let mut ignored = vec![0_u8; address_bytes + 2];
-    stream.read_exact(&mut ignored).map_err(|_| proxy_io())
+    stream
+        .read_exact(&mut ignored)
+        .await
+        .map(|_| ())
+        .map_err(|_| proxy_io())
 }
 
-pub(super) fn websocket_connection(
+pub(super) async fn websocket_connection(
     target: &Url,
     proxy: Option<&str>,
     timeout: Duration,
@@ -260,11 +229,17 @@ pub(super) fn websocket_connection(
         ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
     })?;
     let Some(proxy) = proxy else {
-        let tcp = connect_tcp(host, port, timeout)?;
-        let stream: Box<dyn ReadWrite> = Box::new(tcp);
+        let tcp = connect_tcp(host, port, timeout).await?;
+        let stream: Box<dyn Socket> = Box::new(tcp);
         return Ok((
             if target.scheme() == "wss" {
-                tls_stream(stream, host)?
+                tls_stream(
+                    stream,
+                    host,
+                    timeout,
+                    "native upstream websocket handshake failed",
+                )
+                .await?
             } else {
                 stream
             },
@@ -280,15 +255,31 @@ pub(super) fn websocket_connection(
     let proxy_port = proxy
         .port_or_known_default()
         .ok_or_else(|| ClientWebSocketError::new(502, "native websocket proxy is invalid"))?;
-    let tcp = connect_tcp(proxy_host, proxy_port, timeout)?;
-    let mut stream: Box<dyn ReadWrite> = Box::new(tcp);
+    let tcp = connect_tcp(proxy_host, proxy_port, timeout).await?;
+    let mut stream: Box<dyn Socket> = Box::new(tcp);
     if proxy.scheme() == "https" {
-        stream = tls_stream(stream, proxy_host)?;
+        stream = tls_stream(
+            stream,
+            proxy_host,
+            timeout,
+            if target.scheme() == "wss" {
+                "native websocket proxy failed"
+            } else {
+                "native upstream websocket handshake failed"
+            },
+        )
+        .await?;
     }
     if matches!(proxy.scheme(), "socks5" | "socks5h") {
-        socks_connect(stream.as_mut(), &proxy, host, port)?;
+        socks_connect(stream.as_mut(), &proxy, host, port, timeout).await?;
         if target.scheme() == "wss" {
-            stream = tls_stream(stream, host)?;
+            stream = tls_stream(
+                stream,
+                host,
+                timeout,
+                "native upstream websocket handshake failed",
+            )
+            .await?;
         }
         return Ok((stream, false, None));
     }
@@ -305,13 +296,15 @@ pub(super) fn websocket_connection(
             .as_deref()
             .map(|value| format!("Proxy-Authorization: {value}\r\n"))
             .unwrap_or_default();
-        write!(
-            stream,
+        let request = format!(
             "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n{auth}Connection: keep-alive\r\n\r\n"
-        )
-        .and_then(|_| stream.flush())
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
-        let head = read_http_head(stream.as_mut())?;
+        );
+        let mut handshake = HandshakeIo::new(stream.as_mut(), timeout);
+        handshake
+            .write_flushed(request.as_bytes())
+            .await
+            .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        let head = read_http_head(&mut handshake).await?;
         let status = std::str::from_utf8(&head)
             .ok()
             .and_then(|value| value.lines().next())
@@ -324,7 +317,13 @@ pub(super) fn websocket_connection(
                 "native websocket proxy rejected the connection",
             ));
         }
-        stream = tls_stream(stream, host)?;
+        stream = tls_stream(
+            stream,
+            host,
+            timeout,
+            "native upstream websocket handshake failed",
+        )
+        .await?;
         Ok((stream, false, None))
     } else {
         Ok((stream, true, authorization))

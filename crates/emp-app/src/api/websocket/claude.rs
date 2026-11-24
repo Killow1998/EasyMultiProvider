@@ -5,7 +5,7 @@ use serde_json::Value;
 pub(super) fn serve(
     state: &ServerState,
     turn: &Turn,
-    websocket: &mut super::ObservedWebSocket<'_, '_>,
+    websocket: &mut super::ObservedWebSocket<'_>,
     monitor: &mut crate::services::disconnect::DisconnectMonitor,
 ) -> TurnResult {
     let Turn {

@@ -86,9 +86,8 @@ pub(crate) struct DisconnectMonitor {
     disconnected: tokio::sync::oneshot::Receiver<()>,
     cancelled: Arc<AtomicBool>,
     pending: Option<(Probe, tokio::sync::oneshot::Sender<()>)>,
-    wake: Arc<Poller>,
     stop: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<(JoinHandle<()>, Arc<Poller>)>,
     interrupted: Option<Arc<AtomicBool>>,
 }
 
@@ -103,16 +102,15 @@ impl DisconnectMonitor {
     pub(crate) fn from_signal(
         disconnected: tokio::sync::oneshot::Receiver<()>,
         interrupted: Arc<AtomicBool>,
-    ) -> std::io::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             disconnected,
             cancelled: Arc::new(AtomicBool::new(false)),
             pending: None,
-            wake: Arc::new(Poller::new()?),
             stop: Arc::new(AtomicBool::new(false)),
             worker: None,
             interrupted: Some(interrupted),
-        })
+        }
     }
     pub(crate) fn is_interrupted(&self) -> bool {
         self.interrupted
@@ -120,15 +118,13 @@ impl DisconnectMonitor {
             .is_some_and(|flag| flag.load(Ordering::Acquire))
     }
     pub(crate) fn start(stream: &TcpStream) -> std::io::Result<Self> {
-        let wake = Arc::new(Poller::new()?);
-        let probe = Probe::new(stream, Arc::clone(&wake))?;
+        let probe = Probe::new(stream, Arc::new(Poller::new()?))?;
         let stop = Arc::new(AtomicBool::new(false));
         let (sender, disconnected) = tokio::sync::oneshot::channel();
         Ok(Self {
             disconnected,
             cancelled: Arc::new(AtomicBool::new(false)),
             pending: Some((probe, sender)),
-            wake,
             stop,
             worker: None,
             interrupted: None,
@@ -141,12 +137,14 @@ impl DisconnectMonitor {
         };
         let worker_stop = Arc::clone(&self.stop);
         let cancelled = Arc::clone(&self.cancelled);
-        self.worker = Some(thread::spawn(move || {
+        let wake = Arc::clone(&probe.poller);
+        let worker = thread::spawn(move || {
             if !matches!(probe.wait_for_disconnect(&worker_stop), Ok(false)) {
                 cancelled.store(true, Ordering::Release);
                 let _ = sender.send(());
             }
-        }));
+        });
+        self.worker = Some((worker, wake));
     }
 
     pub(crate) fn cancellation(&mut self) -> Arc<AtomicBool> {
@@ -182,8 +180,8 @@ where
 impl Drop for DisconnectMonitor {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take() {
-            let _ = self.wake.notify();
+        if let Some((worker, wake)) = self.worker.take() {
+            let _ = wake.notify();
             worker.thread().unpark();
             let _ = worker.join();
         }

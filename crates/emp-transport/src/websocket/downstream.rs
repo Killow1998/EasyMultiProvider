@@ -1,21 +1,17 @@
 use super::{MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError, frame_length_prefix};
 use crate::{
-    MAX_PROXY_REQUEST_BYTES, RequestBudget, RequestLimits,
-    websocket_pump::{FrameDecodeError, FrameDecoder, FramePoll, WebSocketPoll},
+    MAX_PROXY_REQUEST_BYTES,
+    websocket::frame::{FrameDecodeError, FrameDecoder, FramePoll, WebSocketPoll},
 };
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 pub struct WebSocketConnection<'a, S> {
     stream: &'a mut S,
     closed: bool,
     peer_close_code: Option<u16>,
-    frame_decoder: Option<FrameDecoder>,
-    max_message_bytes: usize,
-    frame_write_closed: Arc<Mutex<bool>>,
+    frame_decoder: FrameDecoder,
 }
 
 impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
@@ -24,75 +20,25 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
             stream,
             closed: false,
             peer_close_code: None,
-            frame_decoder: Some(FrameDecoder::new(MAX_PROXY_REQUEST_BYTES)),
-            max_message_bytes: MAX_PROXY_REQUEST_BYTES,
-            frame_write_closed: Arc::new(Mutex::new(false)),
+            frame_decoder: FrameDecoder::new(MAX_PROXY_REQUEST_BYTES),
         }
     }
 
     pub fn new_with_prefix(stream: &'a mut S, read_prefix: &[u8]) -> Result<Self, WebSocketError> {
         let mut connection = Self::new(stream);
-        connection.feed_read_bytes(read_prefix)?;
+        connection
+            .frame_decoder
+            .feed(read_prefix)
+            .map_err(map_downstream_frame_error)?;
         Ok(connection)
     }
 
-    pub fn feed_read_bytes(&mut self, bytes: &[u8]) -> Result<(), WebSocketError> {
-        self.decoder()?
-            .feed(bytes)
-            .map_err(map_downstream_frame_error)
-    }
     pub const fn peer_close_code(&self) -> Option<u16> {
         self.peer_close_code
     }
 
-    /// Transfer the buffered and partially decoded input to one temporary reader.
-    /// The original connection can write, but cannot read until it is reclaimed.
-    pub fn take_reader<'b, T: Read + Write>(
-        &mut self,
-        stream: &'b mut T,
-    ) -> Result<WebSocketConnection<'b, T>, WebSocketError> {
-        let decoder = self.frame_decoder.take().ok_or(WebSocketError::new(
-            1011,
-            "websocket reader already transferred",
-        ))?;
-        Ok(WebSocketConnection {
-            stream,
-            closed: self.closed,
-            peer_close_code: self.peer_close_code,
-            frame_decoder: Some(decoder),
-            max_message_bytes: self.max_message_bytes,
-            frame_write_closed: Arc::clone(&self.frame_write_closed),
-        })
-    }
-
-    pub fn reclaim_reader<T: Read + Write>(
-        &mut self,
-        mut reader: WebSocketConnection<'_, T>,
-    ) -> Result<(), WebSocketError> {
-        if self.frame_decoder.is_some()
-            || !Arc::ptr_eq(&self.frame_write_closed, &reader.frame_write_closed)
-        {
-            return Err(WebSocketError::new(1011, "unrelated websocket reader"));
-        }
-        self.frame_decoder = reader.frame_decoder.take();
-        self.closed |= reader.closed;
-        self.peer_close_code = reader.peer_close_code;
-        Ok(())
-    }
-
-    fn decoder(&mut self) -> Result<&mut FrameDecoder, WebSocketError> {
-        self.frame_decoder.as_mut().ok_or(WebSocketError::new(
-            1011,
-            "websocket read owner is elsewhere",
-        ))
-    }
-
     fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> Result<(), WebSocketError> {
-        let mut frame_write_closed = self
-            .frame_write_closed
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if self.closed || *frame_write_closed {
+        if self.closed {
             return Err(WebSocketError::new(1006, "websocket closed"));
         }
         let mut header = Vec::with_capacity(10);
@@ -104,7 +50,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
             .and_then(|_| self.stream.write_all(payload))
             .and_then(|_| self.stream.flush())
             .map_err(|_| WebSocketError::new(1006, "websocket closed"));
-        *frame_write_closed |= opcode == 8 || result.is_err();
+        self.closed = opcode == 8 || result.is_err();
         result
     }
 
@@ -122,48 +68,19 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
                 "websocket message limit is invalid",
             ));
         }
-        self.decoder()?.set_max_message_bytes(maximum);
+        self.frame_decoder.set_max_message_bytes(maximum);
         Ok(())
     }
 
-    pub fn enable_responses_capacity(&mut self, limits: Arc<RequestLimits>) {
-        let decoder = self
-            .frame_decoder
-            .as_mut()
-            .expect("new websocket connection");
-        decoder.set_max_message_bytes(MAX_RESPONSES_WEBSOCKET_BYTES);
-        decoder.limit_request_memory(limits);
-        self.max_message_bytes = MAX_RESPONSES_WEBSOCKET_BYTES;
-    }
-
-    pub fn take_request_budget(&mut self) -> Option<RequestBudget> {
-        self.frame_decoder
-            .as_mut()
-            .and_then(FrameDecoder::take_request_budget)
-    }
-
     pub fn poll_text(&mut self) -> Result<WebSocketPoll<String>, WebSocketError> {
-        self.poll_with(|decoder, stream, _| decoder.poll(stream, true, false))
-    }
-
-    fn poll_with(
-        &mut self,
-        read: impl FnOnce(
-            &mut FrameDecoder,
-            &mut S,
-            &Mutex<bool>,
-        ) -> Result<FramePoll, FrameDecodeError>,
-    ) -> Result<WebSocketPoll<String>, WebSocketError> {
         if self.closed {
             return Ok(WebSocketPoll::Closed {
                 code: self.peer_close_code,
             });
         }
-        let decoder = self.frame_decoder.as_mut().ok_or(WebSocketError::new(
-            1011,
-            "websocket read owner is elsewhere",
-        ))?;
-        let poll = read(decoder, self.stream, &self.frame_write_closed)
+        let poll = self
+            .frame_decoder
+            .poll(self.stream, true, false)
             .map_err(map_downstream_frame_error)?;
         self.finish_poll(poll)
     }
@@ -197,7 +114,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
         self.send_json_bytes(&encoded)
     }
     pub fn send_json_bytes(&mut self, payload: &[u8]) -> Result<(), WebSocketError> {
-        if payload.len() > self.max_message_bytes {
+        if payload.len() > MAX_PROXY_REQUEST_BYTES {
             return Err(WebSocketError::new(1009, "websocket response is too large"));
         }
         self.send_frame(1, payload)
@@ -218,13 +135,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
     pub fn receive_text(&mut self) -> Result<Option<String>, WebSocketError> {
         loop {
             match self.poll_text()? {
-                WebSocketPoll::Pending => {
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
-                    )]
-                    std::thread::sleep(Duration::from_millis(1));
-                }
+                WebSocketPoll::Pending => {}
                 WebSocketPoll::Text(text) => return Ok(Some(text)),
                 WebSocketPoll::Ping(payload) => self.send_pong(&payload)?,
                 WebSocketPoll::Closed { .. } => return Ok(None),
@@ -233,7 +144,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
     }
 }
 
-fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
+pub(super) fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
     match error {
         FrameDecodeError::Protocol => WebSocketError::new(1002, "invalid websocket frame"),
         FrameDecodeError::TooLarge => WebSocketError::new(1009, "websocket message is too large"),
@@ -246,39 +157,18 @@ fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
 
 impl WebSocketConnection<'_, TcpStream> {
     pub fn poll_text_ready(&mut self) -> Result<WebSocketPoll<String>, WebSocketError> {
-        self.poll_with(|decoder, stream, frame_write_closed| {
-            decoder.poll(
-                &mut ReadyReader {
-                    stream,
-                    frame_write_closed,
-                },
-                true,
-                false,
-            )
-        })
-    }
-
-    pub fn set_poll_timeout(&mut self, timeout: Duration) -> Result<(), WebSocketError> {
+        if self.closed {
+            return Ok(WebSocketPoll::Closed {
+                code: self.peer_close_code,
+            });
+        }
         self.stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|_| WebSocketError::new(1011, "websocket poll timeout setup failed"))
-    }
-}
-
-struct ReadyReader<'a> {
-    stream: &'a mut TcpStream,
-    frame_write_closed: &'a Mutex<bool>,
-}
-
-impl Read for ReadyReader<'_> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let _writer = self
-            .frame_write_closed
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        self.stream.set_nonblocking(true)?;
-        let result = self.stream.read(buffer);
-        self.stream.set_nonblocking(false)?;
-        result
+            .set_nonblocking(true)
+            .map_err(|_| WebSocketError::new(1006, "websocket closed"))?;
+        let result = self.frame_decoder.poll(self.stream, true, false);
+        self.stream
+            .set_nonblocking(false)
+            .map_err(|_| WebSocketError::new(1006, "websocket closed"))?;
+        self.finish_poll(result.map_err(map_downstream_frame_error)?)
     }
 }

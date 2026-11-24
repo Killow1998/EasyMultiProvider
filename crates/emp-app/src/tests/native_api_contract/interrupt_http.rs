@@ -117,11 +117,7 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             Duration::from_secs(5),
         )
         .unwrap();
-        client
-            .readiness_stream()
-            .unwrap()
-            .set_read_timeout(Some(Duration::from_millis(20)))
-            .unwrap();
+        client.set_read_timeout(Duration::from_millis(20));
         client
             .send_json(&json!({"type":"response.create","model":model,"input":"first"}))
             .unwrap();

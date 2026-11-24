@@ -1,5 +1,5 @@
 use super::Turn;
-use super::duplex::{Duplex, Message};
+use super::socket::{Downstream, DownstreamEvent};
 use crate::app::ServerState;
 use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
@@ -7,9 +7,10 @@ use crate::services::native_connections::RouteKey;
 use crate::services::observation::continuation::ContinuationReason;
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
-use emp_transport::FailureClass;
+use emp_transport::{AsyncClientWebSocket, FailureClass, WebSocketEvent};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, io, time::Duration};
+use tokio::time::Instant;
 mod connection;
 mod errors;
 mod prefill;
@@ -42,8 +43,7 @@ impl NativeSession {
         &mut self,
         state: &'a ServerState,
         turn: &Turn,
-        websocket: &mut super::ObservedWebSocket<'_, '_>,
-        downstream: Option<&std::net::TcpStream>,
+        websocket: &mut super::ObservedWebSocket<'_>,
     ) -> NativeTurnResult<'a> {
         let native_connections = &state.backend.transport.native_connections;
         let Turn {
@@ -113,13 +113,8 @@ impl NativeSession {
             let client = &mut upstream.client;
             let traffic_before = client.traffic();
             let compression = client.compression_enabled();
-            let Some(mut duplex) = downstream.and_then(|socket| Duplex::new(client, socket).ok())
-            else {
-                websocket
-                    .inner
-                    .close(1011, "websocket readiness setup failed");
-                return NativeTurnResult::Closed;
-            };
+            let runtime = &websocket.inner.runtime;
+            let mut idle_deadline = Instant::now() + UPSTREAM_IDLE;
             let mut usage = crate::services::request_outcome::RequestOutcome::new(
                 state,
                 route,
@@ -135,7 +130,7 @@ impl NativeSession {
                 crate::services::activity::ActivityIdentity::from_route(route),
             ));
             let payload = if let Some(prefill) = prefill::Prefill::plan(&plan.payload, &plan.url) {
-                let result = prefill.run(client, &mut duplex, websocket, pending_request);
+                let result = prefill.run(client, &mut idle_deadline, websocket, pending_request);
                 websocket.observation.native_continuation().traffic(
                     traffic_before,
                     client.traffic(),
@@ -163,7 +158,7 @@ impl NativeSession {
                 std::borrow::Cow::Borrowed(&plan.payload)
             };
             usage.dispatch();
-            if let Err(error) = client.send_json(&payload) {
+            if let Err(error) = runtime.block_on(client.send_json(&payload)) {
                 websocket.observation.native_continuation().transport_error =
                     Some(error.to_string());
                 native_connections.defer(route_key.clone());
@@ -198,8 +193,12 @@ impl NativeSession {
             let mut replay_allowed = true;
             let mut connection_expired = false;
             loop {
-                let message = match duplex.next(client, websocket.inner, pending_request.is_none())
-                {
+                let message = match runtime.block_on(next_message(
+                    client,
+                    websocket.inner,
+                    pending_request.is_none(),
+                    &mut idle_deadline,
+                )) {
                     Ok(Some(message)) => message,
                     Ok(None) => break,
                     Err(error) => {
@@ -224,7 +223,7 @@ impl NativeSession {
                             .ok()
                             .is_some_and(|value| value["type"] == "response.interrupt")
                         {
-                            if let Err(error) = client.send_text(&text) {
+                            if let Err(error) = runtime.block_on(client.send_text(&text)) {
                                 websocket.observation.native_continuation().transport_error =
                                     Some(error.to_string());
                                 break;
@@ -254,7 +253,7 @@ impl NativeSession {
                             retry: true,
                         });
                         usage.dispatch();
-                        if let Err(error) = client.send_json(&retry_payload) {
+                        if let Err(error) = runtime.block_on(client.send_json(&retry_payload)) {
                             websocket.observation.native_continuation().transport_error =
                                 Some(error.to_string());
                             break;
@@ -390,5 +389,54 @@ impl NativeSession {
         *fallback_active = true;
         websocket.observation.native_continuation().http_fallback = true;
         NativeTurnResult::HttpFallback(native_turn_activity, fallback_usage)
+    }
+}
+
+const UPSTREAM_IDLE: Duration = Duration::from_secs(300);
+
+enum Message {
+    Upstream(Value),
+    Downstream(String),
+    DownstreamClosed,
+}
+
+async fn next_message(
+    client: &mut AsyncClientWebSocket,
+    downstream: &Downstream,
+    read_downstream: bool,
+    idle_deadline: &mut Instant,
+) -> io::Result<Option<Message>> {
+    loop {
+        tokio::select! {
+            biased;
+            _ = tokio::time::sleep_until(*idle_deadline) => return Err(io::ErrorKind::TimedOut.into()),
+            event = downstream.read(), if read_downstream => {
+                match downstream.finish_read(event).await {
+                    DownstreamEvent::Text(text) => return Ok(Some(Message::Downstream(text))),
+                    DownstreamEvent::Control => {}
+                    DownstreamEvent::Closed => return Ok(Some(Message::DownstreamClosed)),
+                }
+            }
+            event = client.read() => match event {
+                Ok(WebSocketEvent::Text(text)) => {
+                    *idle_deadline = Instant::now() + UPSTREAM_IDLE;
+                    if let Ok(value @ Value::Object(_)) = serde_json::from_str(&text) {
+                        return Ok(Some(Message::Upstream(value)));
+                    }
+                }
+                Ok(WebSocketEvent::Ping(payload)) => {
+                    *idle_deadline = Instant::now() + UPSTREAM_IDLE;
+                    client.send_pong(&payload).await.map_err(io::Error::other)?;
+                }
+                Ok(WebSocketEvent::Closed { .. }) => {
+                    client.close(1000, "").await;
+                    return Ok(None);
+                }
+                Err(error) => {
+                    client.close(1000, "").await;
+                    return Err(io::Error::other(error));
+                }
+            }
+        }
     }
 }

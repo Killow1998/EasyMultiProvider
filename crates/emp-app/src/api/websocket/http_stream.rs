@@ -13,7 +13,7 @@ use serde_json::Value;
 pub(super) fn serve_native(
     state: &ServerState,
     turn: &Turn,
-    websocket: &mut super::ObservedWebSocket<'_, '_>,
+    websocket: &mut super::ObservedWebSocket<'_>,
     monitor: &mut crate::services::disconnect::DisconnectMonitor,
     mut native_turn_activity: Option<ActivityGuard<'_>>,
     previous_usage: Option<crate::services::request_outcome::RequestOutcome<'_>>,
@@ -113,7 +113,7 @@ pub(super) fn serve_native(
 pub(super) fn serve_external(
     state: &ServerState,
     turn: &Turn,
-    websocket: &mut super::ObservedWebSocket<'_, '_>,
+    websocket: &mut super::ObservedWebSocket<'_>,
     monitor: &mut crate::services::disconnect::DisconnectMonitor,
 ) -> TurnResult {
     let Turn {

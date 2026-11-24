@@ -16,8 +16,6 @@ use crate::util::projection_ids;
 use crate::util::random_hex;
 use emp_context::HistoryError;
 use emp_transport::FailureClass;
-use emp_transport::WebSocketConnection;
-use emp_transport::WebSocketPoll;
 use emp_transport::websocket_accept;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -27,21 +25,23 @@ use std::net::TcpStream;
 mod aero;
 mod claude;
 mod control;
-mod duplex;
+
 mod http_stream;
 mod native_socket;
+pub(super) mod socket;
+use socket::{Downstream, DownstreamEvent, legacy_websocket_io};
 
 use native_socket::{NativeSession, NativeTurnResult, native_stream_error_value};
 
 /// The downstream sender owns delivery evidence; upstream accounting is separate.
-struct ObservedWebSocket<'a, 'stream> {
-    inner: &'a mut WebSocketConnection<'stream, TcpStream>,
+struct ObservedWebSocket<'a> {
+    inner: &'a Downstream,
     observation: &'a mut RequestObservation,
     control: Option<std::sync::Arc<control::Control>>,
     last_response_id: &'a mut Option<String>,
     codex: bool,
 }
-impl ObservedWebSocket<'_, '_> {
+impl ObservedWebSocket<'_> {
     fn warmup(&mut self) -> Result<(), emp_transport::WebSocketError> {
         let id = "";
         let usage = serde_json::json!({"input_tokens":0,"input_tokens_details":Value::Null,"output_tokens":0,"output_tokens_details":Value::Null,"total_tokens":0});
@@ -99,7 +99,7 @@ impl ObservedWebSocket<'_, '_> {
         let formatted = self.observation.errors().event(event, upstream);
         let event = formatted.as_ref().unwrap_or(event);
         let result = match &self.control {
-            Some(control) => match control.send(self.inner, event) {
+            Some(control) => match self.inner.runtime.block_on(control.send(self.inner, event)) {
                 Ok(false) => return Ok(()),
                 Ok(true) => Ok(()),
                 Err(error) => Err(error),
@@ -195,13 +195,18 @@ pub(crate) fn serve_responses_websocket(
         return;
     }
     let monitor_stream = stream.try_clone().ok();
-    let mut websocket = match WebSocketConnection::new_with_prefix(stream, &body_prefix) {
-        Ok(websocket) => websocket,
-        Err(_) => return,
+    let runtime = state.backend.transport.runtime.handle();
+    let Ok(io) = legacy_websocket_io(stream, runtime) else {
+        return;
     };
-    websocket.enable_responses_capacity(std::sync::Arc::clone(
-        &state.backend.transport.request_limits,
-    ));
+    let Ok(websocket) = Downstream::new(
+        io,
+        &body_prefix,
+        std::sync::Arc::clone(&state.backend.transport.request_limits),
+        runtime.clone(),
+    ) else {
+        return;
+    };
     let Some(_websocket_permit) = state.connection_admission.acquire_websocket() else {
         state.backend.diagnostics.journal.event(
             "warning",
@@ -215,40 +220,30 @@ pub(crate) fn serve_responses_websocket(
     let mut last_response_id = None;
     loop {
         let next = match native_session.pending_request.take() {
-            Some(text) => Ok(Some(text)),
-            None => loop {
-                if state.connection_admission.is_quiescing()
-                    || state.shutdown.load(std::sync::atomic::Ordering::Acquire)
-                {
-                    websocket.close(1001, "EMP connection is draining");
-                    return;
-                }
-                match websocket.poll_text_ready() {
-                    Ok(WebSocketPoll::Text(text)) => break Ok(Some(text)),
-                    Ok(WebSocketPoll::Closed { .. }) => break Ok(None),
-                    Ok(WebSocketPoll::Ping(payload)) => {
-                        if let Err(error) = websocket.send_pong(&payload) {
-                            break Err(error);
-                        }
+            Some(text) => Some(text),
+            None => runtime.block_on(async {
+                loop {
+                    let event = tokio::select! {
+                        biased;
+                        _ = state.wait_for_shutdown() => break,
+                        _ = state.connection_admission.wait_for_websocket_drain() => break,
+                        event = websocket.read() => event,
+                    };
+                    match websocket.finish_read(event).await {
+                        DownstreamEvent::Text(text) => return Some(text),
+                        DownstreamEvent::Control => continue,
+                        DownstreamEvent::Closed => return None,
                     }
-                    Ok(WebSocketPoll::Pending) => {
-                        #[expect(
-                            clippy::disallowed_methods,
-                            reason = "按既有固定间隔轮询 WebSocket 帧并检查连接排空状态"
-                        )]
-                        std::thread::sleep(std::time::Duration::from_millis(25));
-                    }
-                    Err(error) => break Err(error),
                 }
-            },
+                websocket
+                    .writer
+                    .close(1001, "EMP connection is draining")
+                    .await;
+                None
+            }),
         };
-        let text = match next {
-            Ok(Some(value)) => value,
-            Ok(None) => return,
-            Err(error) => {
-                websocket.close(error.close_code(), &error.to_string());
-                return;
-            }
+        let Some(text) = next else {
+            return;
         };
         let _request_budget = websocket.take_request_budget();
         if request
@@ -308,7 +303,7 @@ pub(crate) fn serve_responses_websocket(
         observation = observation.with_errors(presentation);
         let mut websocket = ObservedWebSocket {
             codex: crate::services::events::codex_client(&incoming),
-            inner: &mut websocket,
+            inner: &websocket,
             observation: &mut observation,
             control: None,
             last_response_id: &mut last_response_id,
@@ -375,15 +370,11 @@ pub(crate) fn serve_responses_websocket(
                 }
                 continue;
             }
-            let Some(socket) = monitor_stream.as_ref() else {
-                return;
-            };
             request_body["stream"] = Value::Bool(true);
             let request_headers = websocket.observation.headers(incoming.clone());
             let result = control::run(
                 state,
                 &mut websocket,
-                socket,
                 &mut native_session.pending_request,
                 |websocket, monitor| {
                     aero::serve(
@@ -619,7 +610,7 @@ pub(crate) fn serve_responses_websocket(
         };
         let (native_turn_activity, native_usage) =
             if turn.route.dialect == emp_domain::Dialect::CodexNative {
-                match native_session.serve(state, &turn, &mut websocket, monitor_stream.as_ref()) {
+                match native_session.serve(state, &turn, &mut websocket) {
                     NativeTurnResult::Finished => continue,
                     NativeTurnResult::Closed => return,
                     NativeTurnResult::HttpFallback(activity, usage) => (activity, usage),
@@ -641,13 +632,9 @@ pub(crate) fn serve_responses_websocket(
         }
         body.remove("generate");
         body.insert("stream".to_owned(), Value::Bool(true));
-        let Some(socket) = monitor_stream.as_ref() else {
-            return;
-        };
         let result = control::run(
             state,
             &mut websocket,
-            socket,
             &mut native_session.pending_request,
             |websocket, monitor| {
                 if crate::services::claude_cli::selected(&turn.route) {

@@ -63,6 +63,20 @@ impl ConnectionAdmission {
             .map_or(true, |state| state.closed)
     }
 
+    pub(crate) async fn wait_for_websocket_drain(&self) {
+        let notified = self.websockets.closing.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self
+            .websockets
+            .state
+            .lock()
+            .map_or(true, |state| state.closed)
+        {
+            notified.await;
+        }
+    }
+
     /// Exit cannot wait behind a management request's drain guard. Closing
     /// each pool permanently also prevents that guard from reopening it.
     pub(crate) fn close(&self) {
@@ -123,6 +137,7 @@ struct SlotState {
 struct AdaptiveSlotPool {
     state: Mutex<SlotState>,
     drained: Condvar,
+    closing: tokio::sync::Notify,
 }
 
 impl AdaptiveSlotPool {
@@ -138,6 +153,7 @@ impl AdaptiveSlotPool {
                 permanently_closed: false,
             }),
             drained: Condvar::new(),
+            closing: tokio::sync::Notify::new(),
         }
     }
 
@@ -176,6 +192,7 @@ impl AdaptiveSlotPool {
             return false;
         };
         state.closed = true;
+        self.closing.notify_waiters();
         true
     }
 
@@ -190,6 +207,7 @@ impl AdaptiveSlotPool {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.closed = true;
         state.permanently_closed = true;
+        self.closing.notify_waiters();
     }
 
     fn wait_for_at_most(&self, maximum_active: usize, deadline: Instant) -> bool {

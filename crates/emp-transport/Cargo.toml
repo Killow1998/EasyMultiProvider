@@ -22,7 +22,8 @@ serde.workspace = true
 serde_json.workspace = true
 socket2 = { version = "0.6.5", features = ["all"] }
 sha2 = "0.10.9"
-tokio = { version = "1.53.1", features = ["time"] }
+tokio = { version = "1.53.1", features = ["io-util", "net", "rt", "sync", "time"] }
+tokio-rustls = { version = "0.26.5", default-features = false }
 url = "2.5.7"
 zstd = "0.13"
 

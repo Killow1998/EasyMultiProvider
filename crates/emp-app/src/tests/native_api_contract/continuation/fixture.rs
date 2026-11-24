@@ -344,7 +344,7 @@ pub(super) fn server(upstream: &Upstream, imported: bool) -> (TempDir, ServerHan
 }
 
 pub(super) fn connect(server: &ServerHandle, thread_id: &str) -> ClientWebSocket {
-    let ws = ClientWebSocket::connect(
+    let mut ws = ClientWebSocket::connect(
         &format!("ws://{}/v1/responses", server.local_addr()),
         &BTreeMap::from([
             ("originator".into(), "codex_cli_rs".into()),
@@ -362,10 +362,7 @@ pub(super) fn connect(server: &ServerHandle, thread_id: &str) -> ClientWebSocket
         Duration::from_secs(5),
     )
     .unwrap();
-    ws.readiness_stream()
-        .unwrap()
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .unwrap();
+    ws.set_read_timeout(Duration::from_secs(30));
     ws
 }
 

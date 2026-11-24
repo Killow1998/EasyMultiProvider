@@ -291,3 +291,72 @@ fn request_admission_rejects_overflow_and_releases_after_disconnect() {
     );
     assert_eq!(available_health.as_deref(), Some("HTTP/1.1 200 OK\r\n"));
 }
+
+#[test]
+fn responses_half_close_replies_and_releases_its_websocket_permit() {
+    use crate::server::raw_tcp::{DEADLINE, RawClient};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (_directory, server) = server_with_admission(tiny_admission(8, 1));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let cookie = session_header(&server);
+        let request = format!(
+            "GET /v1/responses HTTP/1.1\r\nHost: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\n\r\n",
+            server.local_addr()
+        );
+        let mut client = RawClient::request(server.local_addr(), request.as_bytes()).await;
+        assert!(client.head.starts_with("HTTP/1.1 101"));
+        client.io.write_all(b"\x89\x81\x01\x02\x03\x04q").await.unwrap();
+        let mut pong = [0; 3];
+        tokio::time::timeout(DEADLINE, client.io.read_exact(&mut pong)).await.unwrap().unwrap();
+        assert_eq!(&pong, b"\x8a\x01p");
+        assert_eq!(server.state.connection_admission.active_websockets(), 1);
+        client.io.shutdown().await.unwrap();
+        assert_eq!(client.rest().await, b"\x88\x00");
+    });
+    wait_for(Duration::from_secs(2), || {
+        server.state.connection_admission.active_websockets() == 0
+    });
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn responses_drain_flushes_close_before_returning_permit_and_reopens() {
+    let (_directory, server) = server_with_admission(tiny_admission(8, 1));
+    let mut client = websocket(&server);
+    wait_for(Duration::from_secs(2), || {
+        server.state.connection_admission.active_websockets() == 1
+    });
+    thread::scope(|scope| {
+        let drain = scope.spawn(|| {
+            let guard = server
+                .state
+                .connection_admission
+                .quiesce(0, Duration::from_secs(2))
+                .expect("the idle websocket returns its permit");
+            drop(guard);
+        });
+        assert_eq!(
+            read_server_frame(&mut client),
+            Some((
+                8,
+                [b"\x03\xe9".as_slice(), b"EMP connection is draining"].concat()
+            ))
+        );
+        assert_eq!(read_server_frame(&mut client), None);
+        drain.join().unwrap();
+    });
+
+    let mut replacement = websocket(&server);
+    send_masked_text(
+        &mut replacement,
+        &json!({"type":"response.create","model":"missing/model"}),
+    );
+    assert!(matches!(read_server_frame(&mut replacement), Some((1, _))));
+    drop(replacement);
+    server.shutdown().unwrap();
+}

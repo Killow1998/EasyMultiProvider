@@ -15,7 +15,7 @@ pub(super) fn serve(
     config: &Value,
     body: &Value,
     request: (Request<'_>, &BTreeMap<String, String>),
-    websocket: &mut ObservedWebSocket<'_, '_>,
+    websocket: &mut ObservedWebSocket<'_>,
     monitor: &mut DisconnectMonitor,
 ) -> TurnResult {
     let mut upstream = match open(
@@ -100,7 +100,7 @@ pub(super) fn serve(
     }
 }
 
-fn send(websocket: &mut ObservedWebSocket<'_, '_>, event: &Value) -> TurnResult {
+fn send(websocket: &mut ObservedWebSocket<'_>, event: &Value) -> TurnResult {
     match websocket.send_json(event) {
         Ok(()) => TurnResult::Finished,
         Err(_) => TurnResult::Closed,

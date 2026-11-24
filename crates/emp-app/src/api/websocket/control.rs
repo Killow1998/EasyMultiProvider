@@ -1,16 +1,15 @@
 //! Framed control ownership while a turn uses HTTP or the single-step CLI.
 //! One bounded next request is retained; cancellation reuses the I/O race.
+use super::socket::{Downstream, DownstreamEvent};
 use super::{ObservedWebSocket, TurnResult};
 use crate::app::ServerState;
 use crate::services::disconnect::DisconnectMonitor;
-use emp_transport::{WebSocketConnection, WebSocketPoll};
-use polling::{Event, Events, Poller};
 use serde_json::{Value, json};
-use std::net::TcpStream;
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
+use tokio::sync::{Mutex, oneshot};
 
 #[derive(Default)]
 struct Response {
@@ -27,18 +26,18 @@ pub(super) struct Control {
 }
 
 impl Control {
-    pub(super) fn send(
+    pub(super) async fn send(
         &self,
-        websocket: &mut WebSocketConnection<'_, TcpStream>,
+        websocket: &Downstream,
         event: &Value,
     ) -> Result<bool, emp_transport::WebSocketError> {
-        let mut response = self.response.lock().unwrap();
+        let mut response = self.response.lock().await;
         let interruption = event["type"] == "response.incomplete"
             && event["response"]["incomplete_details"]["reason"] == "interrupted";
         if self.interrupted.load(Ordering::Acquire) && !interruption {
             return Ok(false);
         }
-        websocket.send_json(event)?;
+        websocket.writer.send_json(event).await?;
         if event["type"] == "response.created" {
             response.id = event["response"]["id"].as_str().map(str::to_owned);
         }
@@ -47,8 +46,8 @@ impl Control {
         Ok(true)
     }
 
-    fn incomplete(&self) -> Option<Value> {
-        let response = self.response.lock().unwrap();
+    async fn incomplete(&self) -> Option<Value> {
+        let response = self.response.lock().await;
         if !self.interrupted.load(Ordering::Acquire) || response.interruption_written {
             return None;
         }
@@ -59,48 +58,12 @@ impl Control {
     }
 }
 
-struct Readiness {
-    socket: TcpStream,
-    poller: Arc<Poller>,
-}
-impl Readiness {
-    fn new(socket: &TcpStream) -> std::io::Result<Self> {
-        let socket = socket.try_clone()?;
-        let poller = Arc::new(Poller::new()?);
-        // SAFETY: the owned socket is unregistered before it is dropped.
-        unsafe {
-            poller.add(&socket, Event::readable(0))?;
-        }
-        Ok(Self { socket, poller })
-    }
-}
-impl Drop for Readiness {
-    fn drop(&mut self) {
-        let _ = self.poller.delete(&self.socket);
-    }
-}
-
-struct Stop<'a>(&'a AtomicBool, &'a Poller);
-impl Drop for Stop<'_> {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Release);
-        let _ = self.1.notify();
-    }
-}
-
 pub(super) fn run(
     state: &ServerState,
-    websocket: &mut ObservedWebSocket<'_, '_>,
-    socket: &TcpStream,
+    websocket: &mut ObservedWebSocket<'_>,
     pending_request: &mut Option<String>,
-    execute: impl FnOnce(&mut ObservedWebSocket<'_, '_>, &mut DisconnectMonitor) -> TurnResult,
+    execute: impl FnOnce(&mut ObservedWebSocket<'_>, &mut DisconnectMonitor) -> TurnResult,
 ) -> TurnResult {
-    let Ok(mut socket) = socket.try_clone() else {
-        return TurnResult::Closed;
-    };
-    let Ok(readiness) = Readiness::new(&socket) else {
-        return TurnResult::Closed;
-    };
     let control = Arc::new(Control {
         previous_id: websocket.last_response_id.clone(),
         ..Control::default()
@@ -110,101 +73,76 @@ pub(super) fn run(
         .headers(Default::default())
         .get("X-EMP-Request-ID")
         .cloned();
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let Ok(mut monitor) =
-        DisconnectMonitor::from_signal(receiver, Arc::clone(&control.interrupted))
-    else {
-        return TurnResult::Closed;
-    };
-    let Ok(mut reader) = websocket.inner.take_reader(&mut socket) else {
-        return TurnResult::Closed;
-    };
-    websocket.control = Some(Arc::clone(&control));
-    let stopped = AtomicBool::new(false);
-    let result = std::thread::scope(|scope| {
-        let worker = scope.spawn(|| {
-            let mut sender = Some(sender);
-            let mut pending = None;
-            let mut events = Events::with_capacity(std::num::NonZeroUsize::new(1).unwrap());
-            let mut read_without_wait = true;
-            while !stopped.load(Ordering::Acquire) {
-                if !read_without_wait {
-                    events.clear();
-                    match readiness.poller.wait(&mut events, None) {
-                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => break,
-                        Ok(_) => {},
-                    }
-                    if stopped.load(Ordering::Acquire) { break; }
-                    read_without_wait = events.iter().any(|event| event.readable);
-                    if !read_without_wait { continue; }
+    let (sender, receiver) = oneshot::channel();
+    let mut monitor = DisconnectMonitor::from_signal(receiver, Arc::clone(&control.interrupted));
+    let reader = websocket.inner.reader_task();
+    let diagnostics = Arc::clone(&state.backend.diagnostics);
+    let task_control = Arc::clone(&control);
+    let (stop, mut stopped) = oneshot::channel::<()>();
+    let worker = websocket.inner.runtime.spawn(async move {
+        let mut sender = Some(sender);
+        let mut pending = None;
+        loop {
+            let event = tokio::select! {
+                biased;
+                _ = &mut stopped => break,
+                event = reader.read() => event,
+            };
+            let text = match reader.finish_read(event).await {
+                DownstreamEvent::Text(text) => text,
+                DownstreamEvent::Control => continue,
+                DownstreamEvent::Closed => {
+                    let _ = sender.take().unwrap().send(());
+                    break;
                 }
-                match reader.poll_text_ready() {
-                    Ok(WebSocketPoll::Pending) => {
-                        read_without_wait = false;
-                        if readiness.poller.modify(&readiness.socket, Event::readable(0)).is_err() { break; }
-                    }
-                    Ok(WebSocketPoll::Ping(payload)) => {
-                        if reader.send_pong(&payload).is_err() { break; }
-                    }
-                    Ok(WebSocketPoll::Text(text)) => {
-                        let value = serde_json::from_str::<Value>(&text).ok();
-                        if value.as_ref().is_none_or(|value| value["type"] != "response.interrupt") {
-                            pending = Some(text);
-                            break;
-                        }
-                        let value = value.unwrap();
-                        let response = control.response.lock().unwrap();
-                        let matches = value["response_id"].as_str().is_some_and(|id| Some(id) == response.id.as_deref());
-                        let valid = matches && value["mode"] == "discard_partial_items";
-                        let previous = value["response_id"].as_str().is_some_and(|id| Some(id) == control.previous_id.as_deref())
-                            && value["mode"] == "discard_partial_items";
-                        let terminal = response.terminal;
-                        if valid && !terminal {
-                            control.interrupted.store(true, Ordering::Release);
-                        }
-                        drop(response);
-                        state.backend.diagnostics.journal.event("info", "websocket_control", &json!({
-                            "type":"response.interrupt", "accepted":valid || previous, "late":terminal || previous,
-                            "request_id":request_id,
-                            "error_origin":if valid || previous {"none"} else {"emp"},
-                            "error_code":if valid || previous {""} else {"invalid_request"},
-                            "response_id":value["response_id"].as_str().filter(|id| id.len() <= 128)
-                        }));
-                        if !valid && !previous {
-                            let _ = reader.send_json(&crate::api::failure_response::emp_websocket_error(400, "invalid_request", "interrupt must target the active response and use discard_partial_items"));
-                        } else if valid && !terminal {
-                            let _ = sender.take().unwrap().send(());
-                            break;
-                        }
-                    }
-                    Ok(WebSocketPoll::Closed { .. }) => {
-                        let _ = sender.take().unwrap().send(());
-                        break;
-                    }
-                    Err(error) => {
-                        reader.close(error.close_code(), &error.to_string());
-                        let _ = sender.take().unwrap().send(());
-                        break;
-                    }
-                }
+            };
+            let value = serde_json::from_str::<Value>(&text).ok();
+            if value.as_ref().is_none_or(|value| value["type"] != "response.interrupt") {
+                pending = Some(text);
+                break;
             }
-            if pending.is_none() && !stopped.load(Ordering::Acquire)
-                && let Some(sender) = sender.take()
-            { let _ = sender.send(()); }
-            (reader, pending, sender)
-        });
-        let stop = Stop(&stopped, &readiness.poller);
-        let result = execute(websocket, &mut monitor);
-        drop(stop);
-        let (reader, pending, _sender) = worker.join().expect("websocket control reader");
-        if websocket.inner.reclaim_reader(reader).is_err() {
-            return TurnResult::Closed;
+            let value = value.unwrap();
+            let (valid, previous, terminal) = {
+                let response = task_control.response.lock().await;
+                let id = value["response_id"].as_str();
+                let mode_matches = value["mode"] == "discard_partial_items";
+                let valid = id.is_some_and(|id| Some(id) == response.id.as_deref()) && mode_matches;
+                let previous = id.is_some_and(|id| Some(id) == task_control.previous_id.as_deref()) && mode_matches;
+                if valid && !response.terminal {
+                    task_control.interrupted.store(true, Ordering::Release);
+                }
+                (valid, previous, response.terminal)
+            };
+            let journal = Arc::clone(&diagnostics);
+            let fields = json!({
+                "type":"response.interrupt", "accepted":valid || previous, "late":terminal || previous,
+                "request_id":request_id,
+                "error_origin":if valid || previous {"none"} else {"emp"},
+                "error_code":if valid || previous {""} else {"invalid_request"},
+                "response_id":value["response_id"].as_str().filter(|id| id.len() <= 128)
+            });
+            let _ = tokio::task::spawn_blocking(move || {
+                journal.journal.event("info", "websocket_control", &fields);
+            }).await;
+            if !valid && !previous {
+                let _ = reader.writer.send_json(&crate::api::failure_response::emp_websocket_error(400, "invalid_request", "interrupt must target the active response and use discard_partial_items")).await;
+            } else if valid && !terminal {
+                let _ = sender.take().unwrap().send(());
+                break;
+            }
         }
-        *pending_request = pending;
-        result
+        (pending, sender)
     });
-    let result = if let Some(event) = control.incomplete() {
+    websocket.control = Some(Arc::clone(&control));
+    let result = execute(websocket, &mut monitor);
+    drop(stop);
+    let (pending, _sender) = websocket
+        .inner
+        .runtime
+        .block_on(worker)
+        .expect("websocket control reader");
+    *pending_request = pending;
+    let result = if let Some(event) = websocket.inner.runtime.block_on(control.incomplete()) {
         if websocket.send_json(&event).is_ok() {
             TurnResult::Finished
         } else {

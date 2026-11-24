@@ -16,7 +16,7 @@ use tokio::{
 
 #[cfg(test)]
 #[path = "../../tests/support/raw_tcp.rs"]
-mod raw_tcp;
+pub(crate) mod raw_tcp;
 #[cfg(test)]
 mod tests;
 

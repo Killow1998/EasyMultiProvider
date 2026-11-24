@@ -119,11 +119,7 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
         timeout,
     )
     .unwrap();
-    websocket
-        .readiness_stream()
-        .unwrap()
-        .set_read_timeout(Some(timeout))
-        .unwrap();
+    websocket.set_read_timeout(timeout);
     let body = json!({"id":id}).to_string();
     let mut removal = TcpStream::connect(server.local_addr()).unwrap();
     write!(

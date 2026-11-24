@@ -1,10 +1,11 @@
 use super::realtime_contract::{RealtimeUpstream, UpstreamResponse, app_server_for};
 use super::*;
+use crate::api::realtime::sideband::SIDEBAND_EVENT_CAPACITY;
 use crate::api::realtime::sideband::{
     MAX_REALTIME_SIDEBAND_MESSAGE_BYTES, prepare_sideband,
     serve_realtime_sideband_with_test_connector,
 };
-use emp_transport::{ClientWebSocket, websocket_accept};
+use emp_transport::websocket_accept;
 use std::net::TcpListener;
 
 fn server_fixture(with_native_auth: bool) -> (TempDir, TempDir, RealtimeUpstream, ServerHandle) {
@@ -235,14 +236,16 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
             request_head.body_prefix,
             &state,
             crate::util::system_now(),
-            move |_url, headers, timeout, _proxy| {
+            move |prepared| {
+                let headers = &prepared.headers;
                 assert_eq!(headers["Authorization"], "Bearer native-secret");
                 assert!(
                     !headers
                         .values()
                         .any(|value| value == "Bearer caller-secret")
                 );
-                ClientWebSocket::connect(&fake_url, headers, timeout)
+                prepared.url = fake_url;
+                prepared.proxy = None;
             },
         );
     });
@@ -264,7 +267,7 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     let response_head = read_http_head(&mut downstream);
     assert!(response_head.starts_with("HTTP/1.1 101 Switching Protocols\r\n"));
 
-    for index in 0..emp_transport::DEFAULT_PUMP_CHANNEL_CAPACITY {
+    for index in 0..SIDEBAND_EVENT_CAPACITY {
         let (opcode, payload) = read_ws_frame(&mut downstream);
         assert_eq!(opcode, 1);
         if index == 0 {
@@ -286,7 +289,7 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
             .expect("downstream command is serviced while upstream events are queued"),
         br#"{"type":"client.first"}"#
     );
-    for index in emp_transport::DEFAULT_PUMP_CHANNEL_CAPACITY - 1..11 {
+    for index in SIDEBAND_EVENT_CAPACITY - 1..11 {
         let (opcode, payload) = read_ws_frame(&mut downstream);
         assert_eq!(opcode, 1);
         assert_eq!(
@@ -546,8 +549,9 @@ fn direct_sideband_request(server: &ServerHandle, call_id: &str, fake_url: &str)
             head.body_prefix,
             &state,
             crate::util::system_now(),
-            move |_url, headers, timeout, _proxy| {
-                ClientWebSocket::connect(&owned_url, headers, timeout)
+            move |prepared| {
+                prepared.url = owned_url;
+                prepared.proxy = None;
             },
         );
     });

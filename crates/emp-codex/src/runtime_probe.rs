@@ -1,6 +1,6 @@
 //! Read the shared Codex model catalog over its local control WebSocket.
-use emp_transport::ClientWebSocket;
 use emp_transport::ClientWebSocketError;
+use emp_transport::LocalWebSocket;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -63,7 +63,7 @@ fn transport_error(error: ClientWebSocketError) -> ProbeError {
 }
 
 fn response(
-    socket: &mut ClientWebSocket,
+    socket: &mut LocalWebSocket,
     id: u64,
     rejected_detail: &'static str,
 ) -> Result<Value, ProbeError> {
@@ -95,7 +95,7 @@ fn response(
     })
 }
 
-fn initialize(socket: &mut ClientWebSocket) -> Result<(), ProbeError> {
+fn initialize(socket: &mut LocalWebSocket) -> Result<(), ProbeError> {
     socket
         .send_json(&json!({"id":1,"method":"initialize","params":{
             "clientInfo":{"name":"easy-multi-provider","title":"EMP","version":env!("CARGO_PKG_VERSION")},
@@ -111,7 +111,7 @@ fn initialize(socket: &mut ClientWebSocket) -> Result<(), ProbeError> {
 fn model_list(home: &Path) -> Result<Vec<Value>, ProbeError> {
     let path = home.join("app-server-control/app-server-control.sock");
     let mut socket =
-        ClientWebSocket::connect_local(&path, Duration::from_secs(15)).map_err(transport_error)?;
+        LocalWebSocket::connect(&path, Duration::from_secs(15)).map_err(transport_error)?;
     let result = (|| {
         initialize(&mut socket)?;
         let mut models = Vec::new();
@@ -173,7 +173,7 @@ fn model_list(home: &Path) -> Result<Vec<Value>, ProbeError> {
             detail: "Codex model catalog pagination exceeded its limit",
         })
     })();
-    socket.close();
+    drop(socket);
     result
 }
 

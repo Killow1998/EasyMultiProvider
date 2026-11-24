@@ -1,18 +1,23 @@
-use crate::websocket_pump::FrameDecoder;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use compression::PerMessageDeflate;
-use network::ReadWrite;
 use ring::digest::{SHA1_FOR_LEGACY_USE_ONLY, digest};
 use std::fmt;
 
 mod client;
 mod compression;
 mod downstream;
+mod frame;
 mod network;
+mod server;
+mod sync_client;
 #[cfg(test)]
 mod tests;
 
+pub use client::AsyncClientWebSocket;
 pub use downstream::WebSocketConnection;
+pub use frame::{WebSocketEvent, WebSocketPoll};
+pub use server::{WebSocketReader, WebSocketWriter, split_websocket};
+pub use sync_client::{ClientWebSocket, LocalWebSocket};
+pub const DEFAULT_WEBSOCKET_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 
 const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 pub const MAX_RESPONSES_WEBSOCKET_BYTES: usize = 128 * 1024 * 1024;
@@ -108,18 +113,6 @@ impl fmt::Display for ClientWebSocketError {
     }
 }
 impl std::error::Error for ClientWebSocketError {}
-
-pub struct ClientWebSocket {
-    stream: Box<dyn ReadWrite>,
-    closed: bool,
-    peer_close_code: Option<u16>,
-    response_headers: std::collections::BTreeMap<String, String>,
-    compression: Option<PerMessageDeflate>,
-    max_message_bytes: usize,
-    frame_decoder: FrameDecoder,
-    local_control: bool,
-    traffic: WebSocketTraffic,
-}
 
 /// Complete text application payload bytes. Partial writes/failed decoding
 /// become unknown; framing, control, handshakes and TLS overhead are excluded.

@@ -1,46 +1,27 @@
 use super::compression::{DecompressionError, PerMessageDeflate};
-use super::network::ReadWrite;
+use super::frame::{FrameDecoder, FramePoll};
 use super::*;
-use crate::websocket_pump::WebSocketPumpConfig;
-use crate::{
-    MAX_PROXY_REQUEST_BYTES,
-    websocket_pump::{FrameDecoder, WebSocketPoll},
-};
+use crate::MAX_PROXY_REQUEST_BYTES;
 use flate2::{Compress, Compression, FlushCompress};
+use std::future::Future;
 use std::io::Cursor;
 use std::time::Duration;
+use tokio::io::{AsyncWriteExt, duplex};
+use tokio::time::timeout;
 
-impl ReadWrite for Cursor<Vec<u8>> {
-    fn set_read_timeout(&self, _timeout: Option<Duration>) -> std::io::Result<()> {
-        Ok(())
-    }
+fn client_socket() -> AsyncClientWebSocket {
+    AsyncClientWebSocket::new(
+        Box::new(tokio::io::join(tokio::io::empty(), tokio::io::sink())),
+        Default::default(),
+        None,
+        Duration::from_secs(5),
+    )
 }
 
-fn client_socket() -> ClientWebSocket {
-    ClientWebSocket {
-        stream: Box::new(Cursor::new(Vec::new())),
-        closed: false,
-        peer_close_code: None,
-        response_headers: Default::default(),
-        compression: None,
-        max_message_bytes: MAX_PROXY_REQUEST_BYTES,
-        frame_decoder: FrameDecoder::new(MAX_PROXY_REQUEST_BYTES),
-        local_control: false,
-        traffic: Default::default(),
-    }
-}
-
-#[test]
-fn upstream_masked_frames_roundtrip_across_write_chunks() {
-    use std::net::{Ipv4Addr, TcpListener, TcpStream};
-
+#[tokio::test]
+async fn upstream_masked_frames_roundtrip_across_write_chunks() {
     for compressed in [false, true] {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (mut socket, _) = listener.accept().unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        let (peer, mut socket) = duplex(8192);
         let mut client = client_socket();
         client.stream = Box::new(peer);
         let parameters =
@@ -52,17 +33,17 @@ fn upstream_masked_frames_roundtrip_across_write_chunks() {
             .map(|index| char::from(b'!' + ((index * 17 + index / 37) % 90) as u8))
             .collect::<String>();
         let lengths = [0, 125, 126, 65_535, 65_536, 196_613];
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                for length in lengths {
-                    client.send_text(&text[..length]).unwrap();
-                }
-            });
+        let write = async {
+            for length in lengths {
+                client.send_text(&text[..length]).await.unwrap();
+            }
+        };
+        let read = async {
             let mut decoder = FrameDecoder::new(MAX_PROXY_REQUEST_BYTES);
             let mut codec = PerMessageDeflate::negotiated(parameters).unwrap();
             for length in lengths {
-                match decoder.poll(&mut socket, true, compressed).unwrap() {
-                    crate::websocket_pump::FramePoll::Message {
+                match decoder.read(&mut socket, true, compressed).await.unwrap() {
+                    FramePoll::Message {
                         payload,
                         compressed,
                         ..
@@ -77,15 +58,18 @@ fn upstream_masked_frames_roundtrip_across_write_chunks() {
                     _ => panic!("expected complete masked text frame"),
                 }
             }
-        });
+        };
+        timeout(Duration::from_secs(5), async { tokio::join!(write, read) })
+            .await
+            .unwrap();
     }
 }
 
-#[test]
-fn text_traffic_measures_encoding_excludes_control_and_keeps_unknown_partial_reads() {
+#[tokio::test]
+async fn text_traffic_measures_encoding_excludes_control_and_keeps_unknown_partial_reads() {
     let mut client = client_socket();
-    client.send_text("plain").unwrap();
-    client.send_pong(b"ping").unwrap();
+    client.send_text("plain").await.unwrap();
+    client.send_pong(b"ping").await.unwrap();
     assert_eq!(client.traffic().decoded_sent, Some(5));
     assert_eq!(client.traffic().encoded_sent, Some(5));
 
@@ -102,8 +86,8 @@ fn text_traffic_measures_encoding_excludes_control_and_keeps_unknown_partial_rea
     compressed.compression = Some(PerMessageDeflate::negotiated(parameters).unwrap());
     compressed.frame_decoder.feed(&frame).unwrap();
     assert_eq!(
-        compressed.poll_receive_text().unwrap(),
-        WebSocketPoll::Text(text.clone())
+        compressed.read().await.unwrap(),
+        WebSocketEvent::Text(text.clone())
     );
     assert_eq!(
         compressed.traffic().decoded_received,
@@ -113,7 +97,7 @@ fn text_traffic_measures_encoding_excludes_control_and_keeps_unknown_partial_rea
         compressed.traffic().encoded_received,
         Some(encoded.len() as u64)
     );
-    compressed.send_text(&text).unwrap();
+    compressed.send_text(&text).await.unwrap();
     assert_eq!(compressed.traffic().decoded_sent, Some(text.len() as u64));
     assert_eq!(
         compressed.traffic().encoded_sent,
@@ -126,7 +110,7 @@ fn text_traffic_measures_encoding_excludes_control_and_keeps_unknown_partial_rea
         .frame_decoder
         .feed(b"\x81\x82\x00\x00\x00\x00{}")
         .unwrap();
-    assert!(broken.poll_receive_text().is_err());
+    assert!(broken.read().await.is_err());
     assert_eq!(broken.traffic().decoded_received, None);
     assert_eq!(broken.traffic().encoded_received, None);
 }
@@ -152,90 +136,45 @@ fn masked_text_frame(text: &str) -> Vec<u8> {
     frame
 }
 
-#[test]
-fn ready_reads_preserve_partial_frames_timeouts_and_blocking_writes() {
-    use std::io::Write;
-    use std::net::{Ipv4Addr, TcpListener, TcpStream};
-    use std::time::Instant;
-
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (mut socket, _) = listener.accept().unwrap();
-    let timeout = Some(Duration::from_secs(5));
-    socket.set_read_timeout(timeout).unwrap();
-    peer.set_read_timeout(timeout).unwrap();
-    let probe = socket.try_clone().unwrap();
-    let mut downstream = WebSocketConnection::new(&mut socket);
-
-    assert!(matches!(
-        downstream.poll_text_ready().unwrap(),
-        WebSocketPoll::Pending
-    ));
-    assert_eq!(probe.read_timeout().unwrap(), timeout);
+#[tokio::test]
+async fn async_reads_keep_partial_frames_and_allow_concurrent_large_write() {
+    let (mut peer, socket) = duplex(8192);
+    let (mut reader, writer) = split_websocket(socket, &[], MAX_PROXY_REQUEST_BYTES, None).unwrap();
     let frame = masked_text_frame("partial request");
-    peer.write_all(&frame[..3]).unwrap();
-    assert!(matches!(
-        downstream.poll_text_ready().unwrap(),
-        WebSocketPoll::Pending
-    ));
-    peer.write_all(&frame[3..]).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match downstream.poll_text_ready().unwrap() {
-            WebSocketPoll::Text(text) => {
-                assert_eq!(text, "partial request");
-                break;
-            }
-            WebSocketPoll::Pending => {
-                assert!(Instant::now() < deadline);
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
-                )]
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            other => panic!("unexpected frame: {other:?}"),
-        }
-    }
+    assert_pending(reader.read()).await;
+    peer.write_all(&frame[..3]).await.unwrap();
+    assert_pending(reader.read()).await;
+    peer.write_all(&frame[3..]).await.unwrap();
+    assert_eq!(
+        reader.read().await.unwrap(),
+        WebSocketEvent::Text("partial request".into())
+    );
+
     let mut client = client_socket();
     client.stream = Box::new(peer);
-    assert!(matches!(
-        client.poll_receive_text_ready().unwrap(),
-        WebSocketPoll::Pending
-    ));
-    assert_eq!(
-        client.readiness_stream().unwrap().read_timeout().unwrap(),
-        timeout
-    );
-    // A response larger than the socket buffer requires working blocking writes
-    // after both sides have made empty and partial nonblocking reads.
-    std::thread::scope(|scope| {
-        let writer = scope.spawn(move || {
-            downstream
-                .send_json(&serde_json::json!({"text": "x".repeat(1024 * 1024)}))
-                .unwrap();
-        });
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match client.poll_receive_text_ready().unwrap() {
-                WebSocketPoll::Text(text) => {
-                    let response: serde_json::Value = serde_json::from_str(&text).unwrap();
-                    assert_eq!(response["text"].as_str().unwrap().len(), 1024 * 1024);
-                    break;
-                }
-                WebSocketPoll::Pending => {
-                    assert!(Instant::now() < deadline);
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
-                    )]
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                other => panic!("unexpected frame: {other:?}"),
-            }
-        }
-        writer.join().unwrap();
-    });
+    assert_pending(client.read()).await;
+    let response = serde_json::json!({"text": "x".repeat(1024 * 1024)});
+    let (written, received) = timeout(Duration::from_secs(5), async {
+        tokio::join!(writer.send_json(&response), client.read())
+    })
+    .await
+    .unwrap();
+    written.unwrap();
+    let WebSocketEvent::Text(text) = received.unwrap() else {
+        panic!("expected the large response frame");
+    };
+    let response: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(response["text"].as_str().unwrap().len(), 1024 * 1024);
+}
+
+async fn assert_pending<T>(future: impl Future<Output = T>) {
+    use std::task::Poll;
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(|cx| {
+        assert!(future.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
 }
 
 #[test]
@@ -260,11 +199,11 @@ fn regular_websockets_keep_legacy_cap_while_sideband_can_use_four_mib() {
 
     let client = client_socket();
     assert_eq!(client.max_message_bytes, MAX_PROXY_REQUEST_BYTES);
-    assert_eq!(WebSocketPumpConfig::default().max_message_bytes, FOUR_MIB);
+    assert_eq!(DEFAULT_WEBSOCKET_MESSAGE_BYTES, FOUR_MIB);
 }
 
-#[test]
-fn responses_reject_excess_length_and_concurrency_from_the_frame_header() {
+#[tokio::test]
+async fn responses_reject_excess_length_and_concurrency_from_the_frame_header() {
     let limits = crate::RequestLimits::new(
         crate::RequestLimitsConfig::default(),
         || Some(crate::MemoryStatus::available(2 * 1024 * 1024 * 1024)),
@@ -272,31 +211,42 @@ fn responses_reject_excess_length_and_concurrency_from_the_frame_header() {
         "websocket-capacity",
     )
     .unwrap();
-    let maximum = MAX_RESPONSES_WEBSOCKET_BYTES as u64;
-    let mut invalid = Cursor::new(masked_data_header(maximum + 1));
-    let mut socket = WebSocketConnection::new(&mut invalid);
-    socket.enable_responses_capacity(limits.clone());
-    assert_eq!(socket.poll_text().unwrap_err().close_code(), 1009);
+    let maximum = MAX_RESPONSES_WEBSOCKET_BYTES;
+    let open = || {
+        let (peer, io) = duplex(64);
+        let (reader, _) = split_websocket(io, &[], maximum, Some(limits.clone())).unwrap();
+        (peer, reader)
+    };
+
+    let (mut peer, mut socket) = open();
+    peer.write_all(&masked_data_header(maximum as u64 + 1))
+        .await
+        .unwrap();
+    assert_eq!(socket.read().await.unwrap_err().close_code(), 1009);
     assert_eq!(limits.snapshot().unwrap().reserved_bytes, 0);
 
-    let mut first_input = Cursor::new(masked_data_header(maximum));
-    let mut first = WebSocketConnection::new(&mut first_input);
-    first.enable_responses_capacity(limits.clone());
-    assert!(matches!(
-        first.poll_text().unwrap(),
-        WebSocketPoll::Closed { .. }
-    ));
+    let (mut first_peer, mut first) = open();
+    first_peer
+        .write_all(&masked_data_header(maximum as u64))
+        .await
+        .unwrap();
+    assert_pending(first.read()).await;
     let reservation = first.take_request_budget().unwrap();
-    assert_eq!(reservation.limit(), MAX_RESPONSES_WEBSOCKET_BYTES);
+    assert_eq!(reservation.limit(), maximum);
 
-    let mut second_input = Cursor::new(masked_data_header(maximum));
-    let mut second = WebSocketConnection::new(&mut second_input);
-    second.enable_responses_capacity(limits.clone());
-    assert_eq!(second.poll_text().unwrap_err().close_code(), 1013);
+    let (mut second_peer, mut second) = open();
+    second_peer
+        .write_all(&masked_data_header(maximum as u64))
+        .await
+        .unwrap();
+    assert_eq!(second.read().await.unwrap_err().close_code(), 1013);
     drop(reservation);
+    assert_pending(second.read()).await;
+    assert!(limits.snapshot().unwrap().reserved_bytes > 0);
+    drop(second_peer);
     assert!(matches!(
-        second.poll_text().unwrap(),
-        WebSocketPoll::Closed { .. }
+        second.read().await.unwrap(),
+        WebSocketEvent::Closed { .. }
     ));
     drop(second);
     assert_eq!(limits.snapshot().unwrap().reserved_bytes, 0);
@@ -313,38 +263,34 @@ fn downstream_upgrade_prefix_preserves_first_frame() {
     ));
 }
 
-#[test]
-fn temporary_reader_preserves_prefetched_and_partially_decoded_frames() {
+#[tokio::test]
+async fn cancelling_read_preserves_prefetched_and_partially_decoded_frames() {
     let next = masked_text_frame("next-turn");
     let mut prefix = masked_text_frame("control");
     prefix.extend_from_slice(&next[..3]);
-    let mut original = Cursor::new(Vec::new());
-    let mut input = Cursor::new(next[3..].to_vec());
-    let mut connection = WebSocketConnection::new_with_prefix(&mut original, &prefix).unwrap();
-    let mut reader = connection.take_reader(&mut input).unwrap();
-    assert!(
-        connection.poll_text().is_err(),
-        "two readers cannot own input"
-    );
+    let (mut peer, io) = duplex(64);
+    let (mut reader, _) = split_websocket(io, &prefix, MAX_PROXY_REQUEST_BYTES, None).unwrap();
     assert_eq!(
-        reader.poll_text().unwrap(),
-        WebSocketPoll::Text("control".into())
+        reader.read().await.unwrap(),
+        WebSocketEvent::Text("control".into())
     );
-    connection.reclaim_reader(reader).unwrap();
-    connection.feed_read_bytes(&next[3..]).unwrap();
+    assert_pending(reader.read()).await;
+    let moved_reader = tokio::spawn(async move { reader });
+    let mut reader = moved_reader.await.unwrap();
+    peer.write_all(&next[3..]).await.unwrap();
     assert_eq!(
-        connection.poll_text().unwrap(),
-        WebSocketPoll::Text("next-turn".into())
+        reader.read().await.unwrap(),
+        WebSocketEvent::Text("next-turn".into())
     );
 }
 
-#[test]
-fn a_buffered_pong_does_not_hide_the_following_message_from_readiness_consumers() {
+#[tokio::test]
+async fn a_buffered_pong_does_not_hide_the_following_message() {
     let mut client = client_socket();
     client.frame_decoder.feed(b"\x8a\x00\x81\x02{}").unwrap();
     assert_eq!(
-        client.poll_receive_text().unwrap(),
-        WebSocketPoll::Text("{}".into())
+        client.read().await.unwrap(),
+        WebSocketEvent::Text("{}".into())
     );
 
     let mut frames = vec![0x8a, 0x80, 1, 2, 3, 4];
@@ -469,4 +415,76 @@ fn deflate_stream_end_terminates_instead_of_spinning() {
         deflate.decompress(&garbage, 4 * 1024 * 1024),
         Err(DecompressionError::Invalid)
     );
+}
+
+#[tokio::test]
+async fn write_receipt_waits_for_flush_and_reports_flush_failure() {
+    use std::{
+        io,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, DuplexStream, ReadBuf};
+    use tokio::sync::oneshot;
+
+    struct GatedFlush {
+        io: DuplexStream,
+        release: oneshot::Receiver<io::Result<()>>,
+    }
+
+    impl AsyncRead for GatedFlush {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            output: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.io).poll_read(cx, output)
+        }
+    }
+
+    impl AsyncWrite for GatedFlush {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Pin::new(&mut self.io).poll_write(cx, bytes)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.release)
+                .poll(cx)
+                .map(|result| result.unwrap())
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.io).poll_shutdown(cx)
+        }
+    }
+
+    for fail in [false, true] {
+        let (io, mut peer) = duplex(64);
+        let (release, gate) = oneshot::channel();
+        let (_, writer) = split_websocket(
+            GatedFlush { io, release: gate },
+            &[],
+            MAX_PROXY_REQUEST_BYTES,
+            None,
+        )
+        .unwrap();
+        let mut write = std::pin::pin!(writer.send_text(b"committed"));
+        assert_pending(write.as_mut()).await;
+        let mut frame = [0; 11];
+        peer.read_exact(&mut frame).await.unwrap();
+        assert_eq!(&frame, b"\x81\x09committed");
+        assert_pending(write.as_mut()).await;
+        release
+            .send(if fail {
+                Err(io::ErrorKind::ConnectionReset.into())
+            } else {
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(write.await.is_err(), fail);
+    }
 }
