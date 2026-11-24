@@ -189,6 +189,14 @@ pub(crate) fn app_server_for(
     upstream: &RealtimeUpstream,
     native_auth: &Path,
 ) -> (TempDir, ServerHandle) {
+    app_server_with_driver(upstream, native_auth, crate::lifecycle::TestDriver::Legacy)
+}
+
+pub(crate) fn app_server_with_driver(
+    upstream: &RealtimeUpstream,
+    native_auth: &Path,
+    driver: crate::lifecycle::TestDriver,
+) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let app_config = canonical_root(&directory).join("config.json");
     std::fs::write(
@@ -201,12 +209,11 @@ pub(crate) fn app_server_for(
         .expect("encode fixture config"),
     )
     .expect("write fixture config");
-    let server = ServerHandle::start_with_config_options(
+    let server = ServerHandle::start_with_test_driver(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
-        0,
         &app_config,
-        "missing-test-codex",
         native_auth.to_path_buf(),
+        driver,
     )
     .expect("start realtime fixture server");
     (directory, server)

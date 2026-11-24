@@ -133,7 +133,12 @@ impl Workspace {
         command
             .env("CODEX_HOME", &self.codex_home)
             .env("HOME", self.root.join("home"))
+            .env("USERPROFILE", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("xdg"))
+            .env("XDG_DATA_HOME", self.root.join("data"))
+            .env("XDG_CACHE_HOME", self.root.join("cache"))
+            .env("APPDATA", self.root.join("appdata"))
+            .env("LOCALAPPDATA", self.root.join("local-appdata"))
             // Outside the config directory, so the config counts as "custom".
             .current_dir(self.root.join("home"));
         command

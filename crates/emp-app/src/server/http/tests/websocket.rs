@@ -2,7 +2,7 @@ use super::*;
 use crate::api::realtime::MAX_REALTIME_REQUEST_BYTES;
 use crate::server::raw_tcp::{DEADLINE, RawClient, head, read_websocket_frame, websocket_frame};
 use crate::tests::realtime_contract::{
-    RealtimeUpstream, UpstreamResponse, app_server_for, multipart_offer,
+    RealtimeUpstream, UpstreamResponse, app_server_with_driver, multipart_offer,
 };
 use crate::tests::{live_journal, wait_for};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -473,7 +473,10 @@ fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
     });
 }
 
-pub(super) fn realtime_fixture(upstream: &RealtimeUpstream) -> (tempfile::TempDir, Fixture) {
+pub(super) fn realtime_fixture(
+    upstream: &RealtimeUpstream,
+    driver: TestDriver,
+) -> (tempfile::TempDir, Fixture) {
     let native = tempfile::tempdir().unwrap();
     let auth = native.path().join("auth.json");
     std::fs::write(
@@ -481,7 +484,7 @@ pub(super) fn realtime_fixture(upstream: &RealtimeUpstream) -> (tempfile::TempDi
         br#"{"tokens":{"access_token":"native-secret","account_id":"acct-native"}}"#,
     )
     .unwrap();
-    let (directory, legacy) = app_server_for(upstream, &auth);
+    let (directory, legacy) = app_server_with_driver(upstream, &auth, driver);
     (
         native,
         Fixture {
@@ -512,8 +515,8 @@ fn realtime_call_preserves_multipart_rejection_location_and_upstream_error() {
     ] {
         let upstream = RealtimeUpstream::start(response);
         let candidate_upstream = RealtimeUpstream::start(response);
-        let (_old_auth, old) = realtime_fixture(&upstream);
-        let (_new_auth, new) = realtime_fixture(&candidate_upstream);
+        let (_old_auth, old) = realtime_fixture(&upstream, TestDriver::Legacy);
+        let (_new_auth, new) = realtime_fixture(&candidate_upstream, TestDriver::Legacy);
         let old_address = old.legacy.local_addr();
         new.run_candidate(async |new, address| {
             let boundary = "Content-Type: multipart/form-data; boundary=VoiceFixtureBoundary";
@@ -706,7 +709,11 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
     });
 }
 
-pub(super) fn native_fixture(address: SocketAddr) -> Fixture {
+fn native_fixture(address: SocketAddr) -> Fixture {
+    native_fixture_with_driver(address, TestDriver::Legacy)
+}
+
+pub(super) fn native_fixture_with_driver(address: SocketAddr, driver: TestDriver) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("config.json");
     let catalog = directory.path().join("catalog.json");
@@ -731,14 +738,8 @@ pub(super) fn native_fixture(address: SocketAddr) -> Fixture {
         br#"{"tokens":{"access_token":"native-secret","account_id":"acct-native"}}"#,
     )
     .unwrap();
-    let legacy = LegacyServer::start_with_config_options(
-        LOOPBACK.ip(),
-        0,
-        &config,
-        "missing-test-codex",
-        auth,
-    )
-    .unwrap();
+    let legacy =
+        LegacyServer::start_with_test_driver(LOOPBACK.ip(), &config, auth, driver).unwrap();
     Fixture {
         directory,
         legacy,

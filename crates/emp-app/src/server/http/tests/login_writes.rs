@@ -81,114 +81,95 @@ fn session_exchange_uses_admission_time_while_blocking_worker_is_queued() {
 
 #[test]
 fn session_exchange_matches_legacy_wire_and_rotates_once() {
-    let old = Fixture::new();
-    Fixture::new().run_candidate(async |new, candidate| {
-        let pair = Pair {
-            old: &old,
-            new,
-            candidate,
-        };
-        for headers in [
-            vec![],
-            vec!["X-EMP-Bootstrap: wrong"],
-            vec!["X-EMP-Bootstrap: wrong", "X-EMP-Bootstrap: wrong"],
-        ] {
-            assert_eq!(
-                pair.parity(
-                    |port, _| request(port, "POST", SESSION_PATH, &headers, b""),
-                    401,
-                    |reply| reply,
-                )
-                .await["error"]["message"],
-                "management session is required"
-            );
-        }
+    let mut results = Vec::new();
+    for driver in wire_contract::Driver::ALL {
+        let replies = Fixture::with_driver(tempfile::tempdir().unwrap(), driver).run_wire(
+            async |fixture, address| {
+                let port = address.port();
+                let mut replies = Vec::new();
+                for headers in [
+                    vec![],
+                    vec!["X-EMP-Bootstrap: wrong"],
+                    vec!["X-EMP-Bootstrap: wrong", "X-EMP-Bootstrap: wrong"],
+                ] {
+                    let wire = request(port, "POST", SESSION_PATH, &headers, b"");
+                    let reply = assert_wire(address, &wire, false, 401).await;
+                    assert_eq!(
+                        json_body(&reply)["error"]["message"],
+                        "management session is required"
+                    );
+                    replies.push(reply);
+                }
 
-        let sessions = [&old, new].map(Fixture::session);
-        let bootstrap = |port, _: &str| {
-            let fixture = if port == old.port() { &old } else { new };
-            let header = format!("X-EMP-Bootstrap: {}", fixture.legacy.state.bootstrap.token);
-            request(
-                port,
-                "POST",
-                "/api/session?unused=1",
-                &[&header, BODY_LIMIT],
-                b"{",
-            )
-        };
-        let rotated = pair
-            .parity(bootstrap, 200, |reply| {
-                let body = json_body(&reply);
-                let token = body["session"].as_str().unwrap();
-                assert_eq!(token.len(), emp_state::WEB_SESSION_TOKEN_LENGTH);
-                let wire = String::from_utf8_lossy(&reply);
-                assert!(wire.contains(crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE));
-                let fixture = [&old, new]
-                    .into_iter()
-                    .find(|fixture| fixture.legacy.session_token() == token)
-                    .unwrap();
-                assert_eq!(
-                    read_json(&fixture.legacy.state.sessions.path)["token"],
-                    token
+                let previous_session = fixture.session();
+                let header = format!("X-EMP-Bootstrap: {}", fixture.legacy.state.bootstrap.token);
+                let bootstrap = request(
+                    port,
+                    "POST",
+                    "/api/session?unused=1",
+                    &[&header, BODY_LIMIT],
+                    b"{",
                 );
-                normalize_body(reply, |body| body.replace(token, "fixture-session"))
-            })
-            .await;
-        assert!(rotated["expires_in"].as_u64().unwrap() > 0);
-        pair.parity(bootstrap, 401, |reply| reply).await;
-        let stale_session = |port, _: &str| {
-            let session = if port == old.port() {
-                &sessions[0]
-            } else {
-                &sessions[1]
-            };
-            request(port, "GET", "/api/accounts", &[session], b"")
-        };
-        pair.parity(stale_session, 401, |reply| reply).await;
-        assert_eq!(pair.read("/api/accounts").await["accounts"], json!([]));
+                replies.push(
+                    assert_wire_with(address, &bootstrap, false, 200, |reply| {
+                        assert_rotated_session(fixture, reply)
+                    })
+                    .await,
+                );
+                replies.push(assert_wire(address, &bootstrap, false, 401).await);
+                let stale = request(port, "GET", "/api/accounts", &[&previous_session], b"");
+                replies.push(assert_wire(address, &stale, false, 401).await);
+                let accounts = request(port, "GET", "/api/accounts", &[&fixture.session()], b"");
+                let reply = assert_wire(address, &accounts, false, 200).await;
+                assert_eq!(json_body(&reply)["accounts"], json!([]));
+                replies.push(reply);
 
-        let reopen = [&old, new].map(|fixture| {
-            let url = fixture.legacy.state.reopen_url().unwrap();
-            format!(
-                "X-EMP-Bootstrap: {}",
-                url.split_once("?bootstrap=").unwrap().1
-            )
-        });
-        for fixture in [&old, new] {
-            drain_updates(fixture).await;
-        }
-        let denied = pair
-            .parity(
-                |port, _| {
-                    let header = if port == old.port() {
-                        &reopen[0]
-                    } else {
-                        &reopen[1]
-                    };
-                    request(port, "POST", SESSION_PATH, &[header], b"")
-                },
-                503,
-                |reply| reply,
-            )
-            .await;
-        assert_eq!(denied["error"]["code"], "updating");
-        for fixture in [&old, new] {
-            assert!(
-                !fixture
-                    .legacy
-                    .state
-                    .reopen_bootstrap
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .used
-                    .load(Ordering::Acquire)
-            );
-        }
-        pair.read("/api/accounts").await;
-    });
-    old.legacy.shutdown().unwrap();
+                let url = fixture.legacy.state.reopen_url().unwrap();
+                let header = format!(
+                    "X-EMP-Bootstrap: {}",
+                    url.split_once("?bootstrap=").unwrap().1
+                );
+                drain_updates(fixture).await;
+                let wire = request(port, "POST", SESSION_PATH, &[&header], b"");
+                let reply = assert_wire(address, &wire, false, 503).await;
+                assert_eq!(json_body(&reply)["error"]["code"], "updating");
+                replies.push(reply);
+                assert!(
+                    !fixture
+                        .legacy
+                        .state
+                        .reopen_bootstrap
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .used
+                        .load(Ordering::Acquire)
+                );
+                replies.push(assert_wire(address, &accounts, false, 200).await);
+                replies
+            },
+        );
+        results.push(replies);
+    }
+    for pair in results.windows(2) {
+        assert_eq!(pair[0], pair[1]);
+    }
+}
+
+fn assert_rotated_session(fixture: &Fixture, reply: Vec<u8>) -> Vec<u8> {
+    let body = json_body(&reply);
+    let token = body["session"].as_str().unwrap();
+    assert_eq!(token.len(), emp_state::WEB_SESSION_TOKEN_LENGTH);
+    assert!(body["expires_in"].as_u64().unwrap() > 0);
+    let wire = String::from_utf8_lossy(&reply);
+    assert!(wire.contains(crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE));
+    assert_eq!(fixture.legacy.session_token(), token);
+    assert_eq!(
+        read_json(&fixture.legacy.state.sessions.path)["token"],
+        token
+    );
+    normalize_body(reply, |body| body.replace(token, "fixture-session"))
 }
 
 async fn drain_updates(fixture: &Fixture) {

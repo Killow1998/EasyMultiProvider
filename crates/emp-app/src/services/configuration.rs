@@ -6,10 +6,34 @@ use emp_state::{
 };
 use serde_json::Value;
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 pub(crate) mod settings;
+
+pub(crate) fn load_server_configuration(path: &Path) -> Result<Value, ConfigError> {
+    let config = load_configuration(Some(path))?;
+    // Test fixtures must not borrow the developer's native credentials,
+    // integration lease or generated model catalog. Explicit integration
+    // fixtures can still provide their own home through the options API.
+    #[cfg(test)]
+    let config = {
+        let mut config = config;
+        let defaults = emp_state::normalize_configuration(None)?;
+        if config["native_catalog_path"] == defaults["native_catalog_path"]
+            || config["native_catalog_path"] == ""
+        {
+            config["native_catalog_path"] = serde_json::json!(fixture_native_catalog_path(path));
+        }
+        config
+    };
+    Ok(config)
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_native_catalog_path(config: &Path) -> PathBuf {
+    config.with_file_name("codex").join("models_cache.json")
+}
 
 pub(crate) enum ChangeError {
     Invalid(String),
@@ -103,7 +127,7 @@ impl ConfigurationEdit<'_> {
             &self.store.vault,
             files,
         )?;
-        load_configuration(Some(&self.store.config_path))
+        load_server_configuration(&self.store.config_path)
     }
 
     pub(super) fn commit(&mut self, candidate: &Value) -> Result<(), ConfigError> {

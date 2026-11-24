@@ -135,7 +135,7 @@ fn validate_code(code: &str) {
     assert_ne!(&bytes[5..7], &[0, 0]);
 }
 
-fn normalize(fixture: &Fixture, operation: &str, reply: &[u8]) -> Vec<u8> {
+fn check_migration_reply(fixture: &Fixture, operation: &str, reply: &[u8]) -> Vec<u8> {
     let (head, body) = split_wire(reply);
     if head.starts_with("HTTP/1.1 200 ")
         && head.contains("Content-Type: application/octet-stream\r\n")
@@ -145,6 +145,10 @@ fn normalize(fixture: &Fixture, operation: &str, reply: &[u8]) -> Vec<u8> {
     }
     let value: Value = serde_json::from_slice(body).expect("migration response JSON");
     let mut normalized = std::str::from_utf8(body).unwrap().to_owned();
+    assert!(
+        !normalized.contains(KEY) && !normalized.contains(PASSWORD),
+        "migration {operation} response contains fixture credentials"
+    );
     if let Some(confirmation) = value["confirmation"].as_str() {
         assert_eq!(confirmation.len(), 43);
         assert_eq!(URL_SAFE_NO_PAD.decode(confirmation).unwrap().len(), 32);
@@ -182,7 +186,6 @@ fn normalize(fixture: &Fixture, operation: &str, reply: &[u8]) -> Vec<u8> {
     }
     let root = fixture.directory.path().canonicalize().unwrap();
     normalized = normalized.replace(root.to_str().unwrap(), "/fixture");
-    assert!(!normalized.contains(KEY) && !normalized.contains(PASSWORD));
     replace_body(head, body.len(), normalized.as_bytes())
 }
 
@@ -193,12 +196,18 @@ async fn assert_migration_wire_parity(
     status: u16,
 ) -> [Vec<u8>; 2] {
     let [(old, old_addr), (new, new_addr)] = endpoints(pair);
-    let (old_reply, new_reply) = tokio::join!(
-        assert_wire(old_addr, requests[0], false, status),
-        assert_wire(new_addr, requests[1], false, status),
+    let ((old_reply, old_checked), (new_reply, new_checked)) = tokio::join!(
+        assert_wire_with(old_addr, requests[0], false, status, |reply| {
+            let checked = check_migration_reply(old, operation, &reply);
+            (reply, checked)
+        }),
+        assert_wire_with(new_addr, requests[1], false, status, |reply| {
+            let checked = check_migration_reply(new, operation, &reply);
+            (reply, checked)
+        }),
     );
     assert!(
-        normalize(old, operation, &old_reply) == normalize(new, operation, &new_reply),
+        old_checked == new_checked,
         "wire response differs for {operation}"
     );
     [old_reply, new_reply]

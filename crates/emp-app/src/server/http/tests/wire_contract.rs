@@ -21,20 +21,21 @@ macro_rules! json_head {
 pub(crate) use json_head;
 
 macro_rules! asset_head {
-    ($content_type:literal, $length:literal) => {
-        concat!(
-            "HTTP/1.1 200 OK\r\n",
-            "Content-Type: ",
-            $content_type,
-            "\r\n",
-            "Content-Length: ",
-            $length,
-            "\r\n",
-            "X-Frame-Options: DENY\r\n",
-            "Content-Security-Policy: frame-ancestors 'none'\r\n",
-            "X-Content-Type-Options: nosniff\r\n",
-            "Cache-Control: no-store\r\n",
-            "Connection: close\r\n\r\n",
+    ($content_type:literal, $length:expr) => {
+        format!(
+            concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "Content-Type: ",
+                $content_type,
+                "\r\n",
+                "Content-Length: {}\r\n",
+                "X-Frame-Options: DENY\r\n",
+                "Content-Security-Policy: frame-ancestors 'none'\r\n",
+                "X-Content-Type-Options: nosniff\r\n",
+                "Cache-Control: no-store\r\n",
+                "Connection: close\r\n\r\n",
+            ),
+            $length
         )
     };
 }
@@ -44,7 +45,7 @@ pub(crate) use asset_head;
 const INDEX: &str = concat!(
     "HTTP/1.1 200 OK\r\n",
     "Content-Type: text/html; charset=utf-8\r\n",
-    "Content-Length: 95218\r\n",
+    "Content-Length: {}\r\n",
     "X-Frame-Options: DENY\r\n",
     "Content-Security-Policy: frame-ancestors 'none'\r\n",
     "X-Content-Type-Options: nosniff\r\n",
@@ -57,28 +58,10 @@ const NOT_FOUND: &str = json_head!("404 Not Found", "33");
 const MISSING: &[u8] = br#"{"error":{"message":"not found"}}"#;
 const SESSION_REQUIRED: &[u8] = br#"{"error":{"message":"management session is required"}}"#;
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Driver {
-    Legacy,
-    Candidate,
-}
+pub(crate) use crate::lifecycle::TestDriver as Driver;
 
 impl Driver {
     pub(crate) const ALL: [Self; 2] = [Self::Legacy, Self::Candidate];
-
-    fn run(self, fixture: Fixture, test: impl AsyncFnOnce(&Fixture, SocketAddr)) {
-        match self {
-            Self::Legacy => {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap()
-                    .block_on(test(&fixture, fixture.legacy.local_addr()));
-                fixture.legacy.shutdown().unwrap();
-            }
-            Self::Candidate => fixture.run_candidate(test),
-        }
-    }
 }
 
 fn assert_head(driver: Driver, name: &str, head: &str, expected: &str) {
@@ -110,49 +93,134 @@ pub(crate) fn assert_reply(
 }
 
 #[test]
+fn fixture_defaults_stay_under_config_root() {
+    const UNUSED_HOME: &str = "EMP_FIXTURE_UNUSED_HOME";
+    if let Some(unused_home) = std::env::var_os(UNUSED_HOME) {
+        for driver in Driver::ALL {
+            Fixture::with_driver(tempfile::tempdir().unwrap(), driver).run_wire(
+                async |fixture, address| {
+                    let root = emp_state::config::resolve_user_path(fixture.directory.path());
+                    let backend = &fixture.legacy.state.backend;
+                    let auth = root.join("codex/auth.json");
+                    assert_eq!(backend.accounts.native_auth_path, auth);
+                    assert_eq!(
+                        backend.integration.manager.config_path(),
+                        root.join("codex/config.toml")
+                    );
+                    assert_eq!(backend.configuration.config_path, root.join("config.json"));
+                    assert!(root.join("state/service.lock").is_file());
+                    let reply = assert_wire(
+                        address,
+                        &request(
+                            address.port(),
+                            "GET",
+                            "/api/config",
+                            &[&fixture.session()],
+                            b"",
+                        ),
+                        false,
+                        200,
+                    )
+                    .await;
+                    assert_eq!(
+                        json_body(&reply)["native_catalog_path"],
+                        json!(root.join("codex/models_cache.json"))
+                    );
+                },
+            );
+        }
+        let unused_home = std::path::Path::new(&unused_home);
+        assert!(
+            !unused_home.exists(),
+            "unexpected entries in unused home: {:?}",
+            std::fs::read_dir(unused_home)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>()
+        );
+        return;
+    }
+
+    let parent = tempfile::tempdir().unwrap();
+    let home = parent.path().join("unused");
+    let (_, module) = module_path!().split_once("::").unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.args([
+        "--exact",
+        &format!("{module}::fixture_defaults_stay_under_config_root"),
+    ]);
+    for variable in [
+        UNUSED_HOME,
+        "HOME",
+        "USERPROFILE",
+        "CODEX_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "APPDATA",
+        "LOCALAPPDATA",
+    ] {
+        command.env(variable, &home);
+    }
+    command.env("XDG_CACHE_HOME", parent.path().join("cache"));
+    let output = command.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn pages_and_embedded_assets() {
     for driver in Driver::ALL {
-        driver.run(Fixture::new(), async |fixture, address| {
-            let port = fixture.port();
-            let index = include_bytes!("../../../../web/index.html").as_slice();
-            for (method, path, head, body) in [
-                ("GET", "/", INDEX, index),
-                ("GET", "/index.html", INDEX, index),
-                (
-                    "GET",
-                    "/assets/i18n.js",
-                    asset_head!("text/javascript; charset=utf-8", "500"),
-                    include_bytes!("../../../../web/i18n.js").as_slice(),
-                ),
-                (
-                    "GET",
-                    "/assets/guide.css",
-                    asset_head!("text/css; charset=utf-8", "798"),
-                    include_bytes!("../../../../web/guide.css").as_slice(),
-                ),
-                (
-                    "GET",
-                    "/assets/emp-icon-mono.svg",
-                    asset_head!("image/svg+xml", "1366"),
-                    include_bytes!(
-                        "../../../../../../assets/branding/native/easy-multi-provider-tray.svg"
-                    )
-                    .as_slice(),
-                ),
-                (
-                    "GET",
-                    "/healthz",
-                    json_head!("200 OK", "15"),
-                    br#"{"status":"ok"}"#.as_slice(),
-                ),
-                ("HEAD", "/", INDEX, index),
-                ("HEAD", "/assets/i18n.js", NOT_FOUND, MISSING),
-            ] {
-                let wire = request(port, method, path, &[], b"");
-                let reply = exchange_wire(address, &wire, false).await;
-                assert_reply(driver, &format!("{method} {path}"), &reply, head, body);
-            }
-        });
+        Fixture::with_driver(tempfile::tempdir().unwrap(), driver).run_wire(
+            async |fixture, address| {
+                let port = fixture.port();
+                let index = include_bytes!("../../../../web/index.html").as_slice();
+                let script = include_bytes!("../../../../web/i18n.js").as_slice();
+                let css = include_bytes!("../../../../web/guide.css").as_slice();
+                let icon = include_bytes!(
+                    "../../../../../../assets/branding/native/easy-multi-provider-tray.svg"
+                )
+                .as_slice();
+                let index_head = INDEX.replace("{}", &index.len().to_string());
+                for (method, path, head, body) in [
+                    ("GET", "/", index_head.as_str(), index),
+                    ("GET", "/index.html", index_head.as_str(), index),
+                    (
+                        "GET",
+                        "/assets/i18n.js",
+                        &asset_head!("text/javascript; charset=utf-8", script.len()),
+                        script,
+                    ),
+                    (
+                        "GET",
+                        "/assets/guide.css",
+                        &asset_head!("text/css; charset=utf-8", css.len()),
+                        css,
+                    ),
+                    (
+                        "GET",
+                        "/assets/emp-icon-mono.svg",
+                        &asset_head!("image/svg+xml", icon.len()),
+                        icon,
+                    ),
+                    (
+                        "GET",
+                        "/healthz",
+                        json_head!("200 OK", "15"),
+                        br#"{"status":"ok"}"#.as_slice(),
+                    ),
+                    ("HEAD", "/", index_head.as_str(), index),
+                    ("HEAD", "/assets/i18n.js", NOT_FOUND, MISSING),
+                ] {
+                    let wire = request(port, method, path, &[], b"");
+                    let reply = exchange_wire(address, &wire, false).await;
+                    assert_reply(driver, &format!("{method} {path}"), &reply, head, body);
+                }
+            },
+        );
     }
 }
 
@@ -164,11 +232,12 @@ fn management_json_and_error_responses() {
         let directory = tempfile::tempdir().unwrap();
         let config = directory.path().join("config.json");
         std::fs::write(&config, br#"{"language":"en"}"#).unwrap();
-        driver.run(Fixture::with_directory(directory), async |fixture, address| {
+        Fixture::with_driver(directory, driver).run_wire(async |fixture, address| {
             let port = fixture.port();
             let session = fixture.session();
+            let origin = format!("Origin: http://{address}");
             let locale = br#"{"language":"zh-CN"}"#;
-            let auth = [session.as_str()];
+            let auth = [session.as_str(), origin.as_str()];
             for (name, wire, head, body) in [
                 ("management read", request(port, "GET", "/api/accounts", &auth, b""), json_head!("200 OK", "298"), ACCOUNTS),
                 ("management write", json_request(port, "/api/language", &auth, locale), json_head!("200 OK", "20"), locale.as_slice()),
@@ -216,7 +285,7 @@ fn management_sse_and_update_drain() {
         "Connection: close\r\n\r\n",
     );
     for driver in Driver::ALL {
-        driver.run(Fixture::new(), async |fixture, address| {
+        Fixture::with_driver(tempfile::tempdir().unwrap(), driver).run_wire(async |fixture, address| {
             let port = fixture.port();
             let session = fixture.session();
             let stream = RawClient::request(
@@ -244,7 +313,7 @@ fn management_sse_and_update_drain() {
 #[cfg(unix)]
 #[test]
 fn inference_responses() {
-    use super::inference::fixture;
+    use super::inference::{SseClient, fixture_with_driver};
     use crate::tests::OneShotUpstream;
 
     // H05.0 accepts Hyper's header order for proxy replies and chunked framing for SSE.
@@ -315,7 +384,7 @@ fn inference_responses() {
                 1,
                 vec![raw.to_vec()],
             );
-            driver.run(fixture(&upstream.base_url()), async |fixture, address| {
+            fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
                 let wire = json_request(
                     fixture.port(),
                     "/v1/decisions",
@@ -349,14 +418,14 @@ fn inference_responses() {
                 "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\",\"status\":\"completed\",\"output\":[],\"future\":{\"opaque\":true}}}\n\n",
             ).as_bytes()).unwrap();
         });
-        driver.run(fixture(&upstream.base_url()), async |fixture, address| {
+        fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
             let wire = json_request(
                 fixture.port(),
                 "/v1/responses",
                 &[&fixture.session(), "Authorization: Bearer fixture-caller"],
                 br#"{"model":"native/alias","stream":true,"input":"fixture"}"#,
             );
-            let mut stream = RawClient::request(address, &wire).await;
+            let stream = RawClient::request(address, &wire).await;
             assert_head(
                 driver,
                 "POST /v1/responses (SSE)",
@@ -366,10 +435,24 @@ fn inference_responses() {
                     Driver::Legacy => SSE_LEGACY,
                 },
             );
-            let body = String::from_utf8(stream.rest().await).unwrap();
-            assert!(body.contains("event: response.output_text.delta"));
-            assert!(body.contains("event: response.completed"));
-            assert!(body.contains(r#""future":{"opaque":true}"#));
+            let mut stream = SseClient::from_raw(stream, matches!(driver, Driver::Candidate));
+            timeout(crate::server::raw_tcp::DEADLINE, async {
+                assert_eq!(
+                    stream.next().await,
+                    Some(json!({"type":"response.output_text.delta","delta":"hello"})),
+                );
+                assert_eq!(
+                    stream.next().await,
+                    Some(json!({
+                        "type":"response.completed",
+                        "response":{"id":"resp_fixture","status":"completed","output":[],
+                                    "future":{"opaque":true}},
+                    })),
+                );
+                assert_eq!(stream.next().await, None);
+            })
+            .await
+            .expect("complete Native SSE stream");
         });
         assert_eq!(upstream.observed().0, "/v1/responses");
     }
@@ -378,7 +461,7 @@ fn inference_responses() {
 #[cfg(unix)]
 #[test]
 fn responses_and_realtime_websocket_upgrades() {
-    use super::websocket::{accept_upstream, native_fixture, upgrade};
+    use super::websocket::{accept_upstream, native_fixture_with_driver, upgrade};
 
     // H06b records Hyper's Sec-Websocket-Accept spelling on both upgrade routes.
     const CANDIDATE: &str = concat!(
@@ -400,8 +483,7 @@ fn responses_and_realtime_websocket_upgrades() {
         };
         let listener = TcpListener::bind(LOOPBACK).unwrap();
         listener.set_nonblocking(true).unwrap();
-        driver.run(
-            native_fixture(listener.local_addr().unwrap()),
+        native_fixture_with_driver(listener.local_addr().unwrap(), driver).run_wire(
             async |fixture, address| {
                 let listener = tokio::net::TcpListener::from_std(listener).unwrap();
                 fixture
@@ -454,8 +536,8 @@ fn realtime_upstream_method_not_allowed() {
             location: None,
             body: b"",
         });
-        let (_native, fixture) = realtime_fixture(&upstream);
-        driver.run(fixture, async |fixture, address| {
+        let (_native, fixture) = realtime_fixture(&upstream, driver);
+        fixture.run_wire(async |fixture, address| {
             let body = multipart_offer();
             let wire = request(
                 fixture.port(),

@@ -290,7 +290,7 @@ fn recovery_wire_contract_before_reset_or_exit() {
     const PAGE: &str = concat!(
         "HTTP/1.1 200 OK\r\n",
         "Content-Type: text/html; charset=utf-8\r\n",
-        "Content-Length: 4505\r\n",
+        "Content-Length: {}\r\n",
         "X-Frame-Options: DENY\r\n",
         "Content-Security-Policy: frame-ancestors 'none'\r\n",
         "X-Content-Type-Options: nosniff\r\n",
@@ -331,14 +331,14 @@ fn recovery_wire_contract_before_reset_or_exit() {
                 .block_on(async {
                     let auth = "X-EMP-Recovery: recovery-fixture";
                     let empty = "Content-Length: 0";
+                    let page = include_bytes!("../../web/recovery.html").as_slice();
+                    let script = include_bytes!("../../web/i18n.js").as_slice();
+                    let copy = include_bytes!("../../web/copy-recovery.js").as_slice();
+                    let page_head = PAGE.replace("{}", &page.len().to_string());
+                    let script_head = asset_head!("text/javascript; charset=utf-8", script.len());
+                    let copy_head = asset_head!("text/javascript; charset=utf-8", copy.len());
                     let mut cases = vec![
-                        (
-                            "GET",
-                            "/",
-                            vec![],
-                            PAGE,
-                            include_bytes!("../../web/recovery.html").as_slice(),
-                        ),
+                        ("GET", "/", vec![], page_head.as_str(), page),
                         (
                             "GET",
                             "/healthz",
@@ -350,15 +350,15 @@ fn recovery_wire_contract_before_reset_or_exit() {
                             "GET",
                             "/assets/i18n.js",
                             vec![],
-                            asset_head!("text/javascript; charset=utf-8", "500"),
-                            include_bytes!("../../web/i18n.js").as_slice(),
+                            script_head.as_str(),
+                            script,
                         ),
                         (
                             "GET",
                             "/assets/copy-recovery.js",
                             vec![],
-                            asset_head!("text/javascript; charset=utf-8", "4238"),
-                            include_bytes!("../../web/copy-recovery.js").as_slice(),
+                            copy_head.as_str(),
+                            copy,
                         ),
                         (
                             "GET",

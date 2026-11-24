@@ -1,11 +1,11 @@
 use crate::error::AppError;
 use crate::services::accounts::AccountState;
 use crate::services::activity::ActivityService;
-use crate::services::configuration::ConfigurationState;
+use crate::services::configuration::{ConfigurationState, load_server_configuration};
 use crate::services::integration::IntegrationState;
 use crate::services::observation::diagnostics::Diagnostics;
 use crate::util::{random_hex, system_now};
-use emp_state::{load_configuration, save_configuration};
+use emp_state::save_configuration;
 use emp_transport::{
     HttpClientPolicy, ProxyEnvironment, ProxyPolicy, RequestLimitsConfig, TimeoutPolicy,
 };
@@ -122,7 +122,7 @@ impl BackendState {
         updating: crate::services::modules::Startup,
     ) -> Result<Self, AppError> {
         crate::startup_recovery::check_pending(config_path)?;
-        let mut config = load_configuration(Some(config_path))?;
+        let mut config = load_server_configuration(config_path)?;
         let state_root = config_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -141,7 +141,7 @@ impl BackendState {
             })
         {
             save_configuration(&config, Some(config_path), &vault)?;
-            config = load_configuration(Some(config_path))?;
+            config = load_server_configuration(config_path)?;
         }
         let proxy_snapshot = ProxyEnvironment::capture_current();
         let support_network = crate::services::network_evidence::NetworkSnapshot::capture(

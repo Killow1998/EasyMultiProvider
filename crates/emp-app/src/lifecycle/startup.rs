@@ -15,7 +15,16 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TestDriver {
+    Legacy,
+    Candidate,
+}
+
 struct StartupContext<'a> {
+    #[cfg(test)]
+    driver: TestDriver,
     host: IpAddr,
     port: u16,
     config_path: &'a Path,
@@ -35,35 +44,36 @@ impl ServerHandle {
         port: u16,
         config_path: &Path,
     ) -> Result<Self, AppError> {
-        // Test fixtures must not borrow the developer's native credentials,
-        // integration lease or generated model catalog. Explicit integration
-        // fixtures can still provide their own home through the options API.
-        let codex_home = config_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("codex");
-        let server = Self::start_with_config_options(
+        let codex_home = config_path.with_file_name("codex");
+        Self::start_with_config_options(
             host,
             port,
             config_path,
             "missing-test-codex",
             codex_home.join("auth.json"),
-        )?;
-        let defaults = emp_state::normalize_configuration(None)?;
-        {
-            let mut config = server
-                .state
-                .backend
-                .configuration
-                .test_config()
-                .lock()
-                .unwrap();
-            if config["native_catalog_path"] == defaults["native_catalog_path"] {
-                config["native_catalog_path"] =
-                    serde_json::json!(codex_home.join("models_cache.json"));
-            }
-        }
-        Ok(server)
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_with_test_driver(
+        host: IpAddr,
+        config_path: &Path,
+        native_auth_path: PathBuf,
+        driver: TestDriver,
+    ) -> Result<Self, AppError> {
+        Self::start_with_config_options_inner(StartupContext {
+            driver,
+            host,
+            port: 0,
+            config_path,
+            codex_binary: "missing-test-codex",
+            native_auth_path,
+            open_browser: false,
+            markers: UpdateStartupMarkers::default(),
+            http_client_override: None,
+            admission: ConnectionAdmissionConfig::default(),
+            enable_catalog_refresh_worker: false,
+        })
     }
 
     #[cfg(test)]
@@ -95,6 +105,8 @@ impl ServerHandle {
         markers: UpdateStartupMarkers,
     ) -> Result<Self, AppError> {
         Self::start_with_config_options_inner(StartupContext {
+            #[cfg(test)]
+            driver: TestDriver::Legacy,
             host,
             port,
             config_path,
@@ -117,6 +129,8 @@ impl ServerHandle {
         native_auth_path: PathBuf,
     ) -> Result<Self, AppError> {
         Self::start_with_config_options_inner(StartupContext {
+            #[cfg(test)]
+            driver: TestDriver::Legacy,
             host,
             port,
             config_path,
@@ -140,6 +154,8 @@ impl ServerHandle {
         client: emp_transport::HttpClient,
     ) -> Result<Self, AppError> {
         Self::start_with_config_options_inner(StartupContext {
+            #[cfg(test)]
+            driver: TestDriver::Legacy,
             host,
             port,
             config_path,
@@ -165,6 +181,8 @@ impl ServerHandle {
             .unwrap_or_else(|| Path::new("."))
             .join("codex/auth.json");
         Self::start_with_config_options_inner(StartupContext {
+            #[cfg(test)]
+            driver: TestDriver::Legacy,
             host,
             port,
             config_path,
@@ -231,6 +249,8 @@ impl ServerHandle {
         diagnostics: Arc<Diagnostics>,
     ) -> Result<Self, AppError> {
         let StartupContext {
+            #[cfg(test)]
+            driver,
             host,
             port,
             config_path,
@@ -340,12 +360,13 @@ impl ServerHandle {
             _service_owner: service_owner,
         };
         let started = (|| {
-            #[cfg(any(test, not(feature = "server-candidate")))]
-            handle.spawn_worker("emp-http", move |state| {
-                super::connections::accept(listener, state);
-            })?;
-            #[cfg(all(feature = "server-candidate", not(test)))]
-            {
+            #[cfg(test)]
+            let use_candidate = matches!(driver, TestDriver::Candidate);
+            #[cfg(all(not(test), feature = "server-candidate"))]
+            let use_candidate = true;
+
+            #[cfg(any(test, feature = "server-candidate"))]
+            if use_candidate {
                 listener.set_nonblocking(true)?;
                 let listener = {
                     let _entered = handle.state.backend.transport.runtime.enter();
@@ -359,7 +380,16 @@ impl ServerHandle {
                         .block_on(crate::server::serve_candidate(listener, Arc::clone(&state)))
                         .expect("HTTP server worker");
                 })?;
+            } else {
+                #[cfg(test)]
+                handle.spawn_worker("emp-http", move |state| {
+                    super::connections::accept(listener, state);
+                })?;
             }
+            #[cfg(not(any(test, feature = "server-candidate")))]
+            handle.spawn_worker("emp-http", move |state| {
+                super::connections::accept(listener, state);
+            })?;
             if enable_catalog_refresh_worker {
                 handle.spawn_worker("emp-catalog-refresh", |state| {
                     crate::services::account_catalog::run_refresh_worker(&state);

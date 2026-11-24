@@ -5,6 +5,8 @@ mod resources;
 mod shutdown;
 mod signals;
 mod startup;
+#[cfg(test)]
+pub(crate) use startup::TestDriver;
 #[cfg(windows)]
 mod windows;
 

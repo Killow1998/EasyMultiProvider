@@ -134,16 +134,16 @@ async fn compare_client_wire(
     let [(old, old_addr), (new, new_addr)] = comparison_endpoints(pair);
     let old_wire = make(0, old.port(), &old.session());
     let new_wire = make(1, new.port(), &new.session());
-    let (old_reply, new_reply) = tokio::join!(
-        assert_wire(old_addr, &old_wire, false, status),
-        assert_wire(new_addr, &new_wire, false, status),
+    let check_reply = |reply: Vec<u8>| {
+        let body = json_body(&reply);
+        (body, normalize_clients(reply))
+    };
+    let ((old_body, old_wire_reply), (new_body, new_wire_reply)) = tokio::join!(
+        assert_wire_with(old_addr, &old_wire, false, status, check_reply),
+        assert_wire_with(new_addr, &new_wire, false, status, check_reply),
     );
-    let (old_normalized, new_normalized) = (
-        normalize_clients(old_reply.clone()),
-        normalize_clients(new_reply.clone()),
-    );
-    assert_wire_response_parity(&old_wire, &old_normalized, &new_normalized);
-    [json_body(&old_reply), json_body(&new_reply)]
+    assert_wire_response_parity(&old_wire, &old_wire_reply, &new_wire_reply);
+    [old_body, new_body]
 }
 
 async fn compare_client_lists(pair: &Pair<'_>) -> [Value; 2] {

@@ -229,11 +229,17 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
     );
 }
 
-pub(super) fn fixture(base: &str) -> Fixture {
+fn fixture(base: &str) -> Fixture {
+    fixture_with_driver(base, TestDriver::Legacy)
+}
+
+pub(super) fn fixture_with_driver(base: &str, driver: TestDriver) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let config = root.join("config.json");
-    let auth = root.join("codex/auth.json");
+    let catalog = crate::services::configuration::fixture_native_catalog_path(&config);
+    std::fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    std::fs::write(catalog, br#"{"models":[]}"#).unwrap();
     std::fs::write(
         &config,
         json!({
@@ -252,19 +258,7 @@ pub(super) fn fixture(base: &str) -> Fixture {
         .to_string(),
     )
     .unwrap();
-    let legacy = LegacyServer::start_with_config_options(
-        LOOPBACK.ip(),
-        0,
-        &config,
-        "missing-test-codex",
-        auth,
-    )
-    .unwrap();
-    Fixture {
-        directory,
-        legacy,
-        upstream: Arc::default(),
-    }
+    Fixture::with_driver(directory, driver)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -314,16 +308,29 @@ async fn buffered_parity(
     wire: &[u8],
     status: u16,
 ) -> Vec<u8> {
-    let legacy = assert_wire(fixture.legacy.local_addr(), wire, false, status).await;
-    let candidate = assert_wire(address, wire, false, status).await;
-    let (old_head, old_body) = split_response(&legacy);
-    let (new_head, new_body) = split_response(&candidate);
+    let check_reply = |reply: Vec<u8>| {
+        let (head, body) = split_response(&reply);
+        head.assert_security();
+        assert_eq!(head.headers["content-length"], [body.len().to_string()]);
+        let body_offset = reply.len() - body.len();
+        (head, reply, body_offset)
+    };
+    let (old_head, legacy, old_offset) = assert_wire_with(
+        fixture.legacy.local_addr(),
+        wire,
+        false,
+        status,
+        check_reply,
+    )
+    .await;
+    let (new_head, candidate, new_offset) =
+        assert_wire_with(address, wire, false, status, check_reply).await;
     assert_eq!(old_head, new_head, "{}", String::from_utf8_lossy(wire));
-    assert_eq!(old_body, new_body, "{}", String::from_utf8_lossy(wire));
-    new_head.assert_security();
     assert_eq!(
-        new_head.headers["content-length"],
-        [new_body.len().to_string()]
+        legacy[old_offset..],
+        candidate[new_offset..],
+        "{}",
+        String::from_utf8_lossy(wire)
     );
     candidate
 }
@@ -572,15 +579,20 @@ fn inference_projects_upstream_4xx_5xx_and_connection_failure() {
     });
 }
 
-struct SseClient {
+pub(super) struct SseClient {
     head: ResponseHead,
     io: tokio::io::BufReader<TcpStream>,
     chunked: bool,
+    pending: Vec<u8>,
 }
 
 impl SseClient {
     async fn open(address: SocketAddr, wire: &[u8], candidate: bool) -> Self {
-        let RawClient { io, head } = RawClient::request(address, wire).await;
+        Self::from_raw(RawClient::request(address, wire).await, candidate)
+    }
+
+    pub(super) fn from_raw(raw: RawClient, candidate: bool) -> Self {
+        let RawClient { io, head } = raw;
         let mut head = ResponseHead::parse(&head);
         let chunked = head.headers.remove("transfer-encoding");
         assert_eq!(chunked, candidate.then(|| vec!["chunked".to_owned()]));
@@ -593,37 +605,45 @@ impl SseClient {
             head,
             io: tokio::io::BufReader::new(io),
             chunked: candidate,
+            pending: Vec::new(),
         }
     }
 
-    async fn next(&mut self) -> Option<Value> {
+    pub(super) async fn next(&mut self) -> Option<Value> {
         use tokio::io::AsyncBufReadExt as _;
         loop {
-            let mut bytes = Vec::new();
-            let mut line = String::new();
-            if self.chunked {
-                assert_ne!(self.io.read_line(&mut line).await.unwrap(), 0);
-                let len = usize::from_str_radix(line.trim_end(), 16).unwrap();
-                bytes.resize(len, 0);
-                self.io.read_exact(&mut bytes).await.unwrap();
-                let ending = self.io.read_u16().await.unwrap();
-                assert_eq!(ending, u16::from_be_bytes(*b"\r\n"));
-                if len == 0 {
-                    return None;
+            let bytes = loop {
+                if let Some(end) = self.pending.windows(2).position(|bytes| bytes == b"\n\n") {
+                    break self.pending.drain(..end + 2).collect::<Vec<_>>();
                 }
-            } else {
-                loop {
-                    line.clear();
-                    if self.io.read_line(&mut line).await.unwrap() == 0 {
-                        assert!(bytes.is_empty(), "truncated SSE event");
+                if self.chunked {
+                    let mut line = String::new();
+                    assert_ne!(
+                        self.io.read_line(&mut line).await.unwrap(),
+                        0,
+                        "missing terminal HTTP chunk"
+                    );
+                    let len =
+                        usize::from_str_radix(line.strip_suffix("\r\n").unwrap(), 16).unwrap();
+                    let start = self.pending.len();
+                    self.pending.resize(start + len, 0);
+                    self.io
+                        .read_exact(&mut self.pending[start..])
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        self.io.read_u16().await.unwrap(),
+                        u16::from_be_bytes(*b"\r\n")
+                    );
+                    if len == 0 {
+                        assert!(self.pending.is_empty(), "truncated SSE event");
                         return None;
                     }
-                    bytes.extend_from_slice(line.as_bytes());
-                    if line == "\n" {
-                        break;
-                    }
+                } else if self.io.read_until(b'\n', &mut self.pending).await.unwrap() == 0 {
+                    assert!(self.pending.is_empty(), "truncated SSE event");
+                    return None;
                 }
-            }
+            };
             let text = std::str::from_utf8(&bytes).unwrap();
             let Some(event_type) = text.lines().find_map(|line| line.strip_prefix("event: "))
             else {
@@ -674,9 +694,10 @@ async fn assert_settled(
     ids: Vec<String>,
     terminal_written: bool,
     token_reports: u64,
-) {
+) -> Vec<[Value; 5]> {
+    let request_count = ids.len();
     let root = fixture.directory.path().to_owned();
-    tokio::task::spawn_blocking(move || {
+    let outcomes = tokio::task::spawn_blocking(move || {
         let receipts = || {
             live_journal(&root)
                 .into_iter()
@@ -690,8 +711,7 @@ async fn assert_settled(
         };
         wait_for(DEADLINE, || receipts().len() >= ids.len());
         let finished = receipts();
-        let outcomes = ids
-            .iter()
+        ids.iter()
             .map(|id| {
                 let entries = finished
                     .iter()
@@ -708,84 +728,107 @@ async fn assert_settled(
                     receipt["last_phase"].clone(),
                 ]
             })
-            .collect::<Vec<_>>();
-        assert_eq!(outcomes[0], outcomes[1], "{finished:?}");
+            .collect::<Vec<_>>()
     })
     .await
     .unwrap();
+    for pair in outcomes.windows(2) {
+        assert_eq!(pair[0], pair[1]);
+    }
 
     let now = system_now();
     let ledger = &fixture.legacy.state.backend.usage.ledger;
     let usage = ledger.query(0.0, now, "external", now, None).unwrap();
     let totals = &usage["totals"];
-    assert_eq!(totals["requests"], 2, "{totals}");
+    assert_eq!(totals["requests"], request_count, "{totals}");
     assert_eq!(totals["reported_requests"], token_reports, "{totals}");
     assert_eq!(totals["input_tokens"], 3 * token_reports, "{totals}");
     assert_eq!(totals["output_tokens"], 2 * token_reports, "{totals}");
+    outcomes
 }
 
 #[test]
 fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
-    let (release, released) = mpsc::channel();
-    let upstream = OneShotUpstream::serve(2, move |socket| {
-        upstream_reply(
-            socket,
-            200,
-            "text/event-stream",
-            FIRST.len() + LAST.len(),
-            "",
-        );
-        socket.write_all(FIRST).unwrap();
-        released
-            .recv_timeout(DEADLINE)
-            .expect("client received visible output before release");
-        socket.write_all(LAST).unwrap();
-    });
-    fixture(&upstream.base_url()).run_candidate(async |fixture, address| {
-        let wire = json_request(
-            fixture.port(),
-            "/v1/responses",
-            &[&fixture.session()],
-            STREAM_REQUEST,
-        );
-        let mut results = Vec::new();
-        let mut ids = Vec::new();
-        for (address, candidate) in [(fixture.legacy.local_addr(), false), (address, true)] {
-            let mut downstream = SseClient::open(address, &wire, candidate).await;
-            let mut events = downstream.first_output().await;
-            assert!(
-                !fixture
-                    .legacy
-                    .state
-                    .lifecycle
-                    .updates()
-                    .drain_for_test(Duration::ZERO),
-                "SSE released the update permit before its body ended"
+    let mut results = Vec::new();
+    for driver in wire_contract::Driver::ALL {
+        let (release, released) = mpsc::channel();
+        let upstream = OneShotUpstream::serve(1, move |socket| {
+            upstream_reply(
+                socket,
+                200,
+                "text/event-stream",
+                FIRST.len() + LAST.len(),
+                "",
             );
-            release.send(()).unwrap();
-            timeout(DEADLINE, async {
-                while let Some(event) = downstream.next().await {
-                    events.push(event);
-                }
-            })
-            .await
-            .unwrap();
-            assert_eq!(events.last().unwrap()["type"], "response.completed");
-            assert_eq!(events.last().unwrap()["response"]["status"], "completed");
-            assert_eq!(
-                events.last().unwrap()["response"]["usage"]["total_tokens"],
-                5
-            );
-            let sequence = events
-                .iter()
-                .map(|event| event["type"].as_str().unwrap().to_owned())
-                .collect::<Vec<_>>();
-            results.push((downstream.head, sequence));
-            ids.push(upstream.observed().1["x-emp-request-id"].clone());
-        }
-        assert_eq!(results[0], results[1]);
-        assert_settled(fixture, ids, true, 2).await;
-    });
+            socket.write_all(FIRST).unwrap();
+            released
+                .recv_timeout(DEADLINE)
+                .expect("client received visible output before release");
+            socket.write_all(LAST).unwrap();
+        });
+        let result =
+            fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
+                let wire = json_request(
+                    fixture.port(),
+                    "/v1/responses",
+                    &[&fixture.session()],
+                    STREAM_REQUEST,
+                );
+                let mut downstream =
+                    SseClient::open(address, &wire, matches!(driver, TestDriver::Candidate)).await;
+                let mut events = downstream.first_output().await;
+                assert!(
+                    !fixture
+                        .legacy
+                        .state
+                        .lifecycle
+                        .updates()
+                        .drain_for_test(Duration::ZERO),
+                    "SSE released the update permit before its body ended"
+                );
+                release.send(()).unwrap();
+                timeout(DEADLINE, async {
+                    while let Some(event) = downstream.next().await {
+                        events.push(event);
+                    }
+                })
+                .await
+                .unwrap();
+                assert_eq!(events.last().unwrap()["type"], "response.completed");
+                assert_eq!(events.last().unwrap()["response"]["status"], "completed");
+                assert_eq!(
+                    events.last().unwrap()["response"]["usage"]["total_tokens"],
+                    5
+                );
+                let sequence = events
+                    .iter()
+                    .map(|event| event["type"].as_str().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    sequence,
+                    [
+                        "response.created",
+                        "response.output_item.added",
+                        "response.content_part.added",
+                        "response.output_text.delta",
+                        "response.output_text.done",
+                        "response.content_part.done",
+                        "response.output_item.done",
+                        "response.completed",
+                    ],
+                );
+                assert_eq!(events[4]["text"], "answer");
+                assert_eq!(events[5]["part"]["text"], "answer");
+                assert_eq!(events[6]["item"]["content"][0]["text"], "answer");
+                let id = upstream.observed().1["x-emp-request-id"].clone();
+                let outcome = assert_settled(fixture, vec![id], true, 1).await;
+                (downstream.head, outcome)
+            });
+        results.push(result);
+    }
+    for pair in results.windows(2) {
+        assert_eq!(pair[0], pair[1]);
+    }
 }
 
 #[test]

@@ -458,21 +458,23 @@ fn integration_recovery_record_matches_legacy_wire() {
             &[&new.session()],
             b"",
         );
-        let (old_reply, new_reply) = tokio::join!(
-            assert_wire(old.legacy.local_addr(), &old_status, false, 200),
-            assert_wire(candidate, &new_status, false, 200),
-        );
-        for reply in [&old_reply, &new_reply] {
+        let old_addr = old.legacy.local_addr();
+        let check_status = |fixture: &Fixture, reply: Vec<u8>| {
             assert_eq!(
-                json_body(reply)["runtime"]["last_known"]["observed_at"],
+                json_body(&reply)["runtime"]["last_known"]["observed_at"],
                 OBSERVED_AT
             );
-        }
-        assert_wire_response_parity(
-            &old_status,
-            &normalize_integration_reply(&old, old_reply),
-            &normalize_integration_reply(new, new_reply),
+            normalize_integration_reply(fixture, reply)
+        };
+        let (old_reply, new_reply) = tokio::join!(
+            assert_wire_with(old_addr, &old_status, false, 200, |reply| check_status(
+                &old, reply
+            )),
+            assert_wire_with(candidate, &new_status, false, 200, |reply| check_status(
+                new, reply
+            )),
         );
+        assert_wire_response_parity(&old_status, &old_reply, &new_reply);
     });
     old.legacy.shutdown().unwrap();
 }
@@ -505,22 +507,23 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
             let path = format!("/api/integration/{operation}");
             let old_request = json_request(old.port(), &path, &[&old.session()], body);
             let new_request = json_request(new.port(), &path, &[&new.session()], body);
-            let (old_reply, new_reply) = tokio::join!(
-                assert_wire(old_addr, &old_request, false, status),
-                assert_wire(candidate, &new_request, false, status),
-            );
-            for reply in [&old_reply, &new_reply] {
-                let body = json_body(reply);
+            let check_operation = |fixture: &Fixture, reply: Vec<u8>| {
+                let body = json_body(&reply);
                 assert_eq!(body["configuration"]["state"], state);
                 if status == 409 {
                     assert_eq!(body["runtime"].get("last_known"), Some(&Value::Null));
                 }
-            }
-            assert_wire_response_parity(
-                &old_request,
-                &normalize_integration_reply(&old, old_reply),
-                &normalize_integration_reply(new, new_reply),
+                normalize_integration_reply(fixture, reply)
+            };
+            let (old_reply, new_reply) = tokio::join!(
+                assert_wire_with(old_addr, &old_request, false, status, |reply| {
+                    check_operation(&old, reply)
+                }),
+                assert_wire_with(candidate, &new_request, false, status, |reply| {
+                    check_operation(new, reply)
+                }),
             );
+            assert_wire_response_parity(&old_request, &old_reply, &new_reply);
         }
         for fixture in [&old, new] {
             assert_eq!(

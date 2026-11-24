@@ -1,7 +1,7 @@
 use super::*;
 use crate::server::http::tests::{
-    assert_sse_wire_parity, assert_status, assert_wire_parity, exchange_wire, json_body,
-    json_request, request,
+    assert_sse_wire_parity, assert_status, assert_wire, assert_wire_parity,
+    assert_wire_response_parity, exchange_wire, json_body, json_request, request,
 };
 use crate::tests::internal_events_contract::final_journal;
 use tokio::{
@@ -234,12 +234,29 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
             &[&session],
             br#"{"provider":"gemini","model":"gemini/alpha beta/preview"}"#,
         );
-        let reply = assert_wire_parity(old, candidate, &wire, true, 200).await;
-        assert!(String::from_utf8_lossy(&reply).contains("Cache-Control: no-store"));
-        assert_eq!(json_body(&reply)["context_window"], 1024);
-        upstream.observed_metadata(&["/v1beta/models/alpha%20beta%2Fpreview"; 2]);
-        assert_wire_parity(old, candidate, &wire, false, 200).await;
-        upstream.observed_metadata(&["/v1beta/models/alpha%20beta%2Fpreview"; 2]);
+        for end_input in [true, false] {
+            let (legacy_reply, candidate_reply) = (
+                checked_metadata_reply(
+                    old,
+                    &wire,
+                    end_input,
+                    200,
+                    &upstream,
+                    "/v1beta/models/alpha%20beta%2Fpreview",
+                )
+                .await,
+                checked_metadata_reply(
+                    candidate,
+                    &wire,
+                    end_input,
+                    200,
+                    &upstream,
+                    "/v1beta/models/alpha%20beta%2Fpreview",
+                )
+                .await,
+            );
+            assert_wire_response_parity(&wire, &legacy_reply, &candidate_reply);
+        }
         assert!(!directory.path().join("provider-model-lists").exists());
     });
 }
@@ -256,10 +273,53 @@ fn metadata_upstream_rejection_matches_legacy_wire_on_the_candidate_listener() {
             &[&session_header(server)],
             br#"{"provider":"gemini","model":"rate-limited"}"#,
         );
-        let reply = assert_wire_parity(old, candidate, &wire, false, 429).await;
-        assert_eq!(json_body(&reply)["error"]["code"], "rate_limit_exceeded");
-        upstream.observed_metadata(&["/v1beta/models/rate-limited"; 2]);
+        let legacy_reply = checked_metadata_reply(
+            old,
+            &wire,
+            false,
+            429,
+            &upstream,
+            "/v1beta/models/rate-limited",
+        )
+        .await;
+        let candidate_reply = checked_metadata_reply(
+            candidate,
+            &wire,
+            false,
+            429,
+            &upstream,
+            "/v1beta/models/rate-limited",
+        )
+        .await;
+        assert_wire_response_parity(&wire, &legacy_reply, &candidate_reply);
     });
+}
+
+async fn checked_metadata_reply(
+    address: SocketAddr,
+    wire: &[u8],
+    end_input: bool,
+    status: u16,
+    upstream: &CatalogUpstream,
+    upstream_path: &str,
+) -> Vec<u8> {
+    let reply = assert_wire(address, wire, end_input, status).await;
+    upstream.observed_metadata(&[upstream_path]);
+    assert!(
+        matches!(
+            upstream.requests.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ),
+        "expected exactly one upstream request for {upstream_path}"
+    );
+    let body = json_body(&reply);
+    if status == 200 {
+        assert!(String::from_utf8_lossy(&reply).contains("Cache-Control: no-store"));
+        assert_eq!(body["context_window"], 1024);
+    } else {
+        assert_eq!(body["error"]["code"], "rate_limit_exceeded");
+    }
+    reply
 }
 
 #[test]

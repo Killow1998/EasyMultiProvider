@@ -14,7 +14,7 @@ use crate::{
         request::{parse_request, read_request_head},
         response::body_error_response,
     },
-    lifecycle::ServerHandle as LegacyServer,
+    lifecycle::{ServerHandle as LegacyServer, TestDriver},
     server::{
         ServerHandle,
         tests::{LOOPBACK, admission},
@@ -217,22 +217,31 @@ fn decode_report_wire(wire: Vec<u8>) -> Vec<u8> {
     }
 }
 
+async fn assert_wire_with<T>(
+    address: SocketAddr,
+    request: &[u8],
+    end_input: bool,
+    status: u16,
+    check_reply: impl FnOnce(Vec<u8>) -> T,
+) -> T {
+    check_reply(assert_wire(address, request, end_input, status).await)
+}
+
 async fn assert_wire_parity_with(
     [(old, old_request), (new, new_request)]: [(SocketAddr, &[u8]); 2],
     end_input: bool,
     status: u16,
-    normalize: impl Fn(Vec<u8>) -> Vec<u8>,
+    check_reply: impl Fn(Vec<u8>) -> Vec<u8>,
 ) -> Vec<u8> {
     let (old, new) = tokio::join!(
-        assert_wire(old, old_request, end_input, status),
-        assert_wire(new, new_request, end_input, status),
+        assert_wire_with(old, old_request, end_input, status, &check_reply),
+        assert_wire_with(new, new_request, end_input, status, &check_reply),
     );
-    let (old, new) = (normalize(old), normalize(new));
     assert_wire_response_parity(old_request, &old, &new);
     new
 }
 
-fn assert_wire_response_parity(old_request: &[u8], old: &[u8], new: &[u8]) {
+pub(crate) fn assert_wire_response_parity(old_request: &[u8], old: &[u8], new: &[u8]) {
     assert!(
         new == old,
         "different responses for {}\nnew: {}\nold: {}",
@@ -317,10 +326,16 @@ impl Fixture {
     }
 
     fn with_directory(directory: tempfile::TempDir) -> Self {
-        let legacy = LegacyServer::start_with_config(
+        Self::with_driver(directory, TestDriver::Legacy)
+    }
+
+    fn with_driver(directory: tempfile::TempDir, driver: TestDriver) -> Self {
+        let root = emp_state::config::resolve_user_path(directory.path());
+        let legacy = LegacyServer::start_with_test_driver(
             LOOPBACK.ip(),
-            0,
-            &directory.path().join("config.json"),
+            &root.join("config.json"),
+            root.join("codex/auth.json"),
+            driver,
         )
         .unwrap();
         Self {
@@ -328,6 +343,16 @@ impl Fixture {
             legacy,
             upstream: Arc::default(),
         }
+    }
+
+    fn run_wire<T>(self, test: impl AsyncFnOnce(&Self, SocketAddr) -> T) -> T {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(test(&self, self.legacy.local_addr()));
+        self.legacy.shutdown().unwrap();
+        result
     }
 
     fn run(self, test: impl AsyncFnOnce(&Self, SocketAddr)) {
@@ -1085,14 +1110,17 @@ fn inspection_reads_match_legacy_wire_on_candidate_listener() {
             );
             let reply = if path == "/api/support-report" {
                 let (old, new) = tokio::join!(
-                    assert_wire(fixture.legacy.local_addr(), &wire, false, 200),
-                    assert_wire(address, &wire, false, 200),
+                    assert_wire_with(
+                        fixture.legacy.local_addr(),
+                        &wire,
+                        false,
+                        200,
+                        checked_support_report
+                    ),
+                    assert_wire_with(address, &wire, false, 200, checked_support_report),
                 );
-                assert_eq!(
-                    support_report_without_timestamp(&old),
-                    support_report_without_timestamp(&new)
-                );
-                new
+                assert_eq!(old.1, new.1);
+                new.0
             } else {
                 fixture.parity(address, &wire, 200).await
             };
@@ -1161,11 +1189,11 @@ fn inspection_reads_match_legacy_wire_on_candidate_listener() {
     });
 }
 
-fn support_report_without_timestamp(reply: &[u8]) -> String {
-    let body = json_body(reply);
+fn checked_support_report(reply: Vec<u8>) -> (Vec<u8>, String) {
+    let body = json_body(&reply);
     let timestamp = body["generated_at"].as_str().unwrap();
     time::OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339).unwrap();
-    let (head, body) = str::from_utf8(reply)
+    let (head, body) = str::from_utf8(&reply)
         .unwrap()
         .split_once("\r\n\r\n")
         .unwrap();
@@ -1180,7 +1208,8 @@ fn support_report_without_timestamp(reply: &[u8]) -> String {
         &length,
         &format!("\r\nContent-Length: {}\r\n", body_with_fixed_time.len()),
     );
-    format!("{head}\r\n\r\n{body_with_fixed_time}")
+    let normalized = format!("{head}\r\n\r\n{body_with_fixed_time}");
+    (reply, normalized)
 }
 
 #[test]
