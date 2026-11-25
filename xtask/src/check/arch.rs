@@ -26,6 +26,7 @@ const NORMAL_BUILD: &[(&str, &str)] = &[
     ("emp-mod-gateway", "emp-modules"),
     ("emp-mod-team", "emp-modules"),
     ("emp-mod-team", "emp-state"),
+    ("emp-modules", "emp-domain"),
     ("emp-router", "emp-domain"),
     ("emp-router", "emp-protocol"),
     ("emp-router", "emp-transport"),
@@ -211,7 +212,7 @@ fn dependencies(
                 errors.push(format!("[arch] {} [dependencies]: {from} → {to} 在正常依赖里打开了 test-support；测试钩子只能由 [dev-dependencies] 或本 crate 的 test-support 特性打开", package["manifest_path"].as_str().unwrap_or("Cargo.toml")));
             }
             let allowed = match (from, to) {
-                ("emp-modules", _) => true,
+                ("emp-modules", _) if dev => true,
                 ("emp-test-support", "emp-transport") => {
                     websocket_transport(package, dependency, errors);
                     true
@@ -441,6 +442,7 @@ mod tests {
         for (from, to, kind, valid) in [
             ("emp-app", "emp-domain", Value::Null, true),
             ("emp-app", "emp-domain", json!("build"), true),
+            ("emp-modules", "emp-config", json!("build"), false),
             ("emp-app", "emp-mod-decision", json!("dev"), true),
             ("emp-domain", "emp-app", Value::Null, false),
             ("emp-app", "emp-mod-decision", Value::Null, false),

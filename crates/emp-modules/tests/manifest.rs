@@ -272,13 +272,24 @@ fn hooks_and_catalog_cannot_be_declared_twice() {
 
 #[test]
 fn panel_requires_a_relative_js_entry_and_revision() {
-    for entry in [
-        "/ui.js",
-        r"\ui.js",
-        r"C:\ui.js",
-        "C:ui.js",
-        "../ui.js",
-        "ui.css",
+    for (entry, valid) in [
+        ("panel/main.js", true),
+        ("panel/main..v2.js", true),
+        ("a-b_c.d/x.js", true),
+        ("..\t/main.js", false),
+        ("./x.js", false),
+        ("../ui.js", false),
+        (".../x.js", false),
+        ("a//b.js", false),
+        ("https://example.org/panel.js", false),
+        ("C:ui.js", false),
+        ("/x.js", false),
+        (r"\ui.js", false),
+        (r"C:\ui.js", false),
+        (r"a\b.js", false),
+        ("x.js?v=1", false),
+        ("中文.js", false),
+        ("ui.css", false),
     ] {
         let mut manifest = manifest();
         manifest.contributions[3] = Contribution::Panel {
@@ -286,14 +297,16 @@ fn panel_requires_a_relative_js_entry_and_revision() {
             entry: entry.into(),
             revision: "1".into(),
         };
-        assert_eq!(
-            manifest.validate(HOST_API_V3),
+        let expected = if valid {
+            Ok(())
+        } else {
             Err(vec![ManifestError::InvalidPanelEntry {
                 index: 3,
                 id: "settings".into(),
-                entry: entry.into()
+                entry: entry.into(),
             }])
-        );
+        };
+        assert_eq!(manifest.validate(HOST_API_V3), expected, "{entry:?}");
     }
     let mut manifest = manifest();
     manifest.contributions[3] = Contribution::Panel {

@@ -214,7 +214,7 @@ impl fmt::Display for ManifestError {
             Self::DuplicateCatalog { index } => write!(f, "贡献[{index}] 重复声明目录"),
             Self::InvalidPanelEntry { index, id, entry } => write!(
                 f,
-                "贡献[{index}] 面板 {id:?} 的入口 {entry:?} 必须是以 .js 结尾且不含 .. 的相对路径"
+                "贡献[{index}] 面板 {id:?} 的入口 {entry:?} 必须是以 .js 结尾的相对路径，每段只含 [A-Za-z0-9._-] 且不能只由点组成"
             ),
             Self::EmptyPanelRevision { index, id } => {
                 write!(f, "贡献[{index}] 面板 {id:?} 的修订版本不能为空")
@@ -358,12 +358,14 @@ impl ModuleManifest {
                     entry,
                     revision,
                 } => {
-                    let first_segment = entry.split('/').next().unwrap_or_default();
-                    if entry.starts_with('/')
-                        || first_segment.contains(':')
-                        || entry.contains(['\\', '?', '#'])
-                        || !entry.ends_with(".js")
-                        || entry.split('/').any(|segment| segment == "..")
+                    if !entry.ends_with(".js")
+                        || !entry.split('/').all(|segment| {
+                            !segment.trim_matches('.').is_empty()
+                                && segment.bytes().all(|byte| {
+                                    byte.is_ascii_alphanumeric()
+                                        || matches!(byte, b'.' | b'_' | b'-')
+                                })
+                        })
                     {
                         errors.push(ManifestError::InvalidPanelEntry {
                             index,
