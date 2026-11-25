@@ -1,4 +1,4 @@
-use emp_test_support::{Deadline, DeadlineIo, test_timeout};
+use emp_test_support::{Deadline, DeadlineIo, sse, test_timeout};
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::{io_timeout, sse};
+use super::io_timeout;
 
 pub struct Response {
     pub status: u16,
@@ -63,13 +63,30 @@ impl Response {
 
     /// Parsed `data:` frames of a server-sent event stream.
     pub fn sse_events(&self) -> Vec<Value> {
-        self.text()
-            .lines()
-            .filter_map(|line| line.strip_prefix("data: "))
+        sse_frames(&self.text())
+            .filter_map(sse::data)
             .filter(|data| *data != "[DONE]")
-            .map(|data| serde_json::from_str(data).expect("SSE data JSON"))
+            .map(|data| serde_json::from_str(&data).expect("SSE data JSON"))
             .collect()
     }
+}
+
+fn sse_frames(mut body: &str) -> impl Iterator<Item = &str> {
+    std::iter::from_fn(move || {
+        if body.is_empty() {
+            return None;
+        }
+        let mut offset = 0;
+        for line in body.split_inclusive('\n') {
+            if matches!(line, "\n" | "\r\n") {
+                let frame = &body[..offset];
+                body = &body[offset + line.len()..];
+                return Some(frame);
+            }
+            offset += line.len();
+        }
+        Some(std::mem::take(&mut body))
+    })
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -149,19 +166,16 @@ fn dechunk(mut raw: &[u8]) -> io::Result<Option<Vec<u8>>> {
 }
 
 fn sse_finished(body: &[u8]) -> bool {
-    String::from_utf8_lossy(body).split("\n\n").any(|frame| {
-        frame.lines().any(|line| {
-            line.strip_prefix("data: ")
-                .and_then(|data| serde_json::from_str::<Value>(data).ok())
-                .and_then(|event| event["type"].as_str().map(str::to_owned))
-                .is_some_and(|kind| {
-                    matches!(
-                        kind.as_str(),
-                        "response.completed" | "response.incomplete" | "response.failed"
-                    )
-                })
-        })
-    }) && body.ends_with(b"\n\n")
+    body.ends_with(b"\n\n")
+        && sse_frames(&String::from_utf8_lossy(body))
+            .filter_map(sse::data)
+            .filter_map(|data| serde_json::from_str::<Value>(&data).ok())
+            .any(|event| {
+                matches!(
+                    event["type"].as_str(),
+                    Some("response.completed" | "response.incomplete" | "response.failed")
+                )
+            })
 }
 
 /// Read one HTTP message (request or response) whose head ends at `\r\n\r\n`.

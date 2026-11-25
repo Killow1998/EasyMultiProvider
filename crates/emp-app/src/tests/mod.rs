@@ -4,7 +4,7 @@ mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
 use base64::engine::general_purpose::STANDARD;
 use emp_test_support::{
-    Deadline, DeadlineIo, Observation, Probe, TestBudget, accept_blocking, test_timeout,
+    Deadline, DeadlineIo, Observation, Probe, TestBudget, accept_blocking, sse, test_timeout,
 };
 
 use crate::cli::Cli;
@@ -37,7 +37,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Cursor};
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Shutdown;
@@ -379,6 +379,14 @@ fn read_sse_frame<R: BufRead>(reader: &mut BufReader<ChunkedSse<R>>) -> String {
     }
 }
 
+fn read_sse_frames<R: BufRead>(
+    reader: &mut BufReader<ChunkedSse<R>>,
+) -> impl Iterator<Item = String> {
+    std::iter::from_fn(move || {
+        (!reader.fill_buf().expect("read SSE body").is_empty()).then(|| read_sse_frame(reader))
+    })
+}
+
 fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     let mut stream = deadline.io(deadline.connect(server.local_addr()).expect("connect SSE"));
@@ -408,15 +416,9 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
         "event: integration-updated\ndata: {}\n"
     );
     let activity_frame = read_sse_frame(&mut reader);
-    assert!(
-        activity_frame.starts_with("event: activity-updated\ndata: "),
-        "{activity_frame}"
-    );
-    let activity_body = activity_frame
-        .strip_prefix("event: activity-updated\ndata: ")
-        .expect("activity event prefix")
-        .trim();
-    let activity: Value = serde_json::from_str(activity_body).expect("activity snapshot");
+    assert_eq!(sse::event(&activity_frame), Some("activity-updated"));
+    let activity_body = sse::data(&activity_frame).expect("activity event data");
+    let activity: Value = serde_json::from_str(&activity_body).expect("activity snapshot");
     assert_eq!(activity["recent_for_seconds"], 60);
     assert_eq!(activity["routes"], json!([]));
     assert_eq!(

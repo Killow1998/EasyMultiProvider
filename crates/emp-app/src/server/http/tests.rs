@@ -158,9 +158,6 @@ mod migration_writes;
 mod module_writes;
 mod report_fixture;
 #[cfg(unix)]
-#[path = "../../../tests/support/sse.rs"]
-mod sse;
-#[cfg(unix)]
 mod team_writes;
 #[cfg(unix)]
 mod websocket;

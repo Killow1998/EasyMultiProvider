@@ -31,14 +31,12 @@ fn responses_sse_stops_at_terminal_without_eof_or_parsing_the_tail() {
             &[&session_header(&server), "Authorization: Bearer fixture"],
         );
         let mut wire = String::new();
-        Deadline::after(test_timeout(Duration::from_secs(2)))
-            .io(downstream)
-            .read_to_string(&mut wire)
-            .unwrap();
-        let events: Vec<Value> = wire
-            .lines()
-            .filter_map(|line| line.strip_prefix("data: "))
-            .map(|data| serde_json::from_str(data).unwrap())
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
+        deadline.io(downstream).read_to_string(&mut wire).unwrap();
+        let (_, mut reader) = read_sse_head(Cursor::new(&wire), &deadline);
+        let events: Vec<Value> = read_sse_frames(&mut reader)
+            .filter_map(|frame| sse::data(&frame))
+            .map(|data| serde_json::from_str(&data).unwrap())
             .collect();
         assert_eq!(
             events.last().unwrap()["type"],
@@ -77,30 +75,19 @@ fn native_and_external_json_replies_stream_to_completion_beyond_64_mib() {
                 br#"{"model":"demo/model","input":"hello","stream":true}"#,
                 &[&session_header(&server), "Authorization: Bearer fixture"],
             );
-            let mut reader =
-                BufReader::new(Deadline::after(test_timeout(Duration::from_secs(10))).io(stream));
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            assert!(line.starts_with("HTTP/1.1 200"), "{auth_mode}: {line}");
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
+            let (head, mut reader) = read_sse_head(BufReader::new(deadline.io(stream)), &deadline);
+            assert!(head.starts_with("HTTP/1.1 200"), "{auth_mode}: {head}");
             let mut last = Value::Null;
             let mut terminals = 0;
             let mut saw_delta = false;
             let mut delivered_bytes = 0;
-            // Consume and discard each event; the acceptance test must not
-            // recreate the all-events allocation that production eliminated.
-            loop {
-                line.clear();
-                if reader.read_line(&mut line).unwrap() == 0 {
-                    break;
-                }
-                if let Some(data) = line.strip_prefix("data: ") {
-                    delivered_bytes += data.len();
-                    let event: Value = serde_json::from_str(data.trim_end()).unwrap();
-                    saw_delta |= event["type"] == "response.output_text.delta";
-                    terminals +=
-                        usize::from(crate::services::events::terminal_stream_event(&event));
-                    last = event;
-                }
+            for data in read_sse_frames(&mut reader).filter_map(|frame| sse::data(&frame)) {
+                delivered_bytes += data.len();
+                let event: Value = serde_json::from_str(&data).unwrap();
+                saw_delta |= event["type"] == "response.output_text.delta";
+                terminals += usize::from(crate::services::events::terminal_stream_event(&event));
+                last = event;
             }
             let (path, headers, body) = upstream.observed();
             assert_eq!(path, "/v1/responses");
@@ -152,13 +139,11 @@ fn disconnect_during_synthesis_stops_delivery_without_retry_or_false_completion(
             br#"{"model":"demo/model","input":"hello","stream":true}"#,
             &[&session_header(&server), "Authorization: Bearer fixture"],
         );
-        let mut reader =
-            BufReader::new(Deadline::after(test_timeout(Duration::from_secs(5))).io(&stream));
-        let mut line = String::new();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let (_, mut reader) = read_sse_head(BufReader::new(deadline.io(&stream)), &deadline);
         loop {
-            line.clear();
-            assert!(reader.read_line(&mut line).unwrap() > 0);
-            if line.starts_with("data: ") && line.contains("response.output_text.delta") {
+            let frame = read_sse_frame(&mut reader);
+            if sse::data(&frame).is_some_and(|data| data.contains("response.output_text.delta")) {
                 break;
             }
         }

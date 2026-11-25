@@ -103,10 +103,13 @@ impl Drop for HeldActivityUpstream {
 fn next_activity_snapshot(reader: &mut SseReader, in_flight: u64) -> Value {
     loop {
         let frame = read_sse_frame(reader);
-        let Some(data) = frame.strip_prefix("event: activity-updated\ndata: ") else {
+        if sse::event(&frame) != Some("activity-updated") {
+            continue;
+        }
+        let Some(data) = sse::data(&frame) else {
             continue;
         };
-        let snapshot: Value = serde_json::from_str(data.trim()).expect("activity snapshot JSON");
+        let snapshot: Value = serde_json::from_str(&data).expect("activity snapshot JSON");
         if snapshot["routes"][0]["in_flight"] == in_flight {
             return snapshot;
         }

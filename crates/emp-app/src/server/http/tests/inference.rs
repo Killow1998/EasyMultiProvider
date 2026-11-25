@@ -3,7 +3,7 @@ use crate::{
     server::raw_tcp::{RawClient, wire_timeout},
     tests::{OneShotUpstream, flushed_journal, live_journal, wait_for},
 };
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, sse, test_timeout};
 use std::{collections::BTreeMap, io::Read, sync::mpsc};
 
 const RESPONSE: &[u8] = br#"{ "id":"resp_fixture","object":"response","status":"completed","model":"upstream","output":[], "z":1.2300e+2, "a":null }"#;

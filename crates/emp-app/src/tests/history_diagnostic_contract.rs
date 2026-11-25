@@ -115,14 +115,12 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
             &[&session],
         );
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-        assert!(reply.contains("event: response.failed"), "{reply}");
-        let failed: Value = serde_json::from_str(
-            reply
-                .lines()
-                .find_map(|line| line.strip_prefix("data: "))
-                .unwrap(),
-        )
-        .unwrap();
+        let deadline = Deadline::after(response_timeout());
+        let (_, mut reader) = read_sse_head(Cursor::new(&reply), &deadline);
+        let frame = read_sse_frame(&mut reader);
+        assert_eq!(sse::event(&frame), Some("response.failed"), "{frame}");
+        let data = sse::data(&frame).expect("response.failed SSE data");
+        let failed: Value = serde_json::from_str(&data).expect("response.failed SSE JSON");
         assert_eq!(failed["response"]["error"]["code"], "invalid_prompt");
         count += 1;
         assert_failure(
@@ -215,12 +213,9 @@ fn assert_missing_summary_output(stream: bool) {
         let (head, mut reader) = read_sse_head(BufReader::new(deadline.io(stream)), &deadline);
         assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
         let frame = read_sse_frame(&mut reader);
-        let (event, data) = frame
-            .strip_prefix("event: ")
-            .and_then(|frame| frame.split_once("\ndata: "))
-            .unwrap_or_else(|| panic!("expected SSE event and data lines: {frame:?}"));
-        assert_eq!(event, "response.failed");
-        let failed: Value = serde_json::from_str(data).expect("response.failed SSE JSON");
+        assert_eq!(sse::event(&frame), Some("response.failed"), "{frame}");
+        let data = sse::data(&frame).expect("response.failed SSE data");
+        let failed: Value = serde_json::from_str(&data).expect("response.failed SSE JSON");
         assert_eq!(failed["type"], "response.failed");
     } else {
         let response = post(&server, "/v1/responses", &body, &[&session]);

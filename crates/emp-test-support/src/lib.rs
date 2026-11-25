@@ -14,6 +14,7 @@ use std::{
 
 mod observation;
 mod process;
+pub mod sse;
 #[cfg(feature = "websocket")]
 pub mod websocket;
 pub use observation::{Observation, ObservationResult, Probe};

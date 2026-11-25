@@ -244,7 +244,7 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     crate::services::usage::workers(&server.state, &mut workers).unwrap();
     let completed = loop {
         let frame = read_sse_frame(&mut reader);
-        if frame.contains("event: usage-updated") {
+        if sse::event(&frame) == Some("usage-updated") {
             let reply = request_before(&server, "/api/usage", &[&session], &deadline);
             let payload: Value =
                 serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap();
@@ -263,7 +263,7 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     let receipt: Value = serde_json::from_str(queued.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(receipt["command_id"], 2);
     loop {
-        if read_sse_frame(&mut reader).contains("event: usage-updated") {
+        if sse::event(&read_sse_frame(&mut reader)) == Some("usage-updated") {
             let reply = request_before(&server, "/api/usage", &[&session], &deadline);
             let payload: Value =
                 serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap();

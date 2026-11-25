@@ -45,15 +45,17 @@ fn client_failure(
             &[session],
         );
         let status = wire.split_whitespace().nth(1).unwrap().parse().unwrap();
-        let body = wire.split("\r\n\r\n").nth(1).unwrap();
         if status == 200 {
+            let deadline = Deadline::after(response_timeout());
+            let (_, mut reader) = read_sse_head(Cursor::new(&wire), &deadline);
             events.extend(
-                body.lines()
-                    .filter_map(|line| line.strip_prefix("data: "))
-                    .filter(|line| *line != "[DONE]")
-                    .map(|line| serde_json::from_str(line).unwrap()),
+                read_sse_frames(&mut reader)
+                    .filter_map(|frame| sse::data(&frame))
+                    .filter(|data| *data != "[DONE]")
+                    .map(|data| serde_json::from_str(&data).unwrap()),
             );
         } else {
+            let body = wire.split("\r\n\r\n").nth(1).unwrap();
             events.push(serde_json::from_str(body).unwrap());
         }
         status

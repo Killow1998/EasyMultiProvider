@@ -14,7 +14,6 @@ mod https;
 #[cfg(unix)]
 pub mod modules;
 mod process;
-mod sse;
 mod startup;
 #[cfg(unix)]
 #[allow(dead_code, reason = "Only the e2e target uses Team process fixtures")]

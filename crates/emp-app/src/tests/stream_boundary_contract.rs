@@ -268,10 +268,11 @@ fn stream_errors_keep_pre_and_post_output_boundaries() {
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(response.contains("event: response.output_text.delta\n"));
     assert!(response.contains("event: response.failed\n"));
-    let failed: Value = response
-        .lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+    let deadline = Deadline::after(response_timeout());
+    let (_, mut reader) = read_sse_head(Cursor::new(&response), &deadline);
+    let failed: Value = read_sse_frames(&mut reader)
+        .filter_map(|frame| sse::data(&frame))
+        .filter_map(|data| serde_json::from_str::<Value>(&data).ok())
         .find(|event| event["type"] == "response.failed")
         .expect("terminal failure is valid SSE JSON");
     assert_eq!(failed["response"]["error"]["status"], 502, "{failed}");
@@ -555,18 +556,14 @@ fn stream_boundary_frames_and_activity_are_directly_asserted() {
         json!({"type":"response.output_text.delta","delta":"回答, key: value"}),
         json!({"type":"response.output_item.added","item":{"id":"call_1","type":"function_call"}}),
     ];
-    // Frames round-trip: the event name leads and the payload is valid JSON
-    // with a trailing blank line, so any SSE client can parse them.
     for event in &events {
-        let frame =
-            String::from_utf8(sse_frame(event["type"].as_str().unwrap(), event).unwrap()).unwrap();
-        let (event_name, data) = frame
-            .strip_prefix("event: ")
-            .and_then(|frame| frame.split_once("\ndata: "))
-            .expect("SSE event and data lines");
-        assert_eq!(event_name, event["type"]);
+        let name = event["type"].as_str().unwrap();
+        let frame = String::from_utf8(sse_frame(name, event).unwrap()).unwrap();
+        assert!(frame.starts_with("event: "));
+        assert_eq!(sse::event(&frame), Some(name));
         assert!(frame.ends_with("\n\n"));
-        let parsed: Value = serde_json::from_str(data.trim_end_matches("\n\n")).expect("SSE JSON");
+        let data = sse::data(&frame).expect("SSE data");
+        let parsed: Value = serde_json::from_str(&data).expect("SSE JSON");
         assert_eq!(parsed, *event);
     }
     // Activity marks text deltas as output and tool items as tool calls.

@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use emp_test_support::sse::data;
 
 struct NativeErrorSseUpstream {
     address: SocketAddr,
@@ -61,10 +62,7 @@ impl Drop for NativeErrorSseUpstream {
 fn read_native_sse(input: impl BufRead, deadline: &Deadline) -> (String, Vec<String>) {
     let (head, mut stream) = read_sse_head(input, deadline);
     assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
-    let mut frames = Vec::new();
-    while !stream.fill_buf().unwrap().is_empty() {
-        frames.push(read_sse_frame(&mut stream));
-    }
+    let frames = read_sse_frames(&mut stream).collect();
     deadline
         .accept((head, frames), "native SSE response")
         .unwrap()
@@ -79,8 +77,8 @@ fn post_native_sse(server: &ServerHandle, body: &[u8], headers: &[&str]) -> (Str
 fn incomplete_sse_event(frames: &[String]) -> Value {
     frames
         .iter()
-        .flat_map(|frame| frame.lines().filter_map(|line| line.strip_prefix("data:")))
-        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .filter_map(|frame| data(frame))
+        .filter_map(|data| serde_json::from_str::<Value>(&data).ok())
         .find(|event| event["type"] == "response.incomplete")
         .expect("incomplete terminal")
 }
