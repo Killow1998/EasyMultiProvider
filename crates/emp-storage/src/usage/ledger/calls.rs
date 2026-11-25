@@ -310,7 +310,7 @@ impl UsageLedger {
             .is_some_and(|attempts| attempts > 0)
             && !emp_domain::MODEL_TEST_OPERATIONS.contains(&text(event, "route", ""))
         {
-            Self::insert_team_event(transaction, scope, share, usage, event, finished)?;
+            Self::insert_team_event(transaction, scope, share, &usage.id, event, finished)?;
         }
         Ok(())
     }

@@ -5,14 +5,14 @@ impl RequestOutcome<'_> {
         let now = crate::util::system_now();
         let started = now - self.started.elapsed().as_secs_f64();
         let finished = started + self.event["duration_ms"].as_u64().unwrap_or(0) as f64 / 1000.0;
-        let saved =
-            self.state
-                .backend
-                .usage
-                .ledger
-                .record_completion(&self.event, now, started, finished);
         self.state.backend.diagnostics.record(&self.event);
-        match saved {
+        match self
+            .state
+            .backend
+            .usage
+            .ledger
+            .record_completion(&self.event, now, started, finished)
+        {
             Ok(()) => {
                 self.state
                     .backend

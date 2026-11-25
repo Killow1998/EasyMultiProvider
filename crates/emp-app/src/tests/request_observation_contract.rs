@@ -1,5 +1,144 @@
 //! Loopback acceptance: receipts explain execution without controlling it.
 use super::*;
+use crate::services::request_outcome::RequestOutcome;
+use crate::services::request_preparation::{RequestOperation, prepare_request};
+
+fn settlement_fixture() -> (TempDir, ServerHandle, rusqlite::Connection) {
+    let (root, server) = configured_server("http://127.0.0.1:1/v1");
+    server
+        .state
+        .backend
+        .usage
+        .ledger
+        .query(0.0, 1.0, "all", 1.0, None)
+        .unwrap();
+    let db = rusqlite::Connection::open(root.path().join("state/usage.sqlite3")).unwrap();
+    (root, server, db)
+}
+
+fn settlement_outcome<'a>(
+    server: &'a ServerHandle,
+    operation: &str,
+    request_id: &str,
+) -> RequestOutcome<'a> {
+    let headers = BTreeMap::from([("x-emp-request-id".into(), request_id.into())]);
+    let prepared = prepare_request(
+        &server.state,
+        json!({"model":"demo/model","input":"hello"}),
+        RequestOperation::Responses,
+        &headers,
+    )
+    .unwrap();
+    RequestOutcome::new(
+        &server.state,
+        &prepared.route,
+        &prepared.body,
+        &headers,
+        None,
+        operation,
+    )
+}
+
+#[test]
+fn receipt_failure_only_marks_usage_unavailable_for_billable_calls() {
+    let (root, server, db) = settlement_fixture();
+    db.execute_batch(
+        "CREATE TRIGGER reject_receipt BEFORE INSERT ON call_records
+         BEGIN SELECT RAISE(ABORT, 'fixture rejected receipt'); END;",
+    )
+    .unwrap();
+    for (operation, request_id, billable) in [
+        ("history_summary", "0123456789abcde1", false),
+        ("responses", "0123456789abcde2", true),
+    ] {
+        let mut outcome = settlement_outcome(&server, operation, request_id);
+        outcome.dispatch();
+        outcome.observe(&json!({"type":"response.completed","response":{
+            "status":"completed","usage":{"input_tokens":3,"output_tokens":2}
+        }}));
+        outcome.finish();
+
+        let report = server
+            .state
+            .backend
+            .usage
+            .ledger
+            .query(0.0, 1.0, "all", 1.0, None)
+            .unwrap();
+        assert_eq!(report["write_error"], billable, "{operation}");
+        assert!(
+            flushed_journal(root.path(), &server.state)
+                .iter()
+                .any(|record| {
+                    record["event"] == "call_record_save_failed"
+                        && record["fields"]["request_id"] == request_id
+                }),
+            "{operation}"
+        );
+    }
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn route_diagnostics_are_visible_before_a_locked_receipt_can_commit() {
+    let (_root, server, mut db) = settlement_fixture();
+    for (operation, request_id, error, receipt_state) in [
+        ("history_summary", "0123456789abcde1", "", "completed"),
+        (
+            "responses",
+            "0123456789abcde2",
+            "previous_response_not_found",
+            "recovery_required",
+        ),
+    ] {
+        let mut outcome = settlement_outcome(&server, operation, request_id);
+        if error.is_empty() {
+            outcome.http_status(200);
+        } else {
+            outcome.native_error(&emp_router::native_http::NativeHttpError {
+                status: 400,
+                body: json!({"error":{"origin":"emp","code":error}}),
+                headers: BTreeMap::new(),
+            });
+        }
+        thread::scope(|scope| {
+            let lock = db
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            let worker = scope.spawn(move || outcome.finish());
+            wait_for(&Deadline::after(response_timeout()), || {
+                server.state.backend.diagnostics.snapshot()["records"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|record| {
+                        record["request_id"] == request_id
+                            && record["route"] == operation
+                            && record["error_code"] == error
+                    })
+            });
+            let exists: bool = lock
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM call_records WHERE request_id=?)",
+                    [request_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(!exists, "{operation}");
+            lock.commit().unwrap();
+            worker.join().unwrap();
+        });
+        let state: String = db
+            .query_row(
+                "SELECT state FROM call_records WHERE request_id=? AND operation=?",
+                [request_id, operation],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|error| panic!("missing {operation} receipt after unlocking: {error}"));
+        assert_eq!(state, receipt_state, "{operation}");
+    }
+    server.shutdown().unwrap();
+}
 
 #[test]
 fn cancelled_compaction_does_not_claim_a_terminal_write() {
@@ -531,8 +670,6 @@ fn an_unavailable_journal_does_not_prevent_a_real_request_or_add_attempts() {
 #[test]
 fn downstream_write_failure_does_not_rewrite_or_repeat_upstream_accounting() {
     use crate::services::observation::request::RequestObservation;
-    use crate::services::request_outcome::RequestOutcome;
-    use crate::services::request_preparation::{RequestOperation, prepare_request};
     let (root, server) = configured_server("http://127.0.0.1:1/v1");
     let prepared = prepare_request(
         &server.state,
@@ -591,7 +728,6 @@ fn downstream_write_failure_does_not_rewrite_or_repeat_upstream_accounting() {
 
 #[test]
 fn ledger_keeps_execution_facts_after_activity_eviction() {
-    use crate::services::request_outcome::RequestOutcome;
     use emp_router::native_http::{NativeRetryDecision, NativeRetryReason};
     let (_root, server) = configured_server("http://127.0.0.1:1/v1");
     let config = server

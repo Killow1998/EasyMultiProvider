@@ -10,27 +10,26 @@ impl UsageLedger {
         transaction: &rusqlite::Transaction<'_>,
         scope: &str,
         share: &str,
-        usage: &UsageEntry,
+        usage_id: &str,
         event: &Value,
         finished: f64,
     ) -> Result<()> {
-        let estimate = usage.quote["price_issue"]
-            .is_null()
-            .then(|| usage.quote["cost_nanos"].as_i64())
-            .flatten();
-        let payload = json!({
-            "id":usage.id, "share":share,
-            "model":report_model(text(event,"response_model",text(event,"upstream_model",""))),
-            "finished_at":finished.trunc() as i64,
-            "input_tokens":token_count(event.get("input_tokens")),
-            "cached_input_tokens":token_count(event.get("cached_input_tokens")),
-            "output_tokens":token_count(event.get("output_tokens")),
-            "estimated_usd_nanos":estimate,
-            "actual_usd_nanos":null,
-        });
+        let model = report_model(text(
+            event,
+            "response_model",
+            text(event, "upstream_model", ""),
+        ));
         transaction.execute(
-            "INSERT INTO team_outbox VALUES (?,?,?) ON CONFLICT(scope,event_id) DO NOTHING",
-            params![scope, usage.id, payload.to_string()],
+            "INSERT INTO team_outbox (scope,event_id,payload)
+             SELECT ?1,id,json_object(
+                'id',id,'share',?2,'model',?3,'finished_at',?4,
+                'input_tokens',input_tokens,'cached_input_tokens',cached_input_tokens,
+                'output_tokens',output_tokens,
+                'estimated_usd_nanos',CASE WHEN price_issue IS NULL THEN cost_nanos END,
+                'actual_usd_nanos',NULL)
+             FROM usage_events WHERE id=?5
+             ON CONFLICT(scope,event_id) DO NOTHING",
+            params![scope, share, model, finished.trunc() as i64, usage_id],
         )?;
         Ok(())
     }

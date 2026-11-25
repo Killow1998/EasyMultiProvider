@@ -259,9 +259,9 @@ impl UsageLedger {
         started: f64,
         finished: f64,
     ) -> Result<()> {
+        let billable = records_usage(event);
         let result = (|| -> Result<()> {
             let request_id = calls::request_id(event, started, finished)?;
-            let billable = records_usage(event);
             let usage = self.prepare_usage(event);
             let usage = if billable { Some(usage?) } else { usage.ok() };
             let _guard = self.lock.lock().map_err(|_| UsageError)?;
@@ -281,7 +281,7 @@ impl UsageLedger {
             transaction.commit()?;
             Ok(())
         })();
-        if result.is_err() {
+        if billable && result.is_err() {
             self.write_error.store(true, Ordering::Release);
         }
         result

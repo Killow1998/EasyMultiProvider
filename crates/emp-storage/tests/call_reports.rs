@@ -183,6 +183,76 @@ fn team_completion_commits_usage_receipt_and_pending_together() {
 }
 
 #[test]
+fn team_replay_backfills_pending_from_the_existing_usage() {
+    for (prior_issue, prior_cost, estimate) in [
+        (None, 13_000, Some(13_000)),
+        (Some("unknown_model"), 0, None),
+    ] {
+        let root = emp_test_support::fixture_dir().unwrap();
+        let path = root.path().join("usage.sqlite3");
+        let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+        let ledger = UsageLedger::new(path.clone(), Arc::clone(&prices));
+        let model = "team-shared-fixture-model";
+        if prior_issue.is_none() {
+            prices.replace(
+                json!({(model): {
+                    "input_cost_per_token":"0.000001", "output_cost_per_token":"0.000002"
+                }}),
+                1.0,
+            );
+        }
+        let scope = "workspace-member-device";
+        let mut event = json!({
+            "request_id":"original", "route":"responses", "usage_category":"subscription",
+            "usage_owner":"account:shared-identity", "upstream_model":model,
+            "usage_response_id":"resp_replay", "attempts":1, "success":true,
+            "input_tokens":7, "output_tokens":3, "team_usage":{"scope":scope,"share":"shared-account"}
+        });
+        ledger.record(&event, 100.0);
+        assert!(ledger.team_events(scope).unwrap().is_empty());
+
+        prices.replace(
+            json!({(model): {
+                "input_cost_per_token":"0.000003", "output_cost_per_token":"0.000004"
+            }}),
+            2.0,
+        );
+        event["request_id"] = json!("replay");
+        event["input_tokens"] = json!(9);
+        event["cached_input_tokens"] = json!(0);
+        event["output_tokens"] = json!(4);
+        ledger
+            .record_completion(&event, 200.0, 198.0, 200.0)
+            .unwrap();
+
+        let db = rusqlite::Connection::open(path).unwrap();
+        let (count, id, cost, issue): (i64, String, i64, Option<String>) = db
+            .query_row(
+                "SELECT COUNT(*) OVER (),id,cost_nanos,price_issue FROM usage_events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (count, cost, issue.as_deref()),
+            (1, prior_cost, prior_issue)
+        );
+        assert_eq!(
+            ledger.team_events(scope).unwrap(),
+            [(
+                id.clone(),
+                json!({
+                    "id":id, "share":"shared-account", "model":model, "finished_at":200,
+                    "input_tokens":7, "cached_input_tokens":null, "output_tokens":3,
+                    "estimated_usd_nanos":estimate, "actual_usd_nanos":null,
+                })
+            )],
+            "stored price issue: {prior_issue:?}"
+        );
+    }
+}
+
+#[test]
 fn report_progress_counts_filtered_work_and_stops_when_the_reader_leaves() {
     let root = emp_test_support::fixture_dir().unwrap();
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
