@@ -1,13 +1,14 @@
 use super::{budget, fixture};
 use crate::{
+    http::request::{MAX_HEADER_BYTES, request_head_end},
     lifecycle::ServerHandle,
-    modules::process::ModuleProcess,
+    modules::{process::ModuleProcess, registry::shortest_credential_header},
     server::http::tests::{
         assert_status, assert_wire, connect_wire_from, json_body, json_request, request,
     },
 };
 use emp_modules::{
-    manifest::{HookPhase, ModuleManifest},
+    manifest::{HookPhase, ModuleManifest, RouteAuth},
     peer::{CallError, Handlers},
 };
 use emp_test_support::{fixture_dir, test_timeout};
@@ -305,6 +306,83 @@ fn module_routes_fit_the_authenticated_request_head_before_publication() {
         );
         old.stop().await.unwrap();
         new.stop().await.unwrap();
+    });
+}
+
+#[test]
+fn proxy_route_publication_allows_the_shortest_native_bearer() {
+    with_registry_server(async |server, state_dir| {
+        let address = server.local_addr();
+        let port = address.port();
+        let state = &server.state;
+        let registry = &state.backend.modules.registry;
+        let records = &state.lifecycle.test_hooks.module_routes;
+        let key_len = state.backend.gateway_key.len();
+        let host = format!("Host:127.0.0.1:{port}");
+        let session = format!("X-EMP-Session:{}", server.session_token());
+        let bearer = "Authorization:Bearer x";
+        let wire = |path: &str, credential: &str| {
+            request(
+                port,
+                "GET",
+                &format!("{PREFIX}{path}"),
+                &[&host, credential],
+                b"",
+            )
+        };
+        let shortest = shortest_credential_header(RouteAuth::Proxy, key_len);
+        let exact = format!(
+            "/{}",
+            "x".repeat(MAX_HEADER_BYTES + 4 - wire("/", &shortest).len())
+        );
+        let oversized = format!("{exact}x");
+        let exact_bearer = wire(&exact, bearer);
+        assert_eq!(
+            request_head_end(&exact_bearer, 0),
+            Ok(Some(MAX_HEADER_BYTES + 4))
+        );
+        let contribution = |id: &str, path: &str| {
+            json!([
+                {"type":"http_route","id":id,"method":"GET","path":path,"auth":"proxy"},
+            ])
+        };
+
+        let (old, manifest) =
+            start(state_dir, "fixture-module", contribution("exact", &exact)).await;
+        registry
+            .publish(manifest, 1, old.connection(), port, key_len)
+            .unwrap();
+        std::fs::write(
+            state_dir.join("auth.json"),
+            br#"{"tokens":{"access_token":"x"}}"#,
+        )
+        .unwrap();
+        assert_wire(address, &wire(&exact, &session), false, 400).await;
+        assert_wire(address, &exact_bearer, false, 503).await;
+        assert_eq!(
+            std::mem::take(&mut *records.lock().unwrap()),
+            [("fixture-module".into(), "exact".into(), 1, "local".into())],
+        );
+
+        let (invalid, manifest) = start(
+            state_dir,
+            "fixture-module",
+            contribution("oversized", &oversized),
+        )
+        .await;
+        assert!(
+            registry
+                .publish(manifest, 2, invalid.connection(), port, key_len)
+                .is_err()
+        );
+        invalid.stop().await.unwrap();
+        assert_wire(address, &wire(&oversized, bearer), false, 400).await;
+        assert_wire(address, &exact_bearer, false, 503).await;
+        assert_eq!(
+            std::mem::take(&mut *records.lock().unwrap()),
+            [("fixture-module".into(), "exact".into(), 1, "local".into())],
+        );
+        old.stop().await.unwrap();
     });
 }
 

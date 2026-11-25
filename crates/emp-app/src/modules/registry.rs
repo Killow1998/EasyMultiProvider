@@ -36,6 +36,15 @@ pub(crate) struct HttpRoute {
     pub(crate) auth: RouteAuth,
 }
 
+pub(crate) fn shortest_credential_header(auth: RouteAuth, local_proxy_key_len: usize) -> String {
+    let (header, prefix, token_len) = match auth {
+        RouteAuth::Management => (SESSION_HEADER, "", emp_state::WEB_SESSION_TOKEN_LENGTH),
+        RouteAuth::LocalProxy => ("Authorization", "Bearer ", local_proxy_key_len),
+        RouteAuth::Proxy => ("Authorization", "Bearer ", 1),
+    };
+    format!("{header}:{prefix}{}", "x".repeat(token_len))
+}
+
 impl ModuleRegistry {
     pub fn publish(
         &self,
@@ -62,16 +71,10 @@ impl ModuleRegistry {
                     path,
                     auth,
                 } => {
-                    let (header, prefix, token_len) = match auth {
-                        RouteAuth::Management | RouteAuth::Proxy => {
-                            (SESSION_HEADER, "", emp_state::WEB_SESSION_TOKEN_LENGTH)
-                        }
-                        RouteAuth::LocalProxy => ("Authorization", "Bearer ", local_proxy_key_len),
-                    };
+                    let credential = shortest_credential_header(auth, local_proxy_key_len);
                     let head = format!(
-                        "{method} {MODULE_RUNTIME_PREFIX}{}{path} {REQUEST_VERSION}\r\nHost:127.0.0.1:{port}\r\n{header}:{prefix}{}\r\n\r\n",
+                        "{method} {MODULE_RUNTIME_PREFIX}{}{path} {REQUEST_VERSION}\r\nHost:127.0.0.1:{port}\r\n{credential}\r\n\r\n",
                         module.id,
-                        "x".repeat(token_len),
                     );
                     if path.chars().any(char::is_whitespace)
                         || !matches!(request_head_end(head.as_bytes(), 0), Ok(Some(_)))
