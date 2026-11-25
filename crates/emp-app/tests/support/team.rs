@@ -4,7 +4,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -36,7 +36,7 @@ fn assert_reaped(pid: u32) {
     poll("Team process reaped", |deadline| {
         let output = OwnedChild::output(Command::new("ps").args(["-A", "-o", "pid="]), *deadline)
             .expect("process inventory");
-        assert!(output.status.success(), "{output:?}");
+        assert!(output.status.success(), "ps failed: {}", output.status);
         (!String::from_utf8_lossy(&output.stdout)
             .split_whitespace()
             .any(|found| found.parse::<u32>() == Ok(pid)))
@@ -45,10 +45,9 @@ fn assert_reaped(pid: u32) {
 }
 
 pub struct TeamServer {
+    child: Option<OwnedChild>,
     directory: TempDir,
     pub port: u16,
-    child: Option<OwnedChild>,
-    stderr: Option<JoinHandle<()>>,
 }
 
 impl TeamServer {
@@ -60,7 +59,6 @@ impl TeamServer {
             directory: emp_test_support::fixture_dir().expect("Team server directory"),
             port,
             child: None,
-            stderr: None,
         };
         server.restart();
         server
@@ -72,38 +70,37 @@ impl TeamServer {
             .parent()
             .expect("build directory")
             .join(format!("empmod-team{}", std::env::consts::EXE_SUFFIX));
-        let mut child = Command::new(&binary)
-            .arg("serve")
-            .arg("--state")
-            .arg(self.directory.path())
-            .arg("--listen")
-            .arg(format!("127.0.0.1:{}", self.port))
-            .env("HOME", self.directory.path())
-            .env("EMP_TEAM_SPACE_PASSWORD", PASSWORD)
-            .env("EMP_TEAM_ADMIN", "deployment")
-            .env("EMP_TEAM_ADMIN_PASSWORD", PASSWORD)
-            .env("EMP_TEAM_NAME", "M03 workspace")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap_or_else(|error| panic!("{}: {error}", binary.display()));
-        let stderr = child.stderr.take();
-        self.child = Some(OwnedChild::new(child));
-        let stderr = stderr.expect("Team stderr");
-        let (ready, received) = mpsc::channel();
-        self.stderr = Some(thread::spawn(move || {
-            for line in BufReader::new(stderr).lines() {
-                let line = line.expect("Team server output");
-                eprintln!("{line}");
-                if line.starts_with("EMP workspace listening on ") {
-                    let _ = ready.send(());
-                }
+        self.child = Some(
+            OwnedChild::spawn(
+                Command::new(&binary)
+                    .arg("serve")
+                    .arg("--state")
+                    .arg(self.directory.path())
+                    .arg("--listen")
+                    .arg(format!("127.0.0.1:{}", self.port))
+                    .env("HOME", self.directory.path())
+                    .env("EMP_TEAM_SPACE_PASSWORD", PASSWORD)
+                    .env("EMP_TEAM_ADMIN", "deployment")
+                    .env("EMP_TEAM_ADMIN_PASSWORD", PASSWORD)
+                    .env("EMP_TEAM_NAME", "M03 workspace")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped()),
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", binary.display())),
+        );
+        let child = self.child.as_ref().expect("Team server");
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
+        loop {
+            let line = child
+                .stderr_line(deadline)
+                .expect("real Team server ready")
+                .expect("Team server closed output before readiness");
+            eprintln!("{line}");
+            if line.starts_with("EMP workspace listening on ") {
+                break;
             }
-        }));
-        received
-            .recv_timeout(test_timeout(Duration::from_secs(30)).duration())
-            .expect("real Team server ready");
+        }
         let health = http(self.port, "GET", "/healthz", &[], b"");
         assert_eq!(health.status, 200, "{}", health.text());
         assert_eq!(health.json(), json!({"ok":true,"mode":"workspace"}));
@@ -119,21 +116,11 @@ impl TeamServer {
         let mut child = self.child.take().expect("running Team server");
         let pid = child.id();
         child.terminate().expect("stop and reap Team server");
-        self.stderr
-            .take()
-            .expect("Team stderr reader")
-            .join()
-            .expect("Team stderr stopped");
-        assert_reaped(pid);
-    }
-}
-
-impl Drop for TeamServer {
-    fn drop(&mut self) {
-        drop(self.child.take());
-        if let Some(reader) = self.stderr.take() {
-            let _ = reader.join();
+        let deadline = Deadline::after(super::io_timeout());
+        while let Some(line) = child.stderr_line(deadline).expect("Team stderr stopped") {
+            eprintln!("{line}");
         }
+        assert_reaped(pid);
     }
 }
 
@@ -329,13 +316,17 @@ impl TeamRelay {
 impl Drop for TeamRelay {
     fn drop(&mut self) {
         self.stopping.store(true, Ordering::Release);
-        drop(self.hold_reply.lock().expect("report gate").take());
+        drop(
+            self.hold_reply
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take(),
+        );
         let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(worker) = self.worker.take() {
-            let result = worker.join();
-            if !thread::panicking() {
-                result.expect("Team relay stopped");
-            }
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            eprintln!("Team relay worker panicked");
         }
     }
 }

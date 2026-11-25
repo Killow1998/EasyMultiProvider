@@ -1,226 +1,256 @@
 use crate::Deadline;
 use std::{
-    io::{self, Read},
-    process::{Child, Command, ExitStatus, Output, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread::{self, JoinHandle},
+    fmt, io,
+    process::{Child, ChildStdin, Command, ExitStatus, Output, Stdio},
+    sync::Arc,
+    thread,
     time::Duration,
 };
 
+mod capture;
+#[cfg(windows)]
+mod windows;
+
+use capture::Capture;
+
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-pub struct OwnedChild(Child);
+pub struct ChildError {
+    kind: io::ErrorKind,
+    status: Option<ExitStatus>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl ChildError {
+    pub fn kind(&self) -> io::ErrorKind {
+        self.kind
+    }
+
+    pub fn status(&self) -> Option<ExitStatus> {
+        self.status
+    }
+
+    pub fn stdout(&self) -> &[u8] {
+        &self.stdout
+    }
+
+    pub fn stderr(&self) -> &[u8] {
+        &self.stderr
+    }
+}
+
+impl From<io::Error> for ChildError {
+    fn from(error: io::Error) -> Self {
+        Self {
+            kind: error.kind(),
+            status: None,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        }
+    }
+}
+
+impl fmt::Display for ChildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "child process: {}", self.kind)?;
+        if let Some(status) = self.status {
+            write!(formatter, " ({status})")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ChildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ChildError")
+            .field("kind", &self.kind)
+            .field("status", &self.status)
+            .finish()
+    }
+}
+
+impl std::error::Error for ChildError {}
+
+pub struct OwnedChild {
+    child: Child,
+    status: Option<ExitStatus>,
+    stdout: Option<Arc<Capture>>,
+    stderr: Option<Arc<Capture>>,
+    #[cfg(windows)]
+    job: windows::Job,
+}
 
 impl OwnedChild {
-    pub fn new(child: Child) -> Self {
-        Self(child)
+    pub fn spawn(command: &mut Command) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            Self {
+                child: command.process_group(0).spawn()?,
+                status: None,
+                stdout: None,
+                stderr: None,
+            }
+            .start_capture()
+        }
+        #[cfg(windows)]
+        Self::spawn_with_creation_flags(command, 0)
+    }
+
+    #[cfg(windows)]
+    pub fn spawn_with_creation_flags(command: &mut Command, flags: u32) -> io::Result<Self> {
+        let (child, job) = windows::spawn(command, flags)?;
+        Self {
+            child,
+            status: None,
+            stdout: None,
+            stderr: None,
+            job,
+        }
+        .start_capture()
+    }
+
+    fn start_capture(mut self) -> io::Result<Self> {
+        self.stdout = self.child.stdout.take().map(Capture::start).transpose()?;
+        self.stderr = self.child.stderr.take().map(Capture::start).transpose()?;
+        Ok(self)
     }
 
     pub fn id(&self) -> u32 {
-        self.0.id()
+        self.child.id()
     }
 
-    pub fn output(command: &mut Command, deadline: Deadline) -> io::Result<Output> {
-        let child = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        Self::new(child).wait_until(deadline)
+    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.child.stdin.take()
     }
 
-    pub fn wait_until(&mut self, deadline: Deadline) -> io::Result<Output> {
-        drop(self.0.stdin.take());
-        let stdout = self.0.stdout.take().map(Capture::start);
-        let stderr = self.0.stderr.take().map(Capture::start);
-        let status = self.wait_for_exit(deadline, || {
-            [&stdout, &stderr]
-                .into_iter()
-                .flatten()
-                .all(Capture::is_finished)
-        });
-        if status.is_err() {
-            let _ = self.terminate();
-        }
-        let (stdout, stdout_result) = Capture::finish(stdout);
-        let (stderr, stderr_result) = Capture::finish(stderr);
-        let status = status.and_then(|status| stdout_result.and(stderr_result).map(|()| status));
-        match status {
+    pub fn stdout_line(&self, deadline: Deadline) -> io::Result<Option<String>> {
+        self.stdout
+            .as_ref()
+            .map_or(Ok(None), |capture| capture.line(deadline))
+    }
+
+    pub fn stderr_line(&self, deadline: Deadline) -> io::Result<Option<String>> {
+        self.stderr
+            .as_ref()
+            .map_or(Ok(None), |capture| capture.line(deadline))
+    }
+
+    pub fn output(command: &mut Command, deadline: Deadline) -> Result<Output, ChildError> {
+        Self::spawn(
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )?
+        .wait_until(deadline)
+    }
+
+    pub fn wait_until(&mut self, deadline: Deadline) -> Result<Output, ChildError> {
+        drop(self.child.stdin.take());
+        let completed = self.wait_for_exit_and_output(deadline);
+        let terminated = self.terminate();
+        let (stdout, stdout_result) = self
+            .stdout
+            .take()
+            .map_or((Vec::new(), Ok(())), |capture| capture.take_output());
+        let (stderr, stderr_result) = self
+            .stderr
+            .take()
+            .map_or((Vec::new(), Ok(())), |capture| capture.take_output());
+        match completed
+            .and(terminated)
+            .and_then(|status| stdout_result.and(stderr_result).map(|()| status))
+        {
             Ok(status) => Ok(Output {
                 status,
                 stdout,
                 stderr,
             }),
-            Err(error) => Err(io::Error::new(
-                error.kind(),
-                format!(
-                    "{error}\nstdout:\n{}\nstderr:\n{}",
-                    String::from_utf8_lossy(&stdout),
-                    String::from_utf8_lossy(&stderr)
-                ),
-            )),
+            Err(error) => Err(ChildError {
+                kind: error.kind(),
+                status: self.status,
+                stdout,
+                stderr,
+            }),
         }
     }
 
-    fn wait_for_exit(
-        &mut self,
-        deadline: Deadline,
-        output_finished: impl Fn() -> bool,
-    ) -> io::Result<ExitStatus> {
+    fn wait_for_exit_and_output(&mut self, deadline: Deadline) -> io::Result<()> {
         loop {
-            if let Some(status) = self.0.try_wait()?
-                && output_finished()
+            if (self.status.is_some() || self.has_exited()?)
+                && [&self.stdout, &self.stderr]
+                    .into_iter()
+                    .flatten()
+                    .all(|capture| capture.is_finished())
             {
-                return deadline.accept(status, "child exit and output");
+                return deadline.accept((), "child exit and output");
             }
             let remaining = deadline.accept(deadline.remaining(), "child exit and output")?;
             poll_pause(remaining.min(POLL_INTERVAL));
         }
     }
 
-    pub fn terminate(&mut self) -> io::Result<()> {
-        if let Ok(Some(_)) = self.0.try_wait() {
-            return Ok(());
+    #[cfg(unix)]
+    fn has_exited(&self) -> io::Result<bool> {
+        use rustix::{
+            io::Errno,
+            process::{Pid, WaitId, WaitIdOptions, waitid},
+        };
+        let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        match waitid(WaitId::Pid(Pid::from_child(&self.child)), options) {
+            Ok(status) => Ok(status.is_some()),
+            Err(Errno::INTR) => Ok(false),
+            Err(error) => Err(error.into()),
         }
-        self.0.kill()?;
-        self.0.wait()?;
-        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn has_exited(&mut self) -> io::Result<bool> {
+        Ok(self.child.try_wait()?.is_some())
+    }
+
+    pub fn terminate(&mut self) -> io::Result<ExitStatus> {
+        if let Some(status) = self.status {
+            return Ok(status);
+        }
+        #[cfg(unix)]
+        {
+            use rustix::{
+                io::Errno,
+                process::{Pid, Signal, kill_process_group},
+            };
+            match kill_process_group(Pid::from_child(&self.child), Signal::KILL) {
+                Ok(()) | Err(Errno::SRCH) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        #[cfg(windows)]
+        self.job.terminate()?;
+        let status = self.child.wait()?;
+        self.status = Some(status);
+        Ok(status)
     }
 }
 
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         let _ = self.terminate();
-    }
-}
-
-struct Capture {
-    stop: Arc<AtomicBool>,
-    reader: Option<JoinHandle<(Vec<u8>, io::Result<()>)>>,
-}
-
-impl Capture {
-    fn start(pipe: impl ReadPipe + Send + 'static) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let cancelled = Arc::clone(&stop);
-        let reader = thread::spawn(move || {
-            let mut output = Vec::new();
-            let result = read_output(pipe, &cancelled, &mut output);
-            (output, result)
-        });
-        Self {
-            stop,
-            reader: Some(reader),
+        for capture in [&self.stdout, &self.stderr].into_iter().flatten() {
+            capture.cancel();
         }
     }
-
-    fn is_finished(&self) -> bool {
-        self.reader.as_ref().unwrap().is_finished()
-    }
-
-    fn finish(capture: Option<Self>) -> (Vec<u8>, io::Result<()>) {
-        capture.map_or((Vec::new(), Ok(())), |mut capture| {
-            capture.join().unwrap().unwrap_or_else(|_| {
-                (
-                    Vec::new(),
-                    Err(io::Error::other("child output reader panicked")),
-                )
-            })
-        })
-    }
-
-    fn join(&mut self) -> Option<thread::Result<(Vec<u8>, io::Result<()>)>> {
-        let reader = self.reader.take()?;
-        self.stop.store(true, Ordering::Relaxed);
-        Some(reader.join())
-    }
-}
-
-impl Drop for Capture {
-    fn drop(&mut self) {
-        let _ = self.join();
-    }
-}
-
-fn read_output(mut pipe: impl ReadPipe, stop: &AtomicBool, output: &mut Vec<u8>) -> io::Result<()> {
-    pipe.prepare()?;
-    let mut buffer = [0; 8192];
-    while !stop.load(Ordering::Relaxed) {
-        match pipe.read_available(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => output.extend_from_slice(&buffer[..count]),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => poll_pause(POLL_INTERVAL),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
 }
 
 #[expect(
     clippy::disallowed_methods,
-    reason = "以固定间隔检查子进程退出和输出管道，在期限内保留取消机会"
+    reason = "按既有固定间隔检查子进程退出和非阻塞输出，保留期限与取消检查"
 )]
 fn poll_pause(interval: Duration) {
     thread::sleep(interval);
 }
 
-#[cfg(unix)]
-trait ReadPipe: Read + std::os::fd::AsFd {
-    fn prepare(&self) -> io::Result<()> {
-        use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
-        fcntl_setfl(self, fcntl_getfl(self)? | OFlags::NONBLOCK)?;
-        Ok(())
-    }
-
-    fn read_available(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.read(buffer)
-    }
-}
-
-#[cfg(windows)]
-trait ReadPipe: Read + std::os::windows::io::AsRawHandle {
-    fn prepare(&self) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn read_available(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        use std::ptr::null_mut;
-        use windows_sys::Win32::{Foundation::ERROR_BROKEN_PIPE, System::Pipes::PeekNamedPipe};
-
-        let mut available = 0;
-        // SAFETY: This reader owns the pipe handle and `available` is a writable DWORD.
-        let ok = unsafe {
-            PeekNamedPipe(
-                self.as_raw_handle(),
-                null_mut(),
-                0,
-                null_mut(),
-                &mut available,
-                null_mut(),
-            )
-        };
-        if ok == 0 {
-            let error = io::Error::last_os_error();
-            return if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) {
-                Ok(0)
-            } else {
-                Err(error)
-            };
-        }
-        if available == 0 {
-            return Err(io::ErrorKind::WouldBlock.into());
-        }
-        let count = buffer.len().min(available as usize);
-        self.read(&mut buffer[..count])
-    }
-}
-
-impl ReadPipe for std::process::ChildStdout {}
-impl ReadPipe for std::process::ChildStderr {}
-
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests;

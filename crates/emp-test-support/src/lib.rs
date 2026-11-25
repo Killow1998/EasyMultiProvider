@@ -15,7 +15,7 @@ mod process;
 #[cfg(feature = "websocket")]
 pub mod websocket;
 pub use observation::{Observation, ObservationResult, Probe};
-pub use process::OwnedChild;
+pub use process::{ChildError, OwnedChild};
 
 pub fn accept_blocking(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
     let (stream, peer) = listener.accept()?;

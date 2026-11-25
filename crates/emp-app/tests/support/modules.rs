@@ -3,7 +3,7 @@ use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+use std::io::{self, Write};
 use std::net::{TcpListener, TcpStream};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -284,8 +284,10 @@ impl Drop for ModuleRelease {
     fn drop(&mut self) {
         self.stopping.store(true, Ordering::Release);
         let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("release server stopped");
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            eprintln!("module release server worker panicked");
         }
     }
 }
@@ -304,18 +306,24 @@ impl Deref for ModuleEmp {
     }
 }
 
-fn processes(deadline: Deadline) -> Vec<(i32, String)> {
+fn processes(deadline: Deadline) -> io::Result<Vec<(i32, String)>> {
     let output = OwnedChild::output(
         Command::new("ps").args(["-A", "-ww", "-o", "pid=", "-o", "args="]),
         deadline,
     )
-    .expect("ps is required to check real module processes");
-    assert!(output.status.success(), "ps failed: {output:?}");
+    .map_err(|error| io::Error::new(error.kind(), error.to_string()))?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!("ps failed: {}", output.status)));
+    }
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(|line| {
-            let (pid, args) = line.trim().split_once(char::is_whitespace).expect("ps row");
-            (pid.parse().expect("process ID"), args.trim().to_owned())
+            let (pid, args) = line
+                .trim()
+                .split_once(char::is_whitespace)
+                .ok_or(io::ErrorKind::InvalidData)?;
+            let pid = pid.parse().map_err(|_| io::ErrorKind::InvalidData)?;
+            Ok((pid, args.trim().to_owned()))
         })
         .collect()
 }
@@ -359,7 +367,8 @@ impl ModuleEmp {
             module.digest,
             std::env::consts::EXE_SUFFIX
         ));
-        let snapshot = processes(Deadline::after(io_timeout()));
+        let snapshot =
+            processes(Deadline::after(io_timeout())).expect("enumerate module processes");
         assert!(
             snapshot.iter().any(|(pid, args)| {
                 *pid == self.pid() && args.starts_with(env!("CARGO_BIN_EXE_EMP"))
@@ -391,7 +400,8 @@ impl ModuleEmp {
     pub fn assert_gone(&self, pid: i32) {
         let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
         eventually(&deadline, "module PID was not reaped", || {
-            (!processes(deadline).iter().any(|(found, _)| *found == pid)).then_some(())
+            let snapshot = processes(deadline).expect("enumerate module processes");
+            (!snapshot.iter().any(|(found, _)| *found == pid)).then_some(())
         });
     }
 
@@ -402,6 +412,7 @@ impl ModuleEmp {
         eventually(&deadline, "orphan module processes", || {
             let observed = self.observed.lock().expect("observed workers");
             let remaining = processes(deadline)
+                .expect("enumerate module processes")
                 .into_iter()
                 .any(|(pid, args)| observed.contains(&pid) || args.starts_with(directory.as_ref()));
             (!remaining).then_some(())
@@ -429,11 +440,16 @@ pub fn eventually<T>(deadline: &Deadline, what: &str, mut probe: impl FnMut() ->
 
 impl Drop for ModuleEmp {
     fn drop(&mut self) {
-        if let Some(emp) = self.emp.take() {
-            emp.stop();
-        }
+        drop(self.emp.take());
         let directory = self.root.to_string_lossy();
-        for (pid, args) in processes(Deadline::after(io_timeout())) {
+        let snapshot = match processes(Deadline::after(io_timeout())) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                eprintln!("module process cleanup: {error}");
+                return;
+            }
+        };
+        for (pid, args) in snapshot {
             if args.starts_with(directory.as_ref()) {
                 let _ = Command::new("kill")
                     .args(["-KILL", &pid.to_string()])

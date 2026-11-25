@@ -7,7 +7,6 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -101,38 +100,25 @@ fn listener_survives_real_descriptor_exhaustion() {
         child_fixture();
         return;
     }
-    let mut process = Command::new(std::env::current_exe().unwrap())
-        .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
-        .env(CHILD_FLAG, "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .unwrap();
-    let input = process.stdin.take();
-    let output = process.stdout.take();
-    let mut child = OwnedChild::new(process);
-    let mut input = input.unwrap();
-    let output = output.unwrap();
-    let (send, receive) = mpsc::channel();
-    let markers = thread::spawn(move || {
-        for line in BufReader::new(output).lines() {
-            let Ok(line) = line else {
-                break;
-            };
-            if send.send(line).is_err() {
-                break;
-            }
-        }
-    });
+    let mut child = OwnedChild::spawn(
+        Command::new(std::env::current_exe().unwrap())
+            .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
+            .env(CHILD_FLAG, "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit()),
+    )
+    .unwrap();
+    let mut input = child.take_stdin().unwrap();
     let next_marker = || {
         let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
         loop {
-            let line = receive
-                .recv_timeout(deadline.remaining())
-                .expect("child marker before timeout");
+            let line = child
+                .stdout_line(deadline)
+                .expect("child marker before timeout")
+                .expect("child output ended before marker");
             if let Some((_, marker)) = line.split_once("EMP_FD_") {
-                break deadline.accept(marker.to_owned(), "child marker").unwrap();
+                break marker.to_owned();
             }
         }
     };
@@ -168,9 +154,9 @@ fn listener_survives_real_descriptor_exhaustion() {
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     drop(health);
     command(&mut input, "stop");
-    let result = child.wait_until(Deadline::after(test_timeout(Duration::from_secs(10))));
-    markers.join().unwrap();
-    let output = result.unwrap_or_else(|error| panic!("descriptor exhaustion child: {error}"));
+    let output = child
+        .wait_until(Deadline::after(test_timeout(Duration::from_secs(10))))
+        .unwrap_or_else(|error| panic!("descriptor exhaustion child: {error}"));
     assert!(
         output.status.success(),
         "child regression failed: {}",

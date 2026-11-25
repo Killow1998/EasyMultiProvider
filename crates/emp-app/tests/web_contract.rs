@@ -1,5 +1,5 @@
 use emp_test_support::{Deadline, OwnedChild, test_timeout};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -97,51 +97,52 @@ fn spawn_emp(config: &std::path::Path) -> (u16, OwnedChild, String) {
     let root = config.parent().expect("fixture root");
     std::fs::create_dir_all(root.join("home")).expect("private HOME");
     std::fs::create_dir_all(root.join("codex")).expect("private CODEX_HOME");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_EMP"))
-        .env("HOME", root.join("home"))
-        .env("USERPROFILE", root.join("home"))
-        .env("CODEX_HOME", root.join("codex"))
-        .env("XDG_CONFIG_HOME", root.join("xdg"))
-        .env("XDG_DATA_HOME", root.join("data"))
-        .env("XDG_CACHE_HOME", root.join("cache"))
-        .env("APPDATA", root.join("appdata"))
-        .env("LOCALAPPDATA", root.join("local-appdata"))
-        .env_remove("EASY_MULTI_PROVIDER_CONFIG")
-        .env_remove("EASY_MULTI_PROVIDER_MASTER_KEY_FILE")
-        .env_remove("EASY_MULTI_PROVIDER_MASTER_KEY")
-        .env_remove("EMP_OFFICIAL_MODELS_PATH")
-        .env_remove("EMP_UPDATE_READY")
-        .env_remove("EMP_UPDATE_RESULT")
-        .env_remove("NVM_DIR")
-        .env("HTTP_PROXY", "http://127.0.0.1:1")
-        .env("HTTPS_PROXY", "http://127.0.0.1:1")
-        .env("ALL_PROXY", "http://127.0.0.1:1")
-        .env("NO_PROXY", "127.0.0.1,localhost")
-        .env("http_proxy", "http://127.0.0.1:1")
-        .env("https_proxy", "http://127.0.0.1:1")
-        .env("all_proxy", "http://127.0.0.1:1")
-        .env("no_proxy", "127.0.0.1,localhost")
-        .args([
-            "serve",
-            "--config",
-            &config.to_string_lossy(),
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "0",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("start EMP");
-    let stdout = child.stdout.take();
-    let child = OwnedChild::new(child);
-    let stdout = stdout.expect("EMP stdout");
-    let mut stdout = BufReader::new(stdout);
-    let mut ready_line = String::new();
-    stdout
-        .read_line(&mut ready_line)
-        .expect("read readiness output");
+    let child = OwnedChild::spawn(
+        Command::new(env!("CARGO_BIN_EXE_EMP"))
+            .env("HOME", root.join("home"))
+            .env("USERPROFILE", root.join("home"))
+            .env("CODEX_HOME", root.join("codex"))
+            .env("XDG_CONFIG_HOME", root.join("xdg"))
+            .env("XDG_DATA_HOME", root.join("data"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("APPDATA", root.join("appdata"))
+            .env("LOCALAPPDATA", root.join("local-appdata"))
+            .env_remove("EASY_MULTI_PROVIDER_CONFIG")
+            .env_remove("EASY_MULTI_PROVIDER_MASTER_KEY_FILE")
+            .env_remove("EASY_MULTI_PROVIDER_MASTER_KEY")
+            .env_remove("EMP_OFFICIAL_MODELS_PATH")
+            .env_remove("EMP_UPDATE_READY")
+            .env_remove("EMP_UPDATE_RESULT")
+            .env_remove("NVM_DIR")
+            .env("HTTP_PROXY", "http://127.0.0.1:1")
+            .env("HTTPS_PROXY", "http://127.0.0.1:1")
+            .env("ALL_PROXY", "http://127.0.0.1:1")
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .env("http_proxy", "http://127.0.0.1:1")
+            .env("https_proxy", "http://127.0.0.1:1")
+            .env("all_proxy", "http://127.0.0.1:1")
+            .env("no_proxy", "127.0.0.1,localhost")
+            .args([
+                "serve",
+                "--config",
+                &config.to_string_lossy(),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "0",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit()),
+    )
+    .expect("start EMP");
+    let deadline = Deadline::after(test_timeout(std::time::Duration::from_secs(5)));
+    let read_line = || {
+        child
+            .stdout_line(deadline)
+            .expect("read startup output")
+            .expect("EMP closed startup output")
+    };
+    let ready_line = read_line();
     assert!(
         ready_line.starts_with("EMP listening on http://127.0.0.1:"),
         "unexpected readiness line: {ready_line:?}"
@@ -151,18 +152,12 @@ fn spawn_emp(config: &std::path::Path) -> (u16, OwnedChild, String) {
         .next()
         .and_then(|raw| raw.trim_end().parse::<u16>().ok())
         .expect("readiness line contains a port");
-    let mut config_line = String::new();
-    stdout
-        .read_line(&mut config_line)
-        .expect("read configuration path");
+    let config_line = read_line();
     assert_eq!(
         config_line.trim_end(),
         format!("Configuration file: {}", config.display())
     );
-    let mut proxy_line = String::new();
-    stdout
-        .read_line(&mut proxy_line)
-        .expect("read network proxy");
+    let proxy_line = read_line();
     assert!(
         matches!(
             proxy_line.trim_end(),
@@ -170,10 +165,7 @@ fn spawn_emp(config: &std::path::Path) -> (u16, OwnedChild, String) {
         ),
         "unexpected network line: {proxy_line:?}"
     );
-    let mut bootstrap_line = String::new();
-    stdout
-        .read_line(&mut bootstrap_line)
-        .expect("read bootstrap URL");
+    let bootstrap_line = read_line();
     assert!(bootstrap_line.starts_with("Open in browser: "));
     (port, child, bootstrap_line)
 }

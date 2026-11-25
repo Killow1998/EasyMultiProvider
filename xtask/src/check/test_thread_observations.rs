@@ -8,7 +8,7 @@ use syn::{
     visit::{self, Visit},
 };
 
-const ALLOWED: &[(&str, usize)] = &[("emp-app", 32), ("emp-transport", 6)];
+const ALLOWED: &[(&str, usize)] = &[("emp-app", 30), ("emp-transport", 6)];
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
     let mut counts: BTreeMap<&str, Vec<String>> = ALLOWED

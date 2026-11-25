@@ -6,15 +6,12 @@
 mod support;
 use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use serde_json::json;
-use std::io::{BufRead, BufReader};
 use std::process::Stdio;
-use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 use support::{Workspace, http};
 
 struct Recovery {
     child: OwnedChild,
-    lines: Receiver<String>,
     port: u16,
     token: String,
 }
@@ -23,23 +20,10 @@ impl Recovery {
     fn start(workspace: &Workspace) -> Self {
         let mut command = workspace.command();
         command.args(workspace.serve_arguments());
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let stdout = child.stdout.take();
-        let child = OwnedChild::new(child);
-        let stdout = stdout.unwrap();
-        let (tx, lines) = channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                let _ = tx.send(line);
-            }
-        });
+        let child =
+            OwnedChild::spawn(command.stdout(Stdio::piped()).stderr(Stdio::null())).unwrap();
         let mut recovery = Self {
             child,
-            lines,
             port: 0,
             token: String::new(),
         };
@@ -66,10 +50,10 @@ impl Recovery {
         let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
         loop {
             let line = self
-                .lines
-                .recv_timeout(deadline.remaining())
-                .expect("process did not reach expected state");
-            let line = deadline.accept(line, prefix).unwrap();
+                .child
+                .stdout_line(deadline)
+                .expect("process did not reach expected state")
+                .expect("process closed output before the expected state");
             if let Some(value) = line.strip_prefix(prefix) {
                 return value.into();
             }

@@ -352,9 +352,17 @@ impl Emp {
 
     #[cfg(unix)]
     pub fn signal(&self, signal: i32) {
+        self.send_signal(signal).expect("signal EMP");
+    }
+
+    #[cfg(unix)]
+    fn send_signal(&self, signal: i32) -> std::io::Result<()> {
         // SAFETY: kill(2) on our own live child process id.
-        let result = unsafe { libc::kill(self.pid(), signal) };
-        assert_eq!(result, 0, "signal EMP");
+        if unsafe { libc::kill(self.pid(), signal) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
     }
 
     /// Wait for the process to exit and return its exit code.
@@ -388,7 +396,11 @@ impl Emp {
             return;
         }
         #[cfg(unix)]
-        self.signal(libc::SIGTERM);
+        if let Err(error) = self.send_signal(libc::SIGTERM)
+            && error.raw_os_error() != Some(libc::ESRCH)
+        {
+            eprintln!("EMP shutdown signal: {error}");
+        }
         #[cfg(windows)]
         let _ = self.post("/api/quit", &json!({}));
         for _ in 0..500 {

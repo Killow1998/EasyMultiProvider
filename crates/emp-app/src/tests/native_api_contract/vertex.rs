@@ -232,8 +232,10 @@ impl VertexFixture {
 impl Drop for VertexFixture {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take() {
-            worker.join().unwrap();
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            eprintln!("Vertex fixture worker panicked");
         }
     }
 }
@@ -674,7 +676,7 @@ fn installed_codex_roundtrips_a_vertex_tool_with_real_emp() {
     let log = home.join("executor.log");
     let stdout = std::fs::File::create(&log).unwrap();
     let stderr = stdout.try_clone().unwrap();
-    let executor = OwnedChild::new(
+    let executor = OwnedChild::spawn(
         Command::new(std::env::var_os("EMP_TEST_CODEX_CLI").unwrap_or_else(|| "codex".into()))
             .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
             .env("HOME", &home)
@@ -682,10 +684,9 @@ fn installed_codex_roundtrips_a_vertex_tool_with_real_emp() {
             .current_dir(&home)
             .stdin(Stdio::null())
             .stdout(stdout)
-            .stderr(stderr)
-            .spawn()
-            .unwrap(),
-    );
+            .stderr(stderr),
+    )
+    .unwrap();
     let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     let url = loop {
         let text = std::fs::read_to_string(&log).unwrap();

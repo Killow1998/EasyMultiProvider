@@ -1,14 +1,12 @@
 //! Real Codex app-server steers against isolated EMP and synthetic upstreams.
 use super::support::*;
 use super::*;
-use emp_test_support::{Deadline, test_timeout};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
+use std::process::{ChildStdin, Command, Stdio};
 
 pub(super) struct Codex {
-    child: Child,
+    child: OwnedChild,
     input: ChildStdin,
-    output: mpsc::Receiver<Value>,
-    reader: Option<JoinHandle<()>>,
 }
 
 impl Codex {
@@ -19,53 +17,31 @@ impl Codex {
     pub(super) fn start_with_no_proxy(home: &Path, no_proxy: &str) -> Self {
         let mut command =
             Command::new(std::env::var_os("EMP_TEST_CODEX_CLI").unwrap_or_else(|| "codex".into()));
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        let mut child = command
-            .args(["app-server", "--listen", "stdio://"])
-            .env("CODEX_HOME", home)
-            .env("HOME", home)
-            .env("XDG_CONFIG_HOME", home.join("xdg"))
-            .env("EMP_TEST_KEY", "fixture-only")
-            .env("HTTP_PROXY", "http://127.0.0.1:1")
-            .env("HTTPS_PROXY", "http://127.0.0.1:1")
-            .env("ALL_PROXY", "http://127.0.0.1:1")
-            .env("http_proxy", "http://127.0.0.1:1")
-            .env("https_proxy", "http://127.0.0.1:1")
-            .env("all_proxy", "http://127.0.0.1:1")
-            .env("NO_PROXY", no_proxy)
-            .env("no_proxy", no_proxy)
-            .env_remove("OPENAI_API_KEY")
-            .env_remove("CODEX_API_KEY")
-            .current_dir(home)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(std::fs::File::create(home.join("stderr.log")).unwrap())
-            .spawn()
-            .expect("installed Codex app-server");
-        let input = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let (sender, output) = mpsc::channel();
-        let reader = thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                let Ok(value) = serde_json::from_str(&line) else {
-                    continue;
-                };
-                if sender.send(value).is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            child,
-            input,
-            output,
-            reader: Some(reader),
-        }
+        let mut child = OwnedChild::spawn(
+            command
+                .args(["app-server", "--listen", "stdio://"])
+                .env("CODEX_HOME", home)
+                .env("HOME", home)
+                .env("XDG_CONFIG_HOME", home.join("xdg"))
+                .env("EMP_TEST_KEY", "fixture-only")
+                .env("HTTP_PROXY", "http://127.0.0.1:1")
+                .env("HTTPS_PROXY", "http://127.0.0.1:1")
+                .env("ALL_PROXY", "http://127.0.0.1:1")
+                .env("http_proxy", "http://127.0.0.1:1")
+                .env("https_proxy", "http://127.0.0.1:1")
+                .env("all_proxy", "http://127.0.0.1:1")
+                .env("NO_PROXY", no_proxy)
+                .env("no_proxy", no_proxy)
+                .env_remove("OPENAI_API_KEY")
+                .env_remove("CODEX_API_KEY")
+                .current_dir(home)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(std::fs::File::create(home.join("stderr.log")).unwrap()),
+        )
+        .expect("installed Codex app-server");
+        let input = child.take_stdin().unwrap();
+        Self { child, input }
     }
 
     pub(super) fn send(&mut self, value: Value) {
@@ -82,10 +58,14 @@ impl Codex {
 
     fn wait_before(&self, deadline: &Deadline, predicate: impl Fn(&Value) -> bool) -> Value {
         loop {
-            let value = self
-                .output
-                .recv_timeout(deadline.remaining())
-                .expect("Codex event deadline");
+            let line = self
+                .child
+                .stdout_line(*deadline)
+                .expect("Codex event deadline")
+                .expect("Codex closed app-server output");
+            let Ok(value) = serde_json::from_str(&line) else {
+                continue;
+            };
             let value = deadline.accept(value, "Codex event").unwrap();
             if predicate(&value) {
                 return value;
@@ -113,21 +93,6 @@ impl Codex {
         let value = self.wait_before(deadline, |value| value["id"] == id);
         assert!(value.get("error").is_none(), "Codex RPC error: {value}");
         value["result"].clone()
-    }
-}
-
-impl Drop for Codex {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        // SAFETY: the child was spawned in its own process group and kill takes no pointers.
-        unsafe {
-            libc::kill(-(self.child.id() as libc::pid_t), libc::SIGTERM);
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
-        }
     }
 }
 
