@@ -420,7 +420,7 @@ impl RequestObservation {
         self.fields["terminal_event_observed"] = json!(true);
         self.delivery.diagnostics.journal.event(
             "info",
-            "route_observation",
+            "request_terminal_observed",
             &json!({
                 "request_id": self.fields["request_id"],
                 "route": self.fields["route"],

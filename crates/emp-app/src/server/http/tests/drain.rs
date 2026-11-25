@@ -1100,16 +1100,25 @@ fn drain_native_accounts_for_a_read_terminal_before_previous_frame_flush() {
 
     let (upstream, send_terminal) = terminal_after_delta();
     fixture(&upstream.base_url()).run_wire(async move |fixture, address| {
+        let configuration = &fixture.server.state.backend.configuration;
         let probe = Probe::arm(
             fixture,
             "/v1/responses",
             Some(WriteTrigger::Frame(Box::new(|frame| frame == NATIVE_DELTA))),
         );
+        let body = json!({
+            "model": "native/alias", "stream": true, "input": "fixture",
+            "tools": [{"type": "namespace", "name": "collaboration", "tools": [{
+                "type": "function", "name": "spawn_agent", "parameters": {
+                    "properties": {"message": {"type": "string", "encrypted": true}}
+                }
+            }]}]
+        });
         let wire = json_request(
             fixture.port(),
             "/v1/responses",
             &[&fixture.session(), "Authorization: Bearer caller"],
-            br#"{"model":"native/alias","stream":true,"input":"fixture"}"#,
+            &serde_json::to_vec(&body).unwrap(),
         );
         let client = RawClient::request(address, &wire).await;
         let (reached, hold_write) = probe.write.unwrap();
@@ -1120,9 +1129,31 @@ fn drain_native_accounts_for_a_read_terminal_before_previous_frame_flush() {
             Some(NATIVE_DELTA)
         );
         let id = receive(probe.id, "request ID").await;
-        send_terminal.send(()).unwrap();
-        wait_for_diagnostic(fixture, &id, "route_observation", |fields| {
-            fields["terminal_event_observed"] == true
+        let (_, _, mut sent) = upstream.observed();
+        assert_eq!(sent["tools"][0]["name"], "emp_collaboration");
+        let expected = {
+            let mut config = configuration.test_config().lock().unwrap();
+            let provider = config["providers"][0].as_object().unwrap();
+            let model = config["models"][1].as_object().unwrap();
+            let sent_estimate = emp_context::context::assess(provider, model, "responses", &sent)
+                .input_estimate
+                .unwrap();
+            sent["tools"] = body["tools"].clone();
+            assert_ne!(
+                emp_context::context::assess(provider, model, "responses", &sent).input_estimate,
+                Some(sent_estimate)
+            );
+            send_terminal.send(()).unwrap();
+            wait_for_diagnostic(fixture, &id, "route_observation", |fields| {
+                fields["terminal_event_observed"] == true
+            });
+            config["external_collaboration"] = json!("off");
+            sent_estimate
+        };
+        let deadline = Deadline::after(wire_timeout());
+        crate::tests::wait_for(&deadline, || {
+            configuration.read().unwrap()["models"][1]["context_calibrations"][0]
+                ["largest_success_estimate"] == expected
         });
         client.io.set_zero_linger().unwrap();
         drop(client);
@@ -1154,17 +1185,23 @@ fn drain_native_accounts_for_a_read_terminal_before_previous_frame_flush() {
 #[cfg(unix)]
 #[test]
 fn drain_external_releases_business_before_saving_the_learned_protocol() {
-    drain_external_protocol_learning(false);
+    drain_external_protocol_learning(false, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_external_discards_learning_when_the_provider_endpoint_changes() {
+    drain_external_protocol_learning(false, Some("http://127.0.0.1:1/replacement"));
 }
 
 #[cfg(unix)]
 #[test]
 fn drain_external_saves_the_learned_protocol_after_write_failure() {
-    drain_external_protocol_learning(true);
+    drain_external_protocol_learning(true, None);
 }
 
 #[cfg(unix)]
-fn drain_external_protocol_learning(fail_write: bool) {
+fn drain_external_protocol_learning(fail_write: bool, replacement_endpoint: Option<&'static str>) {
     use super::inference::{
         FIRST, LAST, STREAM_REQUEST, SseClient, fixture_directory, upstream_reply,
     };
@@ -1226,19 +1263,38 @@ fn drain_external_protocol_learning(fail_write: bool) {
                 fields["delivery"] == "write_failed" && fields["terminal_written"] == false
             });
         } else {
+            let (handing_off, at_handoff) = oneshot::channel();
+            let (handoff, resume_handoff) = oneshot::channel::<()>();
+            *control.test_hooks.on_stream_handoff.lock().unwrap() = Some(Box::new(move || {
+                let _ = handing_off.send(());
+                let _ = resume_handoff.blocking_recv();
+            }));
+            let (closed, mut at_close) = oneshot::channel();
+            let config_path = path.clone();
+            *control.test_hooks.on_stream_close.lock().unwrap() = Some(Box::new(move || {
+                let saved: Value =
+                    serde_json::from_slice(&std::fs::read(config_path).unwrap()).unwrap();
+                let _ = closed.send(saved["providers"][1]["resolved_protocol"].clone());
+            }));
+            control.stop(ShutdownReason::Requested);
+            send_terminal.send(()).unwrap();
+            receive(at_handoff, "terminal queued and calibration complete").await;
             let (locked, at_lock) = oneshot::channel();
             let (unlock, held) = oneshot::channel::<()>();
             let saver_gate = tokio::task::spawn_blocking({
                 let state = state.clone();
                 move || {
-                    let _lock = state.backend.configuration.test_config().lock().unwrap();
+                    let mut config = state.backend.configuration.test_config().lock().unwrap();
                     let _ = locked.send(());
-                    let _ = held.blocking_recv();
+                    if held.blocking_recv().is_ok()
+                        && let Some(endpoint) = replacement_endpoint
+                    {
+                        config["providers"][1]["base_url"] = json!(endpoint);
+                    }
                 }
             });
             receive(at_lock, "configuration save gate held").await;
-            control.stop(ShutdownReason::Requested);
-            send_terminal.send(()).unwrap();
+            handoff.send(()).unwrap();
             let mut client = SseClient::from_raw(client);
             timeout(wire_timeout().duration(), async {
                 while client.next().await.expect("terminal SSE event")["type"]
@@ -1253,8 +1309,16 @@ fn drain_external_protocol_learning(fail_write: bool) {
             )
             .await
             .expect("business handed off while configuration is locked");
+            assert_eq!(
+                at_close.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            );
             unlock.send(()).unwrap();
             saver_gate.await.unwrap();
+            let at_close = receive(at_close, "stream output closed").await;
+            if replacement_endpoint.is_none() {
+                assert_eq!(at_close, "chat_completions", "saved before output closed");
+            }
             assert!(
                 timeout(wire_timeout().duration(), client.next())
                     .await
@@ -1276,8 +1340,33 @@ fn drain_external_protocol_learning(fail_write: bool) {
             .iter()
             .find(|model| model["id"] == "demo/model")
             .unwrap();
-        assert_eq!(provider["resolved_protocol"], "chat_completions");
-        assert_eq!(model["resolved_protocol"], "chat_completions");
+        if let Some(endpoint) = replacement_endpoint {
+            let config = state.backend.configuration.read().unwrap();
+            assert_eq!(config["providers"][1]["base_url"], endpoint);
+            assert_eq!(config["providers"][1]["resolved_protocol"], "");
+            assert_eq!(config["models"][0]["resolved_protocol"], "");
+            assert_eq!(provider["resolved_protocol"], "");
+            assert_eq!(model["resolved_protocol"], "");
+            drop(config);
+            let journal = fixture.flushed_journal().await;
+            assert!(journal.iter().any(|row| {
+                row["event"] == "protocol_observation_discarded"
+                    && row["fields"]["provider_id"] == "demo"
+                    && row["fields"]["reason"] == "route_identity_changed"
+            }));
+        } else {
+            assert_eq!(provider["resolved_protocol"], "chat_completions");
+            assert_eq!(model["resolved_protocol"], "chat_completions");
+            let observation = &provider["protocol_observation"];
+            assert_eq!(observation, &model["protocol_observation"]);
+            assert_eq!(observation["upstream_model"], "upstream-model");
+            assert_eq!(observation["deployment_identity"], "default");
+            assert_eq!(
+                observation["endpoint_fingerprint"],
+                emp_domain::endpoint_fingerprint(provider["base_url"].as_str())
+            );
+            assert!(observation["observed_at"].is_string());
+        }
     });
     assert_eq!(upstream.observed().0, "/v1/chat/completions");
 }
@@ -1288,9 +1377,34 @@ fn drain_aero_observes_the_parent_terminal_before_previous_frame_flush() {
     use super::inference::fixture_directory;
 
     let (upstream, send_terminal) = terminal_after_delta();
-    let directory = fixture_directory("http://127.0.0.1:1/v1");
+    let native = crate::tests::OneShotUpstream::start_repeated_wire(
+        200,
+        "text/event-stream",
+        None,
+        1,
+        vec![ACCOUNTED_TERMINAL.to_vec()],
+    );
+    let directory = fixture_directory(&native.base_url());
     install_aero_fixture(directory.path(), &upstream.base_url());
     Fixture::with_directory(directory).run_wire(async move |fixture, address| {
+        let native_request = json_request(
+            fixture.port(),
+            "/v1/responses",
+            &[&fixture.session(), "Authorization: Bearer caller"],
+            br#"{"model":"native/alias","stream":true,"input":"fixture"}"#,
+        );
+        assert_status(&exchange_wire(address, &native_request, false).await, 200);
+        let diagnostics = request(
+            fixture.port(),
+            "GET",
+            "/api/diagnostics",
+            &[&fixture.session()],
+            b"",
+        );
+        let snapshot = json_body(&exchange_wire(address, &diagnostics, false).await);
+        assert_eq!(snapshot["sample_count"], 1);
+        assert!(snapshot["records"][0]["observation_id"].is_string());
+        assert!(snapshot["records"][0]["observed_at"].is_string());
         let probe = Probe::arm(
             fixture,
             "/v1/responses",
@@ -1304,7 +1418,7 @@ fn drain_aero_observes_the_parent_terminal_before_previous_frame_flush() {
         );
         let id = receive(probe.id, "request ID").await;
         send_terminal.send(()).unwrap();
-        wait_for_diagnostic(fixture, &id, "route_observation", |fields| {
+        wait_for_diagnostic(fixture, &id, "request_terminal_observed", |fields| {
             fields["route"] == "aero" && fields["terminal_event_observed"] == true
         });
         client.io.set_zero_linger().unwrap();
@@ -1316,6 +1430,11 @@ fn drain_aero_observes_the_parent_terminal_before_previous_frame_flush() {
                 && fields["terminal_written"] == false
                 && fields["downstream_terminal"] == "unknown"
         });
+        for _ in 0..2 {
+            let replay = json_body(&exchange_wire(address, &diagnostics, false).await);
+            assert_eq!(replay["sample_count"], snapshot["sample_count"]);
+            assert_eq!(replay["records"], snapshot["records"]);
+        }
 
         let wire = request(
             fixture.port(),
@@ -1326,7 +1445,7 @@ fn drain_aero_observes_the_parent_terminal_before_previous_frame_flush() {
         );
         let reply = exchange_wire(address, &wire, false).await;
         assert_status(&reply, 200);
-        assert_eq!(json_body(&reply)["records"], json!([]));
+        assert_eq!(json_body(&reply)["records"].as_array().unwrap().len(), 1);
     });
 }
 

@@ -7,18 +7,26 @@ pub(crate) fn payload(state: &ServerState, route: &ResolvedRoute, body: &Value) 
     if crate::services::claude_cli::selected(route) {
         crate::services::claude_cli::context_estimation_payload(body).ok()
     } else if route.dialect == emp_domain::Dialect::CodexNative {
-        let body = body.as_object()?;
         let plaintext = {
             let config = state.backend.configuration.read().ok()?;
             crate::services::native::plaintext_collaboration(&config)
         };
-        emp_router::native_http::NativeRouter::new(&state.backend.transport.client)
-            .prepare_websocket(route, body, plaintext, std::collections::BTreeMap::new())
-            .ok()
-            .map(|plan| plan.payload)
+        native_payload(state, route, body, plaintext)
     } else {
         emp_router::project_external_payload(route, body).ok()
     }
+}
+
+pub(crate) fn native_payload(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    plaintext: bool,
+) -> Option<Value> {
+    emp_router::native_http::NativeRouter::new(&state.backend.transport.client)
+        .prepare_websocket(route, body.as_object()?, plaintext, Default::default())
+        .ok()
+        .map(|plan| plan.payload)
 }
 
 pub(crate) fn record(state: &ServerState, route: &ResolvedRoute, body: &Value, success: bool) {

@@ -294,13 +294,13 @@ impl<'a> BodyOutput<'a> {
             }
             self.hooks.stream_handoff(stream_handoff);
             if after_handoff.is_none() {
-                drop(send.take());
+                self.hooks.close_stream(send.take());
             }
         });
         if let Some(effect) = after_handoff {
             effect();
         }
-        drop(send);
+        self.hooks.close_stream(send);
         confirmation
     }
 }

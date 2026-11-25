@@ -42,6 +42,11 @@ mod implementation {
         pub(in crate::server) fn stream_handoff(&self, _: bool) {}
 
         #[inline]
+        pub(in crate::server) fn close_stream<T>(&self, stream: Option<T>) {
+            drop(stream);
+        }
+
+        #[inline]
         pub(in crate::server) fn before_accept(&self, _: ServerMode) -> io::Result<()> {
             Ok(())
         }
@@ -151,6 +156,7 @@ mod implementation {
         pub(in crate::server) request: Mutex<Option<RequestProbe>>,
         pub(in crate::server) health_handler: Mutex<Option<HandlerProbe>>,
         pub(in crate::server) on_stream_handoff: Mutex<Option<OutputProbe>>,
+        pub(in crate::server) on_stream_close: Mutex<Option<OutputProbe>>,
         pub(in crate::server) output_queued: Mutex<Option<OutputProbe>>,
         pub(in crate::server) response_receive: Mutex<Option<HandlerProbe>>,
         pub(in crate::server) callback_lock_contended: Mutex<Option<oneshot::Sender<bool>>>,
@@ -239,6 +245,16 @@ mod implementation {
         pub(in crate::server) fn stream_handoff(&self, handed_off: bool) {
             if handed_off {
                 let probe = self.on_stream_handoff.lock().unwrap().take();
+                if let Some(probe) = probe {
+                    probe();
+                }
+            }
+        }
+
+        pub(in crate::server) fn close_stream<T>(&self, stream: Option<T>) {
+            if let Some(stream) = stream {
+                drop(stream);
+                let probe = self.on_stream_close.lock().unwrap().take();
                 if let Some(probe) = probe {
                     probe();
                 }

@@ -4,6 +4,7 @@ use super::{
     TOP_LEVEL_PROVENANCE_FIELDS, Value, deployment_identity, endpoint_fingerprint, json_truthy,
     normalize_configuration_with_registry, normalize_input_modalities,
 };
+use emp_domain::{ResolvedRoute, RouteSource, resolved_upstream_model};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn utc_date_parts(seconds: u64) -> (i64, u32, u32) {
@@ -61,6 +62,7 @@ pub fn remember_resolved_protocol_at(
         requested_model,
         protocol,
         observed_at,
+        None,
         super::official_registry::snapshot,
     )
 }
@@ -71,6 +73,7 @@ fn remember_resolved_protocol_at_with_registry(
     requested_model: &str,
     protocol: &str,
     observed_at: &str,
+    route: Option<&ResolvedRoute>,
     registry: super::RegistrySource,
 ) -> ConfigResult<Option<Value>> {
     if !matches!(
@@ -111,19 +114,35 @@ fn remember_resolved_protocol_at_with_registry(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let upstream_model = model
-        .get("upstream_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(requested_model);
+    let endpoint = endpoint_fingerprint(provider.get("base_url").and_then(Value::as_str));
+    let deployment = deployment_identity(&provider, &model);
+    let (endpoint, deployment, upstream_model) = if let Some(route) = route {
+        if (route.source == RouteSource::ExplicitModel && model_index.is_none())
+            || route.endpoint_fingerprint != endpoint
+            || route.deployment_identity != deployment
+            || route.upstream_model != resolved_upstream_model(&provider, &model, requested_model)
+        {
+            return Ok(None);
+        }
+        (
+            route.endpoint_fingerprint.as_str(),
+            route.deployment_identity.as_str(),
+            route.upstream_model.as_str(),
+        )
+    } else {
+        let upstream = model
+            .get("upstream_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(requested_model);
+        (endpoint.as_str(), deployment.as_str(), upstream)
+    };
     let observation = serde_json::json!({
         "source": "observed",
         "confidence": 1.0,
         "observed_at": observed_at,
-        "endpoint_fingerprint": endpoint_fingerprint(
-            provider.get("base_url").and_then(Value::as_str)
-        ),
-        "deployment_identity": deployment_identity(&provider, &model),
+        "endpoint_fingerprint": endpoint,
+        "deployment_identity": deployment,
         "upstream_model": upstream_model,
     });
 
@@ -182,6 +201,24 @@ pub fn remember_resolved_protocol_with_registry(
         requested_model,
         protocol,
         &observed_at_now(),
+        None,
+        registry,
+    )
+}
+
+pub fn remember_route_protocol(
+    config: &Value,
+    route: &ResolvedRoute,
+    observed_at: &str,
+    registry: super::RegistrySource,
+) -> ConfigResult<Option<Value>> {
+    remember_resolved_protocol_at_with_registry(
+        config,
+        &route.provider_id,
+        &route.requested_model,
+        route.protocol.as_config_str(),
+        observed_at,
+        Some(route),
         registry,
     )
 }

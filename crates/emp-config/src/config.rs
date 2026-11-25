@@ -246,7 +246,7 @@ mod merge;
 pub use merge::{
     merge_web_update, merge_web_update_with_registry, merge_web_update_with_time, observed_at_now,
     remember_resolved_protocol, remember_resolved_protocol_at,
-    remember_resolved_protocol_with_registry,
+    remember_resolved_protocol_with_registry, remember_route_protocol,
 };
 
 /// Save a normalized configuration and its derived secret files atomically.

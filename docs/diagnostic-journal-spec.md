@@ -99,6 +99,7 @@ additional database, background checker or routing feedback loop for request obs
 | `request_route_selected` | The selected provider/model, protocol, dialect and endpoint fingerprint, plus the client's requested effort. This is selection evidence, not proof of provider execution. |
 | `model_attempt_started` | Entry into an existing router dispatch, CLI execution, or internal summary dispatch. Existing retries produce more attempts; the observer never requests them. A CLI entry is not a count of the CLI's upstream HTTP calls. |
 | Existing retry and `route_observation` events | The existing execution decision and model/accounting result. Internal summaries can share a request ID; do not equate attempt counts with billable model calls. |
+| `request_terminal_observed` | Aero parent requests only: the upstream terminal event was read, recorded when read. It is request evidence, not a route sample, so route replay ignores it. |
 | `request_finished` | The final local receipt, including last phase, phase durations, transport, selected route, known buffered response status, and downstream write evidence. |
 
 The HTTP entry ID is reused by the routed operation and its outbound request

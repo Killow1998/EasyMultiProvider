@@ -364,9 +364,9 @@ pub(crate) fn execute<'a>(
     if streaming {
         let downstream = ObservedSse::new(downstream, observation, &incoming);
         let result = if native {
-            serve_native_stream(downstream, state, route, &config, body, &incoming, &ids)
+            serve_native_stream(downstream, state, &route, &config, &body, &incoming, &ids)
         } else {
-            serve_external_stream(downstream, state, &route, body, &incoming, &ids)
+            serve_external_stream(downstream, state, &route, &body, &incoming, &ids)
         };
         return result.err().map_or(InferenceOutcome::Streamed, Into::into);
     }

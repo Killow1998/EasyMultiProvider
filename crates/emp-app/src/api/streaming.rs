@@ -4,6 +4,7 @@ use crate::api::failure_response::stream_failure_value_for_route;
 use crate::app::ServerState;
 use crate::http::response::is_security_header;
 use crate::server::http::{error::HttpReply, stream::BodyOutput};
+use crate::services::context;
 use crate::services::disconnect::DisconnectMonitor;
 use crate::services::disconnect::DisconnectRace;
 use crate::services::events::sse_frame;
@@ -11,10 +12,11 @@ use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
 use crate::services::native;
 use crate::services::observation::request::RequestObservation;
-use crate::services::providers::persist_protocol_observation;
+use crate::services::providers::save_learned_protocol;
+use crate::services::request_outcome::RequestOutcome;
 use crate::util::random_hex;
 use axum::body::Bytes;
-use emp_domain::ResolvedRoute;
+use emp_domain::{Protocol, ResolvedRoute};
 use emp_router::ExternalStream;
 use emp_router::ProjectionIds;
 use emp_router::RouterError;
@@ -125,7 +127,7 @@ pub(crate) fn serve_external_stream<'a>(
     mut downstream: ObservedSse<'_, 'a>,
     state: &'a ServerState,
     route: &ResolvedRoute,
-    body: Value,
+    body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {
@@ -133,7 +135,7 @@ pub(crate) fn serve_external_stream<'a>(
     let (upstream, candidate, usage) = match crate::services::external::open_stream(
         state,
         route,
-        &body,
+        body,
         incoming,
         ids,
         monitor.as_mut(),
@@ -143,27 +145,39 @@ pub(crate) fn serve_external_stream<'a>(
             return crate::api::failure_response::external_open_error(error).map_or(Ok(()), Err);
         }
     };
-    relay_stream(
+    let mut observed_at = None;
+    let result = relay_stream(
         &mut downstream,
         RelayContext {
             state,
-            route: candidate,
-            learn_protocol: true,
-            body,
+            route: &candidate,
             response_headers: BTreeMap::new(),
             usage,
         },
         ExternalRelay { upstream },
         monitor,
-    )
+        |usage, event| {
+            if route.protocol == Protocol::Auto && event["type"] == "response.completed" {
+                observed_at = Some(emp_state::observed_at_now());
+            }
+            usage.observe(event);
+            context::record_event(state, &candidate, body, event);
+        },
+    );
+    if let Some(observed_at) = observed_at {
+        downstream.sink.after_handoff(move || {
+            save_learned_protocol(state, &candidate, &observed_at);
+        });
+    }
+    result
 }
 
 pub(crate) fn serve_native_stream<'a>(
     mut downstream: ObservedSse<'_, 'a>,
     state: &'a ServerState,
-    route: ResolvedRoute,
+    route: &ResolvedRoute,
     config: &Value,
-    body: Value,
+    body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {
@@ -171,9 +185,9 @@ pub(crate) fn serve_native_stream<'a>(
     let (upstream, monitor) = match monitor {
         Some(mut monitor) => match native::open_stream_cancellable(
             state,
-            &route,
+            route,
             config,
-            &body,
+            body,
             incoming,
             ids,
             &mut monitor,
@@ -184,7 +198,7 @@ pub(crate) fn serve_native_stream<'a>(
             native::CancellableNativeStreamOpen::Disconnected => return Ok(()),
         },
         None => (
-            native::open_stream_result(state, &route, config, &body, incoming, ids)
+            native::open_stream_result(state, route, config, body, incoming, ids)
                 .map_err(crate::api::native_response::error_reply)?,
             None,
         ),
@@ -196,26 +210,33 @@ pub(crate) fn serve_native_stream<'a>(
         RelayContext {
             state,
             route,
-            learn_protocol: false,
-            body,
             response_headers,
             usage,
         },
         NativeRelay { upstream },
         monitor,
+        |usage, event| {
+            usage.observe(event);
+            if let Some(success) = context::outcome(event)
+                && let Some(payload) = context::native_payload(
+                    state,
+                    route,
+                    body,
+                    native::plaintext_collaboration(config),
+                )
+            {
+                context::record_payload(state, route, &payload, success);
+            }
+        },
     )
 }
 
 enum RelayEvent {
-    /// End of stream without a terminal event.
     Incomplete,
     Disconnected,
     Failure(RouterError),
     SerializationFailure,
-    Event {
-        frame: Vec<u8>,
-        body: Value,
-    },
+    Event { frame: Vec<u8>, body: Value },
 }
 
 trait RelaySource {
@@ -282,24 +303,21 @@ impl RelaySource for ExternalRelay {
 
 struct RelayContext<'a> {
     state: &'a ServerState,
-    route: ResolvedRoute,
-    learn_protocol: bool,
-    body: Value,
+    route: &'a ResolvedRoute,
     response_headers: BTreeMap<String, String>,
-    usage: crate::services::request_outcome::RequestOutcome<'a>,
+    usage: RequestOutcome<'a>,
 }
 
-fn relay_stream<'a>(
-    downstream: &mut ObservedSse<'_, 'a>,
-    context: RelayContext<'a>,
+fn relay_stream(
+    downstream: &mut ObservedSse<'_, '_>,
+    context: RelayContext<'_>,
     mut source: impl RelaySource,
     monitor: Option<DisconnectMonitor>,
+    mut observe: impl FnMut(&mut RequestOutcome<'_>, &Value),
 ) -> Result<(), HttpReply> {
     let RelayContext {
         state,
         route,
-        learn_protocol,
-        body,
         response_headers,
         mut usage,
     } = context;
@@ -308,9 +326,7 @@ fn relay_stream<'a>(
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
     let mut started = false;
-    let mut calibration = None;
-    let mut protocol_observed = false;
-    let result = loop {
+    loop {
         let event = source.next(runtime, monitor.as_mut());
         usage.upstream_observation(source.observation());
         match event {
@@ -331,13 +347,13 @@ fn relay_stream<'a>(
             RelayEvent::Failure(error) => {
                 usage.router_error(&error);
                 if !started {
-                    break Err(pre_output_router_error_response_for_route(&error, &route));
+                    break Err(pre_output_router_error_response_for_route(&error, route));
                 }
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),
                     Err(_) => break Ok(()),
                 };
-                let failure = stream_failure_value_for_route(&error, &response_id, &route, true);
+                let failure = stream_failure_value_for_route(&error, &response_id, route, true);
                 if let Ok(frame) = sse_frame("response.failed", &failure) {
                     let _ = downstream.event(&failure, &[frame]);
                 }
@@ -351,10 +367,8 @@ fn relay_stream<'a>(
                 frame,
                 body: event_body,
             } => {
-                usage.observe(&event_body);
+                observe(&mut usage, &event_body);
                 let terminal = terminal_stream_event(&event_body);
-                calibration = crate::services::context::outcome(&event_body);
-                protocol_observed = learn_protocol && event_body["type"] == "response.completed";
                 let frame = if !downstream.codex
                     && crate::services::events::codex_event(
                         event_body["type"].as_str().unwrap_or_default(),
@@ -376,7 +390,7 @@ fn relay_stream<'a>(
                     }
                     continue;
                 }
-                if failed && let Some(response) = pre_output_failure_response(&event_body, &route) {
+                if failed && let Some(response) = pre_output_failure_response(&event_body, route) {
                     break Err(response);
                 }
                 let (output_emitted, tool_activity) = stream_event_activity(&event_body);
@@ -408,18 +422,7 @@ fn relay_stream<'a>(
                 }
             }
         }
-    };
-    if calibration.is_some() || protocol_observed {
-        downstream.sink.after_handoff(move || {
-            if let Some(success) = calibration {
-                crate::services::context::record(state, &route, &body, success);
-            }
-            if protocol_observed {
-                persist_protocol_observation(state, &route);
-            }
-        });
     }
-    result
 }
 
 pub(crate) fn serve_generated_response(
