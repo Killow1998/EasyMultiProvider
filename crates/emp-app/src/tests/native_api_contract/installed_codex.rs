@@ -236,10 +236,17 @@ fn stream_control(native: bool, cancel: bool) {
         .expect("Codex first inference");
     codex.wait(|value| value["method"] == "item/agentMessage/delta");
     let before = crate::tests::flushed_journal(&root, &server.state);
+    let starts: Vec<_> = before
+        .iter()
+        .filter(|event| event["event"] == "request_started")
+        .collect();
     assert!(
-        before
+        !starts.is_empty(),
+        "first inference must have a start receipt"
+    );
+    assert!(
+        starts
             .iter()
-            .filter(|event| event["event"] == "request_started")
             .all(|event| event["fields"]["transport"] == "websocket"),
         "warmup must not force Codex into HTTP fallback"
     );
@@ -272,10 +279,7 @@ fn stream_control(native: bool, cancel: bool) {
         "Codex must reject the wrong turn: {rejected}"
     );
     assert_eq!(
-        before
-            .iter()
-            .filter(|event| event["event"] == "request_started")
-            .count(),
+        starts.len(),
         crate::tests::flushed_journal(&root, &server.state)
             .iter()
             .filter(|event| event["event"] == "request_started")

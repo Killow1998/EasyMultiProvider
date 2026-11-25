@@ -33,10 +33,13 @@ fn desktop_startup_keeps_the_native_tray_alive_through_enable_and_restore() {
     let mut emp = Emp::spawn(command);
     let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     loop {
-        let journal: String = std::fs::read_dir(workspace.root.join("state/logs"))
-            .unwrap()
-            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
-            .collect();
+        let journal: String = match std::fs::read_dir(workspace.root.join("state/logs")) {
+            Ok(entries) => entries
+                .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+                .collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => panic!("read desktop startup journal: {error}"),
+        };
         assert!(!journal.contains("desktop_tray_unavailable"));
         if journal.lines().any(|line| {
             serde_json::from_str::<serde_json::Value>(line)

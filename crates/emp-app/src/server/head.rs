@@ -327,10 +327,7 @@ mod tests {
         time::{advance, pause},
     };
 
-    #[tokio::test]
-    async fn account_event_write_allows_progress_but_times_out_when_stalled() {
-        pause();
-        let event = b"event: quota-updated\ndata: {}\n\n";
+    async fn account_event_stream<I>(io: I) -> Prefixed<CountingIo<I>> {
         let request = b"GET /api/accounts/events HTTP/1.1\r\nHost: localhost\r\n\r\n";
         let head = GuardedHead::read(
             &mut request.as_slice(),
@@ -339,14 +336,24 @@ mod tests {
         .await
         .ok()
         .unwrap();
-        let (io, mut client) = duplex(5);
-        let mut stream = head.replay(
-            io,
+        head.replay(
+            CountingIo {
+                inner: io,
+                calls: [0; 2],
+            },
             "/",
             Arc::new(OnceLock::from(None)),
             ServerMode::Http,
             None,
-        );
+        )
+    }
+
+    #[tokio::test]
+    async fn account_event_write_allows_progress_but_times_out_when_stalled() {
+        pause();
+        let event = b"event: quota-updated\ndata: {}\n\n";
+        let (io, mut client) = duplex(5);
+        let mut stream = account_event_stream(io).await;
         {
             let mut write = pin!(stream.write_all(event));
             let mut bytes = Vec::new();
@@ -364,17 +371,67 @@ mod tests {
             }
             assert_eq!(bytes, event);
         }
-        let mut stalled = pin!(stream.write_all(event));
-        assert!(poll_once(stalled.as_mut()).await.is_pending());
+        stream.write_all(b"12345").await.unwrap();
+        assert!(poll_once(pin!(stream.write(event))).await.is_pending());
         advance(Duration::from_millis(4_999)).await;
-        assert!(poll_once(stalled.as_mut()).await.is_pending());
+        assert!(poll_once(pin!(stream.write(event))).await.is_pending());
         advance(Duration::from_millis(2)).await;
+        assert_expired_without_io(&mut stream).await;
+    }
+
+    #[tokio::test]
+    async fn account_event_write_deadline_precedes_a_ready_write() {
+        pause();
+        let (io, mut client) = duplex(5);
+        let mut stream = account_event_stream(io).await;
+        stream.write_all(b"12345").await.unwrap();
+        assert!(poll_once(pin!(stream.write(b"6"))).await.is_pending());
+        advance(Duration::from_secs(5)).await;
         let mut chunk = [0; 5];
         client.read_exact(&mut chunk).await.unwrap();
+        assert_eq!(&chunk, b"12345");
+        assert_expired_without_io(&mut stream).await;
+    }
+
+    async fn assert_expired_without_io(stream: &mut Prefixed<CountingIo<impl AsyncWrite + Unpin>>) {
+        let calls = stream.io.calls;
         assert!(matches!(
-            poll_once(stalled.as_mut()).await,
+            poll_once(pin!(stream.write(b"6"))).await,
             Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::TimedOut
         ));
+        assert!(matches!(
+            poll_once(pin!(stream.flush())).await,
+            Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::TimedOut
+        ));
+        assert_eq!(
+            stream.io.calls, calls,
+            "expired I/O must not poll the underlying writer"
+        );
+    }
+
+    struct CountingIo<I> {
+        inner: I,
+        calls: [usize; 2],
+    }
+
+    impl<I: AsyncWrite + Unpin> AsyncWrite for CountingIo<I> {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.calls[0] += 1;
+            Pin::new(&mut self.inner).poll_write(cx, bytes)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.calls[1] += 1;
+            Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
     }
 
     struct FlushIo(bool);
@@ -385,7 +442,7 @@ mod tests {
             _: &mut Context<'_>,
             _: &[u8],
         ) -> Poll<io::Result<usize>> {
-            unreachable!()
+            Poll::Ready(Ok(0))
         }
 
         fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -404,27 +461,10 @@ mod tests {
     #[tokio::test]
     async fn account_event_flush_deadline_precedes_a_ready_flush() {
         pause();
-        let request = b"GET /api/accounts/events HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        let head = GuardedHead::read(
-            &mut request.as_slice(),
-            Instant::now() + test_timeout(REQUEST_READ_TIMEOUT),
-        )
-        .await
-        .ok()
-        .unwrap();
-        let mut stream = head.replay(
-            FlushIo(false),
-            "/",
-            Arc::new(OnceLock::from(None)),
-            ServerMode::Http,
-            None,
-        );
+        let mut stream = account_event_stream(FlushIo(false)).await;
         assert!(poll_once(pin!(stream.flush())).await.is_pending());
         advance(Duration::from_secs(5)).await;
-        stream.io.0 = true;
-        assert!(matches!(
-            poll_once(pin!(stream.flush())).await,
-            Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::TimedOut
-        ));
+        stream.io.inner.0 = true;
+        assert_expired_without_io(&mut stream).await;
     }
 }

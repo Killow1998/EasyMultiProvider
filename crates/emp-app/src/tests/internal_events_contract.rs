@@ -15,12 +15,7 @@ pub(super) fn final_journal(root: &Path) -> Vec<Value> {
 }
 
 fn read_journal(root: &Path, complete_lines_only: bool) -> Vec<Value> {
-    let entries = match std::fs::read_dir(root.join("state/logs")) {
-        Err(error) if complete_lines_only && error.kind() == std::io::ErrorKind::NotFound => {
-            return Vec::new();
-        }
-        result => result.unwrap(),
-    };
+    let entries = std::fs::read_dir(root.join("state/logs")).unwrap();
     entries
         .flat_map(|entry| {
             let path = entry.unwrap().path();

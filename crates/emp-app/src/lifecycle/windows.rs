@@ -110,11 +110,7 @@ fn restore_before_exit(exit: &ExitState) {
         exit.external.store(true, Ordering::Release);
         let state = &exit.state;
         let result = super::shutdown::prepare_exit(state, false);
-        state.backend.diagnostics.journal.event(
-            if result.is_ok() { "info" } else { "error" },
-            "session_exit_restore",
-            &serde_json::json!({"success": result.is_ok()}),
-        );
+        super::shutdown::confirm_session_exit_restore(state, result);
     }));
 }
 

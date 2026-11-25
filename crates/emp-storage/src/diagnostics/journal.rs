@@ -8,9 +8,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, LazyLock, Mutex,
-    mpsc::{self, Receiver, SyncSender, TrySendError},
+    mpsc::{self, Receiver, Sender},
 };
 mod replay;
+#[cfg(test)]
+mod tests;
 const QUEUE_CAPACITY: usize = 1024;
 const MAX_RECORD: usize = 16 * 1024;
 const MAX_PART: u64 = 2 * 1024 * 1024;
@@ -132,9 +134,20 @@ fn private(path: &Path, mode: u32) -> std::io::Result<()> {
     let _ = (path, mode);
     Ok(())
 }
-enum Command {
+struct Command {
+    dropped: usize,
+    action: Action,
+}
+
+enum Action {
     Event(Event),
-    Flush(mpsc::Sender<()>),
+    Flush(Option<Event>, Sender<usize>),
+}
+
+#[derive(Default)]
+struct QueueState {
+    pending_events: usize,
+    dropped: usize,
 }
 
 struct Event {
@@ -144,39 +157,64 @@ struct Event {
     fields: Value,
 }
 
-#[cfg(feature = "test-support")]
+impl Event {
+    fn new(level: &str, name: &str, fields: &Value) -> Self {
+        let name = redact_sensitive_text(name).chars().take(256).collect();
+        let fields = sanitize(fields, 0);
+        Self {
+            timestamp: super::timestamp(),
+            level: match level {
+                "debug" => "debug",
+                "warning" => "warning",
+                "error" => "error",
+                _ => "info",
+            },
+            name,
+            fields,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
 type EventGate = Arc<Mutex<Option<(&'static str, Box<dyn FnOnce() + Send>)>>>;
 
 pub struct Journal {
     directory: PathBuf,
     run_id: String,
-    sender: SyncSender<Command>,
-    dropped: Arc<Mutex<usize>>,
-    #[cfg(feature = "test-support")]
+    sender: Sender<Command>,
+    queue: Arc<Mutex<QueueState>>,
+    flush_lock: Mutex<()>,
+    #[cfg(any(test, feature = "test-support"))]
     event_gate: EventGate,
 }
 
 impl Journal {
-    pub fn new(directory: PathBuf) -> Self {
-        let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
+    fn channel(directory: PathBuf) -> (Self, Receiver<Command>) {
+        let (sender, receiver) = mpsc::channel();
         let journal = Self {
             directory,
             run_id: super::random_id(8),
             sender,
-            dropped: Arc::default(),
-            #[cfg(feature = "test-support")]
+            queue: Arc::default(),
+            flush_lock: Mutex::default(),
+            #[cfg(any(test, feature = "test-support"))]
             event_gate: Arc::default(),
         };
+        (journal, receiver)
+    }
+
+    pub fn new(directory: PathBuf) -> Self {
+        let (journal, receiver) = Self::channel(directory);
         let mut writer = Writer::new(
             journal.directory.clone(),
             journal.run_id.clone(),
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             journal.event_gate.clone(),
         );
-        let dropped = journal.dropped.clone();
+        let queue = Arc::clone(&journal.queue);
         if let Err(error) = std::thread::Builder::new()
             .name("emp-diagnostic-journal".into())
-            .spawn(move || writer.run(receiver, &dropped))
+            .spawn(move || writer.run(receiver, &queue))
         {
             let _ = writeln!(
                 std::io::stderr().lock(),
@@ -196,36 +234,56 @@ impl Journal {
     }
 
     pub fn event(&self, level: &str, name: &str, fields: &Value) {
-        let name = redact_sensitive_text(name).chars().take(256).collect();
-        let fields = sanitize(fields, 0);
-        let mut dropped = self.dropped.lock().unwrap();
-        let event = Event {
-            timestamp: super::timestamp(),
-            level: match level {
-                "debug" => "debug",
-                "warning" => "warning",
-                "error" => "error",
-                _ => "info",
-            },
-            name,
-            fields,
-        };
-        if matches!(
-            self.sender.try_send(Command::Event(event)),
-            Err(TrySendError::Full(_))
-        ) {
-            *dropped = dropped.saturating_add(1);
+        let event = Event::new(level, name, fields);
+        let mut queue = self.queue.lock().unwrap();
+        if queue.pending_events == QUEUE_CAPACITY
+            || self
+                .sender
+                .send(Command {
+                    dropped: queue.dropped,
+                    action: Action::Event(event),
+                })
+                .is_err()
+        {
+            queue.dropped = queue.dropped.saturating_add(1);
+        } else {
+            queue.pending_events += 1;
+            queue.dropped = 0;
         }
     }
 
     pub fn flush_blocking(&self) {
-        let (done, receipt) = mpsc::channel();
-        if self.sender.send(Command::Flush(done)).is_ok() {
-            let _ = receipt.recv();
-        }
+        self.confirm(None);
     }
 
-    #[cfg(feature = "test-support")]
+    pub fn event_and_flush_blocking(&self, level: &str, name: &str, fields: &Value) {
+        self.confirm(Some(Event::new(level, name, fields)));
+    }
+
+    fn confirm(&self, event: Option<Event>) -> usize {
+        let _flush = self.flush_lock.lock().unwrap();
+        let (done, receipt) = mpsc::channel();
+        {
+            let mut queue = self.queue.lock().unwrap();
+            let dropped = std::mem::take(&mut queue.dropped);
+            let unsent = dropped.saturating_add(usize::from(event.is_some()));
+            if self
+                .sender
+                .send(Command {
+                    dropped,
+                    action: Action::Flush(event, done),
+                })
+                .is_err()
+            {
+                drop(queue);
+                report_dropped(unsent);
+                return unsent;
+            }
+        }
+        receipt.recv().unwrap_or_default()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn gate_next_event(&self, name: &'static str, gate: impl FnOnce() + Send + 'static) {
         assert!(
             self.event_gate
@@ -233,6 +291,15 @@ impl Journal {
                 .unwrap()
                 .replace((name, Box::new(gate)))
                 .is_none()
+        );
+    }
+}
+
+fn report_dropped(count: usize) {
+    if count != 0 {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "EMP diagnostic journal dropped {count} records"
         );
     }
 }
@@ -246,7 +313,7 @@ struct Writer {
     bytes: u64,
     sequence: u64,
     managed: u64,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     event_gate: EventGate,
 }
 
@@ -254,7 +321,7 @@ impl Writer {
     fn new(
         directory: PathBuf,
         run_id: String,
-        #[cfg(feature = "test-support")] event_gate: EventGate,
+        #[cfg(any(test, feature = "test-support"))] event_gate: EventGate,
     ) -> Self {
         let now = time::OffsetDateTime::now_utc();
         let basename = format!(
@@ -276,12 +343,12 @@ impl Writer {
             bytes: 0,
             sequence: 0,
             managed: 0,
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             event_gate,
         }
     }
 
-    fn run(&mut self, receiver: Receiver<Command>, dropped: &Mutex<usize>) {
+    fn run(&mut self, receiver: Receiver<Command>, queue: &Mutex<QueueState>) {
         let opened = (|| -> std::io::Result<()> {
             no_symlinks(&self.directory)?;
             std::fs::create_dir_all(&self.directory)?;
@@ -298,8 +365,16 @@ impl Writer {
                 error.kind()
             );
         }
-        for command in receiver {
-            let dropped = std::mem::take(&mut *dropped.lock().unwrap());
+        let mut losses = 0usize;
+        for Command { dropped, action } in receiver {
+            let (event, receipt) = match action {
+                Action::Event(event) => {
+                    queue.lock().unwrap().pending_events -= 1;
+                    (Some(event), None)
+                }
+                Action::Flush(event, receipt) => (event, Some(receipt)),
+            };
+            losses = losses.saturating_add(dropped);
             if dropped != 0 {
                 self.write_event(&Event {
                     timestamp: super::timestamp(),
@@ -307,20 +382,18 @@ impl Writer {
                     name: "journal_records_dropped".into(),
                     fields: json!({"count":dropped}),
                 });
-                if self.file.is_none() {
-                    let _ = writeln!(
-                        std::io::stderr().lock(),
-                        "EMP diagnostic journal dropped {dropped} records (queue full)"
-                    );
-                }
             }
-            match command {
-                Command::Event(event) => self.write_event(&event),
-                Command::Flush(done) => {
-                    let _ = done.send(());
-                }
+            if let Some(event) = event
+                && !self.write_event(&event)
+            {
+                losses = losses.saturating_add(1);
+            }
+            if let Some(receipt) = receipt {
+                report_dropped(losses);
+                let _ = receipt.send(std::mem::take(&mut losses));
             }
         }
+        report_dropped(losses.saturating_add(queue.lock().unwrap().dropped));
     }
 
     fn path(&self, part: u32) -> PathBuf {
@@ -355,9 +428,9 @@ impl Writer {
         }
     }
 
-    fn write_event(&mut self, event: &Event) {
+    fn write_event(&mut self, event: &Event) -> bool {
         if self.file.is_none() {
-            return;
+            return false;
         }
         let mut record = json!({"timestamp":event.timestamp,"sequence":self.sequence+1,"run_id":self.run_id,"level":event.level,"event":event.name,"fields":event.fields});
         let mut bytes = serde_json::to_vec(&record).expect("diagnostic JSON");
@@ -375,7 +448,7 @@ impl Writer {
                 self.prune();
             }
             let file = self.file.as_mut().unwrap();
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             {
                 let gate = {
                     let mut armed = self.event_gate.lock().unwrap();
@@ -402,7 +475,9 @@ impl Writer {
                 "EMP diagnostic journal stopped ({:?}); forwarding remains available",
                 error.kind()
             );
+            return false;
         }
+        true
     }
 }
 

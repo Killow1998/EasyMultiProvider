@@ -1,5 +1,5 @@
 use super::*;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, Observation, test_timeout};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -75,6 +75,66 @@ fn exit_restores_before_active_requests_and_websockets_release() {
     );
     drop((request, websocket));
     shutdown.join().unwrap().unwrap();
+}
+
+#[test]
+fn final_journal_flush_waits_for_the_exit_restore_receipt() {
+    let (directory, server) = fixture();
+    let state = Arc::clone(&server.state);
+    let callback_state = Arc::clone(&state);
+    let callback = Observation::spawn(move |probe| {
+        let result = prepare_exit(&callback_state, false);
+        probe.observe(|_| result.is_ok());
+        probe.observe(|_| {
+            confirm_session_exit_restore(&callback_state, result);
+            true
+        });
+    });
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    assert!(
+        callback
+            .begin(deadline, "exit callback restored configuration")
+            .wait()
+            .unwrap()
+    );
+    assert_original(
+        &std::fs::read_to_string(state.backend.integration.manager.config_path()).unwrap(),
+    );
+
+    server
+        .shutdown_with_handoff(false, || {
+            let before = crate::tests::flushed_journal(directory.path(), &state);
+            assert!(
+                before
+                    .iter()
+                    .any(|record| record["event"] == "shutdown_start")
+            );
+            assert!(!before.iter().any(|record| {
+                record["event"] == "session_exit_restore" || record["event"] == "shutdown_complete"
+            }));
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            assert!(
+                callback
+                    .begin(deadline, "exit callback confirmed its receipt")
+                    .wait()
+                    .unwrap()
+            );
+            drop(callback);
+        })
+        .unwrap();
+
+    let records = crate::tests::live_journal(directory.path());
+    let receipts: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record["event"] == "session_exit_restore" || record["event"] == "shutdown_complete"
+        })
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts[0]["event"], "session_exit_restore");
+    assert_eq!(receipts[0]["fields"]["success"], true);
+    assert_eq!(receipts[1]["event"], "shutdown_complete");
+    assert!(receipts[0]["sequence"].as_u64().unwrap() < receipts[1]["sequence"].as_u64().unwrap());
 }
 
 #[test]

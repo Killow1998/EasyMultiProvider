@@ -136,7 +136,7 @@ pub(crate) fn run_server(
             "startup_failure",
             &serde_json::json!({"stage":"background_workers", "error_class":"startup_error"}),
         );
-        let _ = server.shutdown();
+        let _ = server.shutdown_with_handoff(false, || drop(signals));
         restore.disarm();
         return Err(error);
     }
@@ -174,7 +174,7 @@ pub(crate) fn run_server(
     if handoff {
         restore.disarm();
     }
-    let cleanup = server.shutdown_with_handoff(handoff);
+    let cleanup = server.shutdown_with_handoff(handoff, || drop(signals));
     restore.disarm();
     result?;
     cleanup

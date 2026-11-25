@@ -205,6 +205,11 @@ fn canceled_session_end_keeps_running_and_confirmed_end_restores_synchronously()
         }
         // Restoration must finish before the session-end callback returns.
         assert_native(&workspace);
+        assert!(fixture_journal(&workspace).lines().any(|line| {
+            serde_json::from_str::<serde_json::Value>(line).is_ok_and(|record| {
+                record["event"] == "session_exit_restore" && record["fields"]["success"] == true
+            })
+        }));
         assert_clean_exit(&mut emp, &workspace);
     }
 }
