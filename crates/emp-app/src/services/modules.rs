@@ -18,6 +18,8 @@ use std::{
 };
 use worker::Worker;
 
+const MODULE_UPDATE_ROLLED_BACK: &str = "module_update_rolled_back";
+
 pub(crate) struct Modules {
     packages: Packages,
     saved: Mutex<Installs>,
@@ -154,25 +156,15 @@ impl Modules {
                 .bundled_transition(config, has_gateway_devices, &mut saved)?;
         }
         for (&module, install) in saved.iter_mut().filter(|(_, install)| install.enabled) {
-            let start = |digest| modules.start(module, digest);
-            let selected = install.selected_digest();
-            let attempt = selected.ok_or("incompatible_module").and_then(start);
-            let (worker, error) = match attempt {
-                Ok(active) => (active, None),
+            let [selected, previous] = install.start_candidates();
+            let require_selected = update && (!bundled_transition || selected.is_some());
+            let candidates = [selected, previous.filter(|_| !require_selected)];
+            let (worker, error) = match modules.start_installed(module, candidates, None) {
+                Ok(started) => started,
+                Err(error) if require_selected => return Err(error.into()),
                 Err(error) => {
-                    if update && (!bundled_transition || selected.is_some()) {
-                        return Err(error.into());
-                    }
-                    if let Some(active) = install
-                        .previous
-                        .as_ref()
-                        .and_then(|artifact| start(&artifact.digest).ok())
-                    {
-                        (active, Some("module_update_rolled_back"))
-                    } else {
-                        modules.mark_unavailable(module, error);
-                        continue;
-                    }
+                    modules.mark_unavailable(module, error);
+                    continue;
                 }
             };
             let artifact = &worker.artifact;
@@ -222,6 +214,26 @@ impl Modules {
             aero: Mutex::new(None),
             stopped: Arc::new(AtomicBool::new(false)),
         }))
+    }
+
+    fn start_installed(
+        &self,
+        module: Module,
+        [selected, previous]: [Option<&str>; 2],
+        current: Option<&Arc<ActiveWorker>>,
+    ) -> Result<(Arc<ActiveWorker>, Option<&'static str>), &'static str> {
+        let start = |digest: &str| match current {
+            Some(worker) if worker.artifact.digest == digest => Ok(Arc::clone(worker)),
+            _ => self.start(module, digest),
+        };
+        let error = match selected.ok_or("incompatible_module").and_then(start) {
+            Ok(worker) => return Ok((worker, None)),
+            Err(error) => error,
+        };
+        match previous.and_then(|digest| start(digest).ok()) {
+            Some(worker) => Ok((worker, Some(MODULE_UPDATE_ROLLED_BACK))),
+            None => Err(error),
+        }
     }
 
     fn worker(&self, module: Module) -> Option<Arc<ActiveWorker>> {
@@ -288,19 +300,31 @@ impl Modules {
                 let running = runtime.active();
                 let artifact = running.as_ref().map(|worker| &worker.artifact);
                 let error = self.registry_error.or(runtime.error);
+                let installed_version = current.and_then(|install| {
+                    artifact
+                        .map(|artifact| artifact.version.as_str())
+                        .or_else(|| install.version())
+                });
+                let preferred = current.and_then(|install| {
+                    let [selected, _] = install.start_candidates();
+                    selected
+                });
+                let restart_required = enabled
+                    && error != Some(MODULE_UPDATE_ROLLED_BACK)
+                    && preferred
+                        .zip(artifact)
+                        .is_some_and(|(digest, artifact)| digest != artifact.digest);
                 json!({
                     "id":module,
                     "ui":ui::entry(module),
                     "version":module.version(),
-                    "installed_version":current.and_then(|install| install.version(artifact)),
+                    "installed_version":installed_version,
                     "active_version": artifact.map(|artifact| &artifact.version),
                     "active_revision": artifact.map(|artifact| &artifact.digest),
                     "enabled":enabled,
                     "active":running.is_some(),
                     "draining":runtime.draining(),
-                    "restart_required": enabled && artifact.is_some_and(|artifact| {
-                        current.and_then(Install::selected_digest) != Some(&artifact.digest)
-                    }),
+                    "restart_required":restart_required,
                     "error":error,
                 })
             })
@@ -316,10 +340,16 @@ impl Modules {
             .lock()
             .map_err(|_| "module_unavailable")?
             .iter()
-            .filter_map(|(&module, install)| {
-                let worker = self.worker(module);
-                let version = install.version(worker.as_ref().map(|worker| &worker.artifact))?;
-                Some((module, version.to_owned()))
+            .map(|(&module, install)| (module, install.version().map(str::to_owned)))
+            .collect();
+        let installed: Vec<_> = installed
+            .into_iter()
+            .filter_map(|(module, saved_version)| {
+                let version = self
+                    .worker(module)
+                    .map(|worker| worker.artifact.version.clone())
+                    .or(saved_version)?;
+                Some((module, version))
             })
             .collect();
         let targets: Vec<_> = installed
@@ -408,18 +438,18 @@ impl Modules {
             .map_err(|_| "module_unavailable")?
             .error
             .filter(|error| *error == "invalid_gateway_clients");
-        let next = if let Some(install) = updated.get(&module).filter(|install| install.enabled) {
-            if let Some(error) = blocked {
-                return Err(error.into());
-            }
-            let digest = install.selected_digest().ok_or("incompatible_module")?;
-            match &current {
-                Some(worker) if worker.artifact.digest == digest => Some(Arc::clone(worker)),
-                _ => Some(self.start(module, digest)?),
-            }
-        } else {
-            None
-        };
+        let (next, error) =
+            if let Some(install) = updated.get(&module).filter(|install| install.enabled) {
+                if let Some(error) = blocked {
+                    return Err(error.into());
+                }
+                let [selected, previous] = install.start_candidates();
+                let candidates = [selected, previous.filter(|_| action == Action::Enable)];
+                let (worker, error) = self.start_installed(module, candidates, current.as_ref())?;
+                (Some(worker), error)
+            } else {
+                (None, blocked)
+            };
         {
             let mut saved = self.saved.lock().map_err(|_| "module_unavailable")?;
             let mut runtime = self.runtime[&module]
@@ -451,7 +481,7 @@ impl Modules {
                 current.take();
             }
             runtime.worker = next;
-            runtime.error = blocked;
+            runtime.error = error;
             *saved = updated;
         }
         drop(current);

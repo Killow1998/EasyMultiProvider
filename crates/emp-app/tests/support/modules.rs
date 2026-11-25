@@ -332,21 +332,31 @@ fn processes(deadline: Deadline) -> io::Result<Vec<(i32, String)>> {
 
 impl ModuleEmp {
     pub fn spawn(workspace: &Workspace, command: Command) -> Self {
+        Self::spawn_with(workspace, command, || ()).0
+    }
+
+    pub fn spawn_with<T>(
+        workspace: &Workspace,
+        command: Command,
+        on_spawn: impl FnOnce() -> T,
+    ) -> (Self, T) {
         let binary = PathBuf::from(command.get_program());
         let cleanup_budget = io_timeout();
-        let emp = Emp::spawn(command);
-        eprintln!(
-            "Core PID={} sha256={:x}",
-            emp.pid(),
-            Sha256::digest(std::fs::read(&binary).expect("EMP binary"))
-        );
-        Self {
+        let (emp, observation) = Emp::spawn_with(command, on_spawn);
+        let deadline = Deadline::after(io_timeout());
+        let digest = Sha256::digest(std::fs::read(&binary).expect("EMP binary"));
+        let digest = deadline
+            .accept(digest, "hash EMP binary")
+            .expect("hash EMP binary");
+        eprintln!("Core PID={} sha256={digest:x}", emp.pid());
+        let module_emp = Self {
             emp: Some(emp),
             binary,
             root: workspace.root.join("state/modules"),
             observed: Mutex::new(BTreeSet::new()),
             cleanup_budget,
-        }
+        };
+        (module_emp, observation)
     }
 
     pub fn status(&self, id: &str) -> Value {

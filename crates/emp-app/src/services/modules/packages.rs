@@ -35,9 +35,9 @@ impl Install {
         }
     }
 
-    pub(super) fn version<'a>(&'a self, active: Option<&'a Artifact>) -> Option<&'a str> {
-        active
-            .or(self.artifact.as_ref())
+    pub(super) fn version(&self) -> Option<&str> {
+        self.artifact
+            .as_ref()
             .map(|artifact| artifact.version.as_str())
             .or_else(|| {
                 let (version, _) = self
@@ -71,12 +71,20 @@ impl Install {
             .or_else(|| self.versions.get(crate::VERSION).map(String::as_str))
     }
 
-    fn retains(&self, digest: &str) -> bool {
-        self.selected_digest() == Some(digest)
-            || self
-                .previous
+    pub(super) fn start_candidates(&self) -> [Option<&str>; 2] {
+        [
+            self.selected_digest(),
+            self.previous
                 .as_ref()
-                .is_some_and(|artifact| artifact.digest == digest)
+                .map(|artifact| artifact.digest.as_str()),
+        ]
+    }
+
+    fn retains(&self, digest: &str) -> bool {
+        self.start_candidates()
+            .into_iter()
+            .flatten()
+            .any(|candidate| candidate == digest)
             || self.versions.values().any(|value| value == digest)
     }
 }

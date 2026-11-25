@@ -209,7 +209,11 @@ pub struct Emp {
 }
 
 impl Emp {
-    pub fn spawn(mut command: Command) -> Self {
+    pub fn spawn(command: Command) -> Self {
+        Self::spawn_with(command, || ()).0
+    }
+
+    pub(super) fn spawn_with<T>(mut command: Command, on_spawn: impl FnOnce() -> T) -> (Self, T) {
         #[cfg(windows)]
         let shutdown_budget = super::io_timeout();
         let startup_budget = emp_startup_budget();
@@ -218,6 +222,7 @@ impl Emp {
             .stderr(Stdio::piped())
             .spawn()
             .expect("start EMP");
+        let observation = on_spawn();
         let stdout = child.stdout.take().expect("EMP stdout");
         let stderr = child.stderr.take().expect("EMP stderr");
         let (lines, received) = mpsc::channel::<String>();
@@ -303,7 +308,7 @@ impl Emp {
             let saved = emp.post("/api/config", &config);
             assert_eq!(saved.status, 200, "{}", saved.text());
         }
-        emp
+        (emp, observation)
     }
 
     pub fn pid(&self) -> i32 {

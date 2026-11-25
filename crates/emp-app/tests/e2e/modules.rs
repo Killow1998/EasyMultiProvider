@@ -5,13 +5,17 @@ use crate::support::{
     Emp, NATIVE_TOKEN, Response, Upstream, UpstreamRequest, Workspace, http, write_file,
 };
 #[cfg(target_os = "linux")]
-use emp_test_support::Deadline;
+use emp_test_support::{Deadline, Observation};
 #[cfg(target_os = "linux")]
 use emp_updater::worker::UPDATE_READY_WAIT;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "linux")]
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 const OLD_DEVICE_KEY: &str = "old-device-key";
 
@@ -427,6 +431,14 @@ fn m01_k2_normal_start_requires_install_and_restores_installed_modules_with_or_w
 #[test]
 #[ignore = "needs embedded transition payloads and current and next Team builds; run cargo xtask module-e2e"]
 fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
+    #[derive(PartialEq, Eq)]
+    enum TeamStart {
+        Absent,
+        Selected,
+        Previous,
+        MissingPrevious,
+    }
+
     let modules = built_modules();
     let team = BuiltModule::current("team");
     let next_team = BuiltModule::next("team");
@@ -465,7 +477,7 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
     };
     let cases = cases
         .iter()
-        .map(|&(settings, expected)| (settings, expected, json!({}), false))
+        .map(|&(settings, expected)| (settings, expected, json!({}), false, TeamStart::Absent))
         .chain([
             (
                 &["aggregate"][..],
@@ -475,35 +487,49 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
                         "versions":{"0.14.2":"0".repeat(64)},
                         "previous":{"digest":team.digest,"version":team.version}}}),
                 false,
+                TeamStart::Previous,
+            ),
+            (
+                &["aggregate"][..],
+                &["decision", "gateway", "aggregate"][..],
+                json!({"decision":legacy_install(true), "gateway":legacy_install(true),
+                    "aggregate":legacy_install(true), "team":legacy_install(true)}),
+                false,
+                TeamStart::MissingPrevious,
             ),
             (
                 &[][..],
                 &[][..],
                 json!({"team":{"enabled":true,"versions":{(version):team.digest}}}),
                 false,
+                TeamStart::Selected,
             ),
             (
                 &[][..],
                 &[][..],
                 json!({"decision":legacy_install(false)}),
                 false,
+                TeamStart::Absent,
             ),
             (
                 &["gateway_encrypted"][..],
                 &["gateway"][..],
                 json!({}),
                 true,
+                TeamStart::Absent,
             ),
         ]);
-    for (index, (settings, expected, mut expected_registry, damage_gateway)) in cases.enumerate() {
+    for (index, (settings, expected, mut expected_registry, damage_gateway, team_start)) in
+        cases.enumerate()
+    {
         let workspace = routes.k2_workspace(settings);
         let directory = workspace.root.join("state/modules");
         let registry_path = directory.join("modules.json");
         if expected_registry != json!({}) {
             write_file(&registry_path, &expected_registry.to_string());
         }
-        let has_team = expected_registry.get("team").is_some();
-        if has_team {
+        let team_active = matches!(team_start, TeamStart::Selected | TeamStart::Previous);
+        if team_active {
             fs::copy(
                 built_core.with_file_name("empmod-team"),
                 directory.join(format!("team-{}", team.digest)),
@@ -529,19 +555,25 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
         let mut command = workspace.command_for(&executable);
         command.args(&args).env("EMP_UPDATE_READY", &ready);
         release.configure_command(&mut command);
-        let deadline = Deadline::after(UPDATE_READY_WAIT.into());
-        let emp = ModuleEmp::spawn(&workspace, command);
         let expected_receipt = json!({"version":version,"nonce":nonce});
-        eventually(
-            &deadline,
-            "candidate Core did not acknowledge the update",
-            || {
+        let receipt_context = "candidate Core did not acknowledge the update";
+        let observer = Observation::spawn(move |probe| {
+            let Some(request) = probe.next_request() else {
+                return;
+            };
+            let observed_at = eventually(request.deadline(), receipt_context, || {
                 let receipt: Value = serde_json::from_slice(&fs::read(&ready).ok()?).ok()?;
-                (receipt == expected_receipt).then_some(())
-            },
-        );
+                (receipt == expected_receipt).then(Instant::now)
+            });
+            request.complete_at(observed_at, ());
+        });
+        let (emp, receipt) = ModuleEmp::spawn_with(&workspace, command, || {
+            observer.begin(Deadline::after(UPDATE_READY_WAIT.into()), receipt_context)
+        });
+        receipt.wait().expect(receipt_context);
 
-        let registry: Value = serde_json::from_slice(&fs::read(registry_path).unwrap()).unwrap();
+        let registry_bytes = fs::read(&registry_path).unwrap();
+        let registry: Value = serde_json::from_slice(&registry_bytes).unwrap();
         let artifacts: Vec<_> = fs::read_dir(directory)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
@@ -549,7 +581,7 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
             .collect();
         assert_eq!(
             artifacts.len(),
-            expected.len() + usize::from(has_team),
+            expected.len() + usize::from(team_active),
             "settings={settings:?}: {artifacts:?}"
         );
         for module in &modules {
@@ -582,12 +614,21 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
         }
         assert_eq!(registry, expected_registry, "settings={settings:?}");
         let team_status = emp.status("team");
-        assert_eq!(team_status["active"], has_team, "{team_status}");
+        let team_error = match team_start {
+            TeamStart::Previous => Some("module_update_rolled_back"),
+            TeamStart::MissingPrevious => Some("incompatible_module"),
+            TeamStart::Absent | TeamStart::Selected => None,
+        };
+        assert_eq!(
+            team_status["enabled"],
+            team_start != TeamStart::Absent,
+            "{team_status}"
+        );
+        assert_eq!(team_status["active"], team_active, "{team_status}");
+        assert_eq!(team_status["error"], json!(team_error), "{team_status}");
         assert_eq!(emp.status("aero")["active"], false);
-        if has_team {
-            let rolled_back = expected_registry["team"].get("previous").is_some();
-            let error = rolled_back.then_some("module_update_rolled_back");
-            assert_eq!(team_status["error"], json!(error), "{team_status}");
+        if team_active {
+            assert_eq!(team_status["restart_required"], false, "{team_status}");
             assert_eq!(
                 team_status["installed_version"], team.version,
                 "{team_status}"
@@ -607,6 +648,25 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
                 .expect("higher-version Team offer");
             assert_eq!(offer["current_version"], team.version);
             assert_eq!(offer["latest_version"], next_team.version);
+        }
+        if team_start == TeamStart::Previous {
+            emp.change("team", "disable");
+            let disabled = emp.status("team");
+            assert_eq!(disabled["enabled"], false, "{disabled}");
+            assert_eq!(disabled["active"], false, "{disabled}");
+            let mut disabled_registry = expected_registry.clone();
+            disabled_registry["team"]["enabled"] = json!(false);
+            let saved: Value = serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+            assert_eq!(saved, disabled_registry);
+
+            emp.change("team", "enable");
+            let enabled = emp.status("team");
+            assert_eq!(enabled["enabled"], true, "{enabled}");
+            assert_eq!(enabled["active"], true, "{enabled}");
+            assert_eq!(enabled["active_revision"], team.digest, "{enabled}");
+            assert_eq!(enabled["error"], "module_update_rolled_back", "{enabled}");
+            assert_eq!(enabled["restart_required"], false, "{enabled}");
+            assert_eq!(fs::read(&registry_path).unwrap(), registry_bytes);
         }
         if expected.is_empty() {
             assert_ok(
