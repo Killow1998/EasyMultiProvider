@@ -1,12 +1,13 @@
 #![cfg(unix)]
 
-use emp_modules::peer::{CallError, ErrorCode, Handlers, Peer, Side};
-use emp_test_support::{OwnedChild, test_timeout};
+use emp_modules::peer::{CallError, ErrorCode, Handlers, Peer, PeerHandle, PendingRequest, Side};
+use emp_test_support::{Deadline, Observation, OwnedChild, test_timeout};
+use lsp_server::{Message, Request, RequestId, Response};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     fs::OpenOptions,
-    io::{self, BufReader, Write},
+    io::{self, BufReader, PipeReader, PipeWriter, Write},
     process::{Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     time::Duration,
@@ -19,25 +20,25 @@ fn budget() -> Duration {
 }
 
 fn module(mode: &str, handlers: Handlers) -> (Peer, OwnedChild) {
+    let (reader, writer, child) = spawn_module(mode);
+    let peer = Peer::connect(Side::Host, reader, writer, handlers).unwrap();
+    (peer, child)
+}
+
+fn spawn_module(mode: &str) -> (BufReader<PipeReader>, PipeWriter, OwnedChild) {
     let (reader, stdout) = io::pipe().unwrap();
+    let (stdin, writer) = io::pipe().unwrap();
     let mut command = Command::new("sh");
     command
         .args(["-c", r#"exec "$@" 3>&1 1>&2"#, "sh"])
         .arg(std::env::current_exe().unwrap())
         .args(["--exact", "module_fixture", "--nocapture"])
         .env(CHILD_MODE, mode)
-        .stdin(Stdio::piped())
+        .stdin(stdin)
         .stdout(stdout)
         .stderr(Stdio::null());
-    let mut child = OwnedChild::spawn(command).unwrap();
-    let peer = Peer::connect(
-        Side::Host,
-        BufReader::new(reader),
-        child.take_stdin().unwrap(),
-        handlers,
-    )
-    .unwrap();
-    (peer, child)
+    let child = OwnedChild::spawn(command).unwrap();
+    (BufReader::new(reader), writer, child)
 }
 
 #[test]
@@ -47,35 +48,37 @@ fn module_fixture() {
     };
     let mut output = OpenOptions::new().write(true).open("/dev/fd/3").unwrap();
     let mut input = BufReader::new(io::stdin());
-    if mode == "oversized" || mode == "wrong-prefix" {
-        let request = lsp_server::Message::read(&mut input).unwrap().unwrap();
-        assert!(
-            matches!(request, lsp_server::Message::Request(req) if req.id == "h:1".to_owned().into())
-        );
-        if mode == "oversized" {
-            output
+    if matches!(
+        mode.as_str(),
+        "oversized" | "wrong-prefix" | "duplicate-key"
+    ) {
+        let request = Message::read(&mut input).unwrap().unwrap();
+        assert!(matches!(request, Message::Request(req) if req.id == "h:1".to_owned().into()));
+        match mode.as_str() {
+            "oversized" => output
                 .write_all(b"Content-Length: 16777217\r\n\r\n")
-                .unwrap();
-            let _ = lsp_server::Message::read(&mut input);
-        } else {
-            lsp_server::Message::Response(lsp_server::Response::new_ok(
-                "m:1".to_owned().into(),
-                true,
-            ))
-            .write(&mut output)
-            .unwrap();
-            let _ = lsp_server::Message::read(&mut input);
+                .unwrap(),
+            "wrong-prefix" => Message::Response(Response::new_ok("m:1".to_owned().into(), true))
+                .write(&mut output)
+                .unwrap(),
+            "duplicate-key" => {
+                let json = r#"{"id":"h:1","result":[{"ready":false,"ready":true}]}"#;
+                write!(output, "Content-Length: {}\r\n\r\n{json}", json.len()).unwrap();
+            }
+            _ => unreachable!(),
         }
+        assert!(Message::read(&mut input).unwrap().is_none());
         return;
     }
     let mut handlers = Handlers::default();
     handlers.register("module.echo", |params, _, _| Ok(params));
     handlers.register("module.callback", |params, token, peer| {
         let reply = peer.call("host.echo", params, budget()).unwrap();
-        peer.notify("host.callback_done", json!([reply, token.is_cancelled()]))
+        peer.notify("host.finished", json!([reply, token.is_cancelled()]))
             .unwrap();
         Ok(reply)
     });
+    handlers.register("module.panic", |_, _, _| panic!("fixture handler panic"));
     let gates = Arc::new(Mutex::new(HashMap::new()));
     let waiting = gates.clone();
     handlers.register("module.gated", move |params, token, peer| {
@@ -99,10 +102,36 @@ fn module_fixture() {
         Ok(Value::Null)
     });
     handlers.register("module.exit", |_, _, _| std::process::exit(0));
-    Peer::connect(Side::Module, input, output, handlers)
-        .unwrap()
-        .wait()
-        .unwrap();
+    if mode == "cancellation" {
+        let (reader, writer) = io::pipe().unwrap();
+        let peer = Peer::connect(Side::Module, input, writer, handlers).unwrap();
+        let mut reader = BufReader::new(reader);
+        let mut finished = None;
+        while let Some(message) = Message::read(&mut reader).unwrap() {
+            if matches!(&message, Message::Notification(notification) if notification.method == "host.finished")
+            {
+                assert!(finished.replace(message).is_none());
+                continue;
+            }
+            message.write(&mut output).unwrap();
+            if let Message::Response(response) = &message
+                && let Some(Message::Notification(marker)) = &finished
+                && response.response_result.as_ref().ok() == marker.params.get(0)
+            {
+                finished.take().unwrap().write(&mut output).unwrap();
+            }
+        }
+        peer.wait().unwrap();
+    } else {
+        let result = Peer::connect(Side::Module, input, output, handlers)
+            .unwrap()
+            .wait();
+        if mode == "duplicate-id" {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        } else {
+            result.unwrap();
+        }
+    }
 }
 
 #[test]
@@ -154,12 +183,11 @@ fn cancellation_releases_the_waiter_before_the_handler_and_reaches_its_token() {
         finished.send(params).unwrap();
         Ok(Value::Null)
     });
-    let (peer, _child) = module("peer", handlers);
+    let (peer, _child) = module("cancellation", handlers);
     let host = peer.handle();
     let request = host.start_request("module.gated", json!(1)).unwrap();
     assert_eq!(starting.recv_timeout(budget()).unwrap(), json!(1));
-    request.canceller().cancel();
-    assert!(matches!(request.wait(budget()), Err(CallError::Cancelled)));
+    cancel_while_waiting(request, &host);
     host.call("module.release", json!(1), budget()).unwrap();
     assert_eq!(finishing.recv_timeout(budget()).unwrap(), json!([1, true]));
     assert_eq!(
@@ -180,19 +208,45 @@ fn cancelling_a_parent_does_not_block_an_active_callback() {
         gate.lock().unwrap().recv_timeout(budget()).unwrap();
         Ok(params)
     });
-    handlers.register("host.callback_done", move |params, _, _| {
+    handlers.register("host.finished", move |params, _, _| {
         finished.send(params).unwrap();
         Ok(Value::Null)
     });
-    let (peer, _child) = module("peer", handlers);
+    let (peer, _child) = module("cancellation", handlers);
     let host = peer.handle();
     let parent = host.start_request("module.callback", json!(5)).unwrap();
     starting.recv_timeout(budget()).unwrap();
-    parent.canceller().cancel();
-    assert!(matches!(parent.wait(budget()), Err(CallError::Cancelled)));
+    cancel_while_waiting(parent, &host);
     host.call("module.echo", json!(null), budget()).unwrap();
     release.send(()).unwrap();
     assert_eq!(finishing.recv_timeout(budget()).unwrap(), json!([5, true]));
+    assert_eq!(
+        host.call("module.echo", json!(6), budget()).unwrap(),
+        json!(6)
+    );
+}
+
+fn cancel_while_waiting(request: PendingRequest, host: &PeerHandle) {
+    let canceller = request.canceller();
+    let (entered, entering) = mpsc::channel();
+    let waiter = Observation::spawn(move |probe| {
+        probe.observe(|deadline| {
+            entered.send(()).unwrap();
+            request.wait(deadline.remaining())
+        });
+    });
+    let result = waiter.begin(
+        Deadline::after(test_timeout(Duration::from_secs(5))),
+        "cancelled waiter",
+    );
+    entering.recv_timeout(budget()).unwrap();
+    assert_eq!(
+        host.call("module.echo", json!("waiting"), budget())
+            .unwrap(),
+        json!("waiting")
+    );
+    canceller.cancel();
+    assert!(matches!(result.wait().unwrap(), Err(CallError::Cancelled)));
 }
 
 #[test]
@@ -222,9 +276,9 @@ fn child_exit_disconnects_every_waiter() {
 }
 
 #[test]
-fn invalid_response_prefix_and_oversized_frames_disconnect() {
-    for mode in ["wrong-prefix", "oversized"] {
-        let (peer, _child) = module(mode, Handlers::default());
+fn invalid_frames_disconnect_and_report_the_protocol_error() {
+    for mode in ["wrong-prefix", "oversized", "duplicate-key"] {
+        let (peer, mut child) = module(mode, Handlers::default());
         let host = peer.handle();
         assert!(
             matches!(
@@ -233,5 +287,88 @@ fn invalid_response_prefix_and_oversized_frames_disconnect() {
             ),
             "{mode}"
         );
+        assert_eq!(
+            peer.wait().unwrap_err().kind(),
+            io::ErrorKind::InvalidData,
+            "{mode}"
+        );
+        let exit = child
+            .wait_until(Deadline::after(test_timeout(Duration::from_secs(5))))
+            .unwrap();
+        assert!(exit.status.success(), "{mode}");
     }
+}
+
+#[test]
+fn an_unknown_method_cannot_reuse_an_in_flight_request_id() {
+    let (reader, writer, mut child) = spawn_module("duplicate-id");
+    let mut injection = writer.try_clone().unwrap();
+    let (started, starting) = mpsc::channel();
+    let mut handlers = Handlers::default();
+    handlers.register("host.started", move |_, _, _| {
+        started.send(()).unwrap();
+        Ok(Value::Null)
+    });
+    let peer = Peer::connect(Side::Host, reader, writer, handlers).unwrap();
+    let request = peer
+        .handle()
+        .start_request("module.gated", json!(1))
+        .unwrap();
+    starting.recv_timeout(budget()).unwrap();
+    Message::Request(Request::new(
+        "h:1".to_owned().into(),
+        "module.unknown".into(),
+        (),
+    ))
+    .write(&mut injection)
+    .unwrap();
+    drop(injection);
+    assert!(matches!(
+        request.wait(budget()),
+        Err(CallError::Disconnected)
+    ));
+    peer.wait().unwrap();
+    let exit = child
+        .wait_until(Deadline::after(test_timeout(Duration::from_secs(5))))
+        .unwrap();
+    assert!(exit.status.success());
+}
+
+#[test]
+fn a_panicking_handler_replies_with_internal_error_and_releases_its_id() {
+    let (mut reader, writer, child) = spawn_module("peer");
+    let responses = Observation::spawn(move |probe| {
+        while probe.observe(|_| Message::read(&mut reader).unwrap().unwrap()) {}
+    });
+    let (mut writer, mut child) = (writer, child);
+    let id = RequestId::from("h:1".to_owned());
+    for method in ["module.panic", "module.echo"] {
+        Message::Request(Request::new(id.clone(), method.into(), 7))
+            .write(&mut writer)
+            .unwrap();
+        let message = responses
+            .begin(
+                Deadline::after(test_timeout(Duration::from_secs(5))),
+                "handler response",
+            )
+            .wait()
+            .unwrap();
+        let Message::Response(response) = message else {
+            panic!("expected a response, got {message:?}");
+        };
+        assert_eq!(response.id, id);
+        if method == "module.panic" {
+            assert_eq!(
+                response.response_result.unwrap_err().code,
+                ErrorCode::InternalError as i32
+            );
+        } else {
+            assert_eq!(response.response_result.unwrap(), json!(7));
+        }
+    }
+    drop(writer);
+    let exit = child
+        .wait_until(Deadline::after(test_timeout(Duration::from_secs(5))))
+        .unwrap();
+    assert!(exit.status.success());
 }

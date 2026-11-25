@@ -1,11 +1,12 @@
 pub use lsp_server::{ErrorCode, ResponseError};
 
 use lsp_server::{Message, Notification, Request, RequestId, Response};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, hash_map::Entry},
     fmt,
-    io::{self, BufRead, Cursor, Read, Write},
+    io::{self, BufRead, Read, Write},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -126,6 +127,7 @@ pub struct PeerHandle {
 pub struct Peer {
     handle: PeerHandle,
     closed: mpsc::Receiver<io::Result<()>>,
+    threads: Option<(thread::JoinHandle<()>, thread::JoinHandle<()>)>,
 }
 
 impl Peer {
@@ -148,21 +150,33 @@ impl Peer {
             }))),
         };
         let output = handle.clone();
-        thread::Builder::new()
+        let writer = thread::Builder::new()
             .name("emp-peer-writer".into())
             .spawn(move || {
-                let result = output.write_loop(&mut writer, frames);
-                output.disconnect(result);
+                if let Err(error) = output.write_loop(&mut writer, frames) {
+                    output.disconnect(Err(error));
+                }
             })?;
         let input = handle.clone();
-        thread::Builder::new()
+        let reader = thread::Builder::new()
             .name("emp-peer-reader".into())
             .spawn(move || {
                 let result = input.read_loop(&mut reader, &handlers);
                 input.disconnect(result);
-            })
-            .inspect_err(|_| handle.close())?;
-        Ok(Self { handle, closed })
+            });
+        let reader = match reader {
+            Ok(reader) => reader,
+            Err(error) => {
+                handle.close();
+                let _ = writer.join();
+                return Err(error);
+            }
+        };
+        Ok(Self {
+            handle,
+            closed,
+            threads: Some((reader, writer)),
+        })
     }
 
     pub fn handle(&self) -> PeerHandle {
@@ -171,6 +185,14 @@ impl Peer {
 
     pub fn wait(self) -> io::Result<()> {
         self.closed.recv().map_err(io::Error::other)?
+    }
+
+    pub fn join(mut self) -> io::Result<()> {
+        let (reader, writer) = self.threads.take().unwrap();
+        let read = reader.join();
+        let write = writer.join();
+        read.and(write)
+            .map_err(|_| io::Error::other("peer I/O thread panicked"))
     }
 }
 
@@ -252,21 +274,41 @@ impl PeerHandle {
         writer: &mut impl Write,
         frames: mpsc::Receiver<Message>,
     ) -> io::Result<()> {
-        let mut frame = Vec::new();
+        #[derive(Serialize)]
+        struct JsonRpc<'a> {
+            jsonrpc: &'static str,
+            #[serde(flatten)]
+            message: &'a Message,
+        }
+
+        let mut body = Vec::new();
         for message in frames {
             if self.connection.lock().unwrap().is_none() {
                 break;
             }
-            frame.clear();
-            message.write(&mut frame)?;
-            if frame.len() > MAX_FRAME_BYTES {
+            body.clear();
+            serde_json::to_writer(
+                &mut body,
+                &JsonRpc {
+                    jsonrpc: "2.0",
+                    message: &message,
+                },
+            )?;
+            let header = format!("Content-Length: {}\r\n\r\n", body.len());
+            if header.len() + body.len() > MAX_FRAME_BYTES {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "invalid frame length",
                 ));
             }
-            writer.write_all(&frame)?;
-            writer.flush()?;
+            if writer
+                .write_all(header.as_bytes())
+                .and_then(|()| writer.write_all(&body))
+                .and_then(|()| writer.flush())
+                .is_err()
+            {
+                break;
+            }
         }
         Ok(())
     }
@@ -297,6 +339,12 @@ impl PeerHandle {
                 }
                 Message::Request(request) => {
                     self.side.opposite().check_id(&request.id)?;
+                    let Entry::Vacant(entry) = connection.incoming.entry(request.id.clone()) else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "duplicate request ID",
+                        ));
+                    };
                     let Some(handler) = handlers.0.get(&request.method).cloned() else {
                         let _ = connection.writer.send(
                             Response::new_err(
@@ -308,28 +356,17 @@ impl PeerHandle {
                         );
                         continue;
                     };
-                    let Entry::Vacant(entry) = connection.incoming.entry(request.id.clone()) else {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "duplicate request ID",
-                        ));
-                    };
                     let token = CancellationToken::default();
                     entry.insert(token.clone());
                     drop(state);
                     let peer = self.clone();
                     thread::Builder::new().spawn(move || {
-                        let response_result = handler(request.params, token, &peer);
-                        if let Some(connection) = peer.connection.lock().unwrap().as_mut() {
-                            connection.incoming.remove(&request.id);
-                            let _ = connection.writer.send(
-                                Response {
-                                    id: request.id,
-                                    response_result,
-                                }
-                                .into(),
-                            );
-                        }
+                        let mut reply = HandlerReply {
+                            peer,
+                            id: request.id,
+                            result: None,
+                        };
+                        reply.result = Some(handler(request.params, token, &reply.peer));
                     })?;
                 }
                 Message::Notification(notification) => {
@@ -345,6 +382,34 @@ impl PeerHandle {
             }
         }
         Ok(())
+    }
+}
+
+struct HandlerReply {
+    peer: PeerHandle,
+    id: RequestId,
+    result: Option<Result<Value, ResponseError>>,
+}
+
+impl Drop for HandlerReply {
+    fn drop(&mut self) {
+        if let Some(connection) = self.peer.connection.lock().unwrap().as_mut() {
+            connection.incoming.remove(&self.id);
+            let response_result = self.result.take().unwrap_or_else(|| {
+                Err(ResponseError {
+                    code: ErrorCode::InternalError as i32,
+                    message: "request handler panicked".into(),
+                    data: None,
+                })
+            });
+            let _ = connection.writer.send(
+                Response {
+                    id: self.id.clone(),
+                    response_result,
+                }
+                .into(),
+            );
+        }
     }
 }
 
@@ -436,12 +501,16 @@ fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<Message>> {
             }
         }
     }
-    if length.is_none_or(|length| length > MAX_FRAME_BYTES - headers.len()) {
+    let Some(length) = length.filter(|&length| length <= MAX_FRAME_BYTES - headers.len()) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "invalid frame length",
         ));
-    }
-    Message::read(&mut Cursor::new(headers).chain(reader))
-        .map_err(|error| io::Error::new(error.kind(), "cannot read peer frame"))
+    };
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body)?;
+    crate::strict_json::from_slice(&body)
+        .and_then(serde_json::from_value)
+        .map(Some)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "cannot read peer frame"))
 }

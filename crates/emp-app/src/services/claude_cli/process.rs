@@ -1,7 +1,8 @@
 //! Bounded CLI execution, cancellation and ownership of the child process tree.
 use super::cancellation::Cancellation;
+use crate::process_tree::ProcessTree;
 use std::io::{Read, Write};
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -81,17 +82,36 @@ fn run_with_timeout_policy(
 ) -> Result<Vec<u8>, &'static str> {
     let _permit = admission::acquire(cancelled, &mut cancellation_requested)?;
     thread::scope(|scope| {
-        let child = command.spawn().map_err(|_| "claude_cli_spawn_failed")?;
-        let mut tree = ChildTree::new(child)?;
+        #[cfg(windows)]
+        let creation_flags = windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP
+            | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        ProcessTree::configure(
+            &mut command,
+            #[cfg(windows)]
+            creation_flags,
+        );
+        let mut child = command.spawn().map_err(|_| "claude_cli_spawn_failed")?;
+        #[cfg(windows)]
+        use std::os::windows::io::AsRawHandle;
+        let tree = ProcessTree::attach(
+            child.id(),
+            #[cfg(windows)]
+            child.as_raw_handle(),
+        )
+        .map_err(|_| {
+            let _ = child.kill();
+            let _ = child.wait();
+            "claude_cli_process_tree_unavailable"
+        })?;
+        let mut child = ControlChild { child, tree };
         let (stdout, stderr, stdin) = match (
-            tree.child.stdout.take(),
-            tree.child.stderr.take(),
-            tree.child.stdin.take(),
+            child.child.stdout.take(),
+            child.child.stderr.take(),
+            child.child.stdin.take(),
         ) {
             (Some(stdout), Some(stderr), Some(stdin)) => (stdout, stderr, stdin),
             _ => {
-                tree.stop();
-                let _ = tree.wait();
+                let _ = child.stop();
                 return Err("claude_cli_pipe_failed");
             }
         };
@@ -105,7 +125,7 @@ fn run_with_timeout_policy(
         let mut cancellation_reason = None;
         let deadline = Instant::now() + timeout;
         loop {
-            match tree.child.try_wait() {
+            match child.child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) => {}
                 Err(_) => {
@@ -132,9 +152,7 @@ fn run_with_timeout_policy(
             )]
             thread::sleep(CHILD_POLL);
         }
-        // Stop descendants before joining pipes they may still hold open.
-        tree.stop();
-        let status = tree.wait().ok();
+        let status = child.stop().ok();
         let input_ok = input_task.join().unwrap_or(false);
         let stdout = stdout_task.join().unwrap_or_default();
         let stderr = stderr_task.join().unwrap_or_default();
@@ -161,6 +179,27 @@ fn run_with_timeout_policy(
         }
         Ok(stdout.bytes)
     })
+}
+
+struct ControlChild {
+    child: Child,
+    tree: ProcessTree,
+}
+
+impl ControlChild {
+    fn stop(&mut self) -> std::io::Result<ExitStatus> {
+        self.tree.terminate_gracefully();
+        let _ = self.child.kill();
+        self.child.wait()
+    }
+}
+
+impl Drop for ControlChild {
+    fn drop(&mut self) {
+        if !self.tree.is_stopped() {
+            let _ = self.stop();
+        }
+    }
 }
 
 fn drain_pipe<'scope, R: Read + Send + 'scope>(
@@ -200,105 +239,6 @@ fn drain_pipe<'scope, R: Read + Send + 'scope>(
             budget_exhausted,
         }
     })
-}
-
-struct ChildTree {
-    child: Child,
-    stopped: bool,
-    #[cfg(windows)]
-    job: windows_sys::Win32::Foundation::HANDLE,
-}
-
-impl ChildTree {
-    #[cfg_attr(
-        not(windows),
-        allow(
-            unused_mut,
-            reason = "Only Windows needs to kill and reap the child if job assignment fails"
-        )
-    )]
-    fn new(mut child: Child) -> Result<Self, &'static str> {
-        #[cfg(windows)]
-        {
-            use std::os::windows::io::AsRawHandle;
-            use windows_sys::Win32::System::JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW,
-            };
-            // SAFETY: Null security attributes and name are valid for an unnamed job.
-            let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-            // SAFETY: The null check guards the job handle; child owns the live process handle.
-            if job.is_null() || unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) } == 0
-            {
-                if !job.is_null() {
-                    // SAFETY: The failed assignment leaves this non-null job handle owned here.
-                    unsafe { windows_sys::Win32::Foundation::CloseHandle(job) };
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("claude_cli_process_tree_unavailable");
-            }
-            Ok(Self {
-                child,
-                stopped: false,
-                job,
-            })
-        }
-        #[cfg(not(windows))]
-        {
-            Ok(Self {
-                child,
-                stopped: false,
-            })
-        }
-    }
-
-    fn stop(&mut self) {
-        if self.stopped {
-            return;
-        }
-        self.stopped = true;
-        #[cfg(unix)]
-        // SAFETY: kill accepts scalar arguments; process_group(0) gives this child its own group.
-        unsafe {
-            libc::kill(-(self.child.id() as i32), libc::SIGTERM);
-        }
-        #[cfg(windows)]
-        if !self.job.is_null() {
-            // SAFETY: ChildTree owns this live job handle until Drop.
-            unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1) };
-        }
-        #[cfg(unix)]
-        {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "向进程组发送 SIGTERM 后保留既有宽限期，再发送 SIGKILL"
-            )]
-            thread::sleep(Duration::from_millis(100));
-            // SAFETY: kill accepts scalar arguments; the negative child ID targets its process group.
-            unsafe {
-                libc::kill(-(self.child.id() as i32), libc::SIGKILL);
-            }
-        }
-        let _ = self.child.kill();
-    }
-
-    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        self.child.wait()
-    }
-}
-
-impl Drop for ChildTree {
-    fn drop(&mut self) {
-        if !self.stopped {
-            self.stop();
-            let _ = self.child.wait();
-        }
-        #[cfg(windows)]
-        if !self.job.is_null() {
-            // SAFETY: ChildTree owns this job handle and closes it exactly once here.
-            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
-        }
-    }
 }
 
 #[cfg(all(test, unix))]

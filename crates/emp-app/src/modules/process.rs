@@ -1,3 +1,4 @@
+use crate::process_tree::ProcessTree;
 use emp_modules::{
     manifest::{HOST_API_V3, HostApi, ManifestError, ModuleManifest},
     peer::{CallError, Handlers, Peer, PeerHandle, Side},
@@ -7,14 +8,15 @@ use std::{
     fmt, io,
     io::BufReader,
     path::Path,
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
     time::Duration,
 };
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinHandle};
 
 pub struct ModuleProcess {
-    peer: Peer,
+    connection: PeerHandle,
     shutdown: oneshot::Sender<()>,
+    exit: JoinHandle<io::Result<ExitStatus>>,
 }
 
 #[derive(Debug)]
@@ -64,11 +66,11 @@ impl ModuleProcess {
         .map_err(|error| StartError::Io(io::Error::new(io::ErrorKind::InvalidInput, error)))?;
         let (module_stdin, writer) = io::pipe().map_err(StartError::Io)?;
         let (reader, module_stdout) = io::pipe().map_err(StartError::Io)?;
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-        }
+        ProcessTree::configure(
+            &mut command,
+            #[cfg(windows)]
+            windows_sys::Win32::System::Threading::CREATE_NO_WINDOW,
+        );
         command
             .stdin(module_stdin)
             .stdout(module_stdout)
@@ -77,23 +79,48 @@ impl ModuleProcess {
             .kill_on_drop(true)
             .spawn()
             .map_err(StartError::Io)?;
+        let mut tree = match ProcessTree::attach(
+            child.id().unwrap(),
+            #[cfg(windows)]
+            child.raw_handle().unwrap(),
+        ) {
+            Ok(tree) => tree,
+            Err(error) => {
+                let _ = child.kill().await;
+                return Err(StartError::Io(error));
+            }
+        };
         let peer = match Peer::connect(Side::Host, BufReader::new(reader), writer, handlers) {
             Ok(peer) => peer,
             Err(error) => {
-                let _ = child.kill().await;
+                tree.terminate();
+                let _ = child.wait().await;
                 return Err(StartError::Io(error));
             }
         };
         let connection = peer.handle();
         let (shutdown, stopping) = oneshot::channel();
         let exit = tokio::spawn(async move {
-            tokio::select! {
-                _ = child.wait() => {}
-                _ = stopping => { let _ = child.kill().await; }
-            }
-            connection.close();
+            let status = tokio::select! {
+                status = child.wait() => {
+                    tree.terminate();
+                    status
+                }
+                _ = stopping => {
+                    tree.terminate();
+                    child.wait().await
+                }
+            };
+            tokio::task::spawn_blocking(move || peer.join())
+                .await
+                .map_err(io::Error::other)??;
+            status
         });
-        let process = Self { peer, shutdown };
+        let process = Self {
+            connection,
+            shutdown,
+            exit,
+        };
         let connection = process.connection();
         let result = tokio::task::spawn_blocking(move || {
             let value = connection
@@ -107,18 +134,23 @@ impl ModuleProcess {
             Ok(manifest)
         })
         .await
-        .map_err(|error| StartError::Io(io::Error::other(error)))?;
+        .map_err(|error| StartError::Io(io::Error::other(error)))
+        .and_then(|result| result);
         match result {
             Ok(manifest) => Ok((process, manifest)),
             Err(error) => {
-                let _ = process.shutdown.send(());
-                let _ = exit.await;
+                let _ = process.stop().await;
                 Err(error)
             }
         }
     }
 
     pub fn connection(&self) -> PeerHandle {
-        self.peer.handle()
+        self.connection.clone()
+    }
+
+    pub async fn stop(self) -> io::Result<ExitStatus> {
+        let _ = self.shutdown.send(());
+        self.exit.await.map_err(io::Error::other)?
     }
 }

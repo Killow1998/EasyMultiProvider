@@ -86,6 +86,23 @@ fn manifest_rejects_unknown_fields_and_enum_values() {
 }
 
 #[test]
+fn manifest_rejects_repeated_id_and_host_api_major() {
+    for (field, duplicate) in [
+        (
+            r#""id": "example-module""#,
+            r#""id": "other", "id": "example-module""#,
+        ),
+        (r#""major": 3"#, r#""major": 2, "major": 3"#),
+    ] {
+        let input = MANIFEST_JSON.replace(field, duplicate);
+        assert!(
+            ModuleManifest::from_json(input.as_bytes()).is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
 fn manifest_requires_named_objects_and_string_tags() {
     let original = serde_json::from_str::<Value>(MANIFEST_JSON).unwrap();
     for (pointer, value) in [

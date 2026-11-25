@@ -5,6 +5,7 @@ mod error;
 mod http;
 mod lifecycle;
 pub mod modules;
+mod process_tree;
 mod proxy {
     pub(crate) mod workflow;
 }

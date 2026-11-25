@@ -227,9 +227,10 @@ impl std::error::Error for ManifestError {}
 
 impl ModuleManifest {
     pub fn from_json(bytes: &[u8]) -> Result<Self, ManifestDecodeError> {
-        Self::from_value(serde_json::from_slice(bytes).map_err(ManifestDecodeError::Json)?)
+        Self::from_value(crate::strict_json::from_slice(bytes).map_err(ManifestDecodeError::Json)?)
     }
 
+    /// Use a value from an input parsed with duplicate keys rejected, such as a control frame.
     pub fn from_value(value: Value) -> Result<Self, ManifestDecodeError> {
         #[derive(Deserialize)]
         #[serde(remote = "ModuleManifest", deny_unknown_fields)]
