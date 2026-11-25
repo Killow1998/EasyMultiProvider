@@ -46,7 +46,7 @@ jobs:
           cargo +1.93.1 test --locked -p emp-codex --lib executable_trust::
           cargo +1.93.1 test --locked -p emp-app --lib browser_login_classifies_engine_failures
           cargo +1.93.1 test --locked -p emp-app --lib tray::actions::tests
-          cargo +1.93.1 test --locked -p emp-app --test desktop_startup --test exit_process
+          cargo +1.93.1 test --locked -p emp-app --test desktop_startup --test exit_process --test http_support
       - name: Probe the official standalone CLI
         run: |
           prefix="$RUNNER_TEMP/emp-official-cli"

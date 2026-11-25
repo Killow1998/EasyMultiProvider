@@ -2,7 +2,7 @@ use super::super::{POLL_INTERVAL, poll_pause};
 use crate::{Deadline, fixture_root};
 use std::{
     fs::File,
-    io::{Read, Seek},
+    io::{self, Read, Seek},
     process::{Command, Output, Stdio},
 };
 
@@ -40,10 +40,25 @@ pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
             Err(error) => break Err(error),
         }
     };
-    if status.is_err() {
-        let _ = child.kill();
-        child.wait().expect("reap isolated test");
-    }
+    let status = status.map_err(|error| match child.kill() {
+        Ok(()) => {
+            child.wait().expect("reap isolated test");
+            error
+        }
+        Err(kill_error) => match child.try_wait() {
+            Ok(Some(_)) => error,
+            Ok(None) => io::Error::new(
+                kill_error.kind(),
+                format!("terminate isolated test: {kill_error}"),
+            ),
+            Err(wait_error) => io::Error::new(
+                kill_error.kind(),
+                format!(
+                    "terminate isolated test: {kill_error}\ncheck isolated test exit: {wait_error}"
+                ),
+            ),
+        },
+    });
 
     let stdout = read_output(stdout);
     let stderr = read_output(stderr);
@@ -83,9 +98,11 @@ pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
 }
 
 fn read_output(mut file: File) -> Vec<u8> {
+    let length = file.metadata().expect("isolated test output length").len();
     file.rewind().expect("rewind isolated test output");
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    file.take(length)
+        .read_to_end(&mut bytes)
         .expect("read isolated test output");
     bytes
 }

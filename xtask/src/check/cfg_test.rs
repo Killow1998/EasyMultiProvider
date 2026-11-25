@@ -87,32 +87,6 @@ struct TestCfg<'ast> {
 }
 
 impl<'ast> TestCfg<'ast> {
-    fn inspect_macro_tokens(&mut self, tokens: TokenStream) {
-        let mut tokens = tokens.into_iter().peekable();
-        while let Some(token) = tokens.next() {
-            match token {
-                TokenTree::Punct(punct) if punct.as_char() == '#' => {
-                    if matches!(tokens.peek(), Some(TokenTree::Punct(punct)) if punct.as_char() == '!')
-                    {
-                        tokens.next();
-                    }
-                    if let Some(TokenTree::Group(group)) =
-                        tokens.next_if(|token| matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket))
-                        && let Ok(meta) = syn::parse2::<Meta>(group.stream())
-                        && condition_mentions_test(&meta)
-                    {
-                        self.findings.count += 1;
-                        if !self.test_scope {
-                            self.findings.non_item_lines.push(punct.span().start().line);
-                        }
-                    }
-                }
-                TokenTree::Group(group) => self.inspect_macro_tokens(group.stream()),
-                _ => {}
-            }
-        }
-    }
-
     fn visit_declaration<T>(
         &mut self,
         item: &'ast T,
@@ -219,27 +193,63 @@ impl<'ast> Visit<'ast> for TestCfg<'ast> {
     }
 
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        self.inspect_macro_tokens(invocation.tokens.clone());
+        visit_macro_attributes(invocation.tokens.clone(), &mut |meta, line| {
+            if condition_mentions_test(meta) {
+                self.findings.count += 1;
+                if !self.test_scope {
+                    self.findings.non_item_lines.push(line);
+                }
+            }
+        });
     }
 }
 
+pub(super) fn visit_macro_attributes(tokens: TokenStream, visit: &mut impl FnMut(&Meta, usize)) {
+    let mut tokens = tokens.into_iter().peekable();
+    while let Some(token) = tokens.next() {
+        match token {
+            TokenTree::Punct(punct) if punct.as_char() == '#' => {
+                tokens.next_if(
+                    |token| matches!(token, TokenTree::Punct(punct) if punct.as_char() == '!'),
+                );
+                if let Some(TokenTree::Group(group)) =
+                    tokens.next_if(|token| matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket))
+                    && let Ok(meta) = syn::parse2::<Meta>(group.stream())
+                {
+                    visit(&meta, punct.span().start().line);
+                }
+            }
+            TokenTree::Group(group) => visit_macro_attributes(group.stream(), visit),
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn registers_test(meta: &Meta) -> bool {
+    test_scope::is_test_attribute(meta.path())
+        || cfg_attr_parts(meta).is_some_and(|parts| parts.iter().skip(1).any(registers_test))
+}
+
+fn cfg_attr_parts(meta: &Meta) -> Option<Punctuated<Meta, Token![,]>> {
+    let Meta::List(list) = meta else { return None };
+    if !list.path.is_ident("cfg_attr") {
+        return None;
+    }
+    list.parse_args_with(Punctuated::parse_terminated).ok()
+}
+
 fn condition_mentions_test(meta: &Meta) -> bool {
-    let Meta::List(list) = meta else {
-        return false;
-    };
-    if list.path.is_ident("cfg") {
+    if let Meta::List(list) = meta
+        && list.path.is_ident("cfg")
+    {
         return list
             .parse_args::<Meta>()
             .is_ok_and(|meta| predicate_mentions_test(&meta));
     }
-    if list.path.is_ident("cfg_attr")
-        && let Ok(parts) = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-    {
+    cfg_attr_parts(meta).is_some_and(|parts| {
         let mut parts = parts.iter();
-        return parts.next().is_some_and(predicate_mentions_test)
-            || parts.any(condition_mentions_test);
-    }
-    false
+        parts.next().is_some_and(predicate_mentions_test) || parts.any(condition_mentions_test)
+    })
 }
 
 fn predicate_mentions_test(meta: &Meta) -> bool {

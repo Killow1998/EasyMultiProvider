@@ -27,7 +27,7 @@ pub fn run(args: &[String]) -> Result {
     }
     let root = project_root();
     let mut errors = Vec::new();
-    let test_scopes = arch::check(&root, &mut errors)?;
+    let (test_scopes, app_tests) = arch::check(&root, &mut errors)?;
     modules::check(&root, &mut errors)?;
     let list_files = [
         "ls-files",
@@ -58,13 +58,17 @@ pub fn run(args: &[String]) -> Result {
             test_boundary(&path, &bytes, &mut errors);
         } else if prose::includes(&path) {
             prose::check(&path, &read(&root, &path)?, &mut errors);
-        } else if path.starts_with(".github/workflows/") && path.ends_with(".yml") {
-            workflows::check(&path, &read(&root, &path)?, &mut errors);
+        } else if path.starts_with(".github/workflows/")
+            && (path.ends_with(".yml") || path.ends_with(".yaml"))
+        {
+            let contents = read(&root, &path)?;
+            workflows::check(&path, &contents, &mut errors);
+            workflows::check_test_targets(&path, &contents, &app_tests, &mut errors);
         }
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
+            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, workflow-test-targets, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
         );
         Ok(())
     } else {
@@ -152,20 +156,26 @@ fn shared_test_module(path: &str, source: &str, errors: &mut Vec<String>) -> Res
         errors: &'a mut Vec<String>,
     }
 
-    impl<'ast> Visit<'ast> for TestAttributes<'_> {
-        fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
-            let path = attribute.path();
-            if path.is_ident("test")
-                || (path.segments.len() == 2
-                    && path.segments[0].ident == "tokio"
-                    && path.segments[1].ident == "test")
-            {
+    impl TestAttributes<'_> {
+        fn check(&mut self, meta: &syn::Meta, line: usize) {
+            if cfg_test::registers_test(meta) {
                 let file = self.file;
-                let line = attribute.span().start().line;
                 self.errors.push(format!(
                     "[shared-test-module] {file}:{line}: 共享测试辅助模块不能注册用例；请将用例移到独立的集成测试目标"
                 ));
             }
+        }
+    }
+
+    impl<'ast> Visit<'ast> for TestAttributes<'_> {
+        fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
+            self.check(&attribute.meta, attribute.span().start().line);
+        }
+
+        fn visit_macro(&mut self, invocation: &'ast Macro) {
+            cfg_test::visit_macro_attributes(invocation.tokens.clone(), &mut |meta, line| {
+                self.check(meta, line);
+            });
         }
     }
 
@@ -202,6 +212,44 @@ const TEXT: &str = "#[test]";
         assert_eq!(errors.len(), 2);
         assert!(errors[0].starts_with(&format!("[shared-test-module] {path}:1:")));
         assert!(errors[1].starts_with(&format!("[shared-test-module] {path}:4:")));
+    }
+
+    #[test]
+    fn rejects_test_attributes_in_shared_macros() {
+        let source = r##"macro_rules! cases {
+    () => {
+        #[test]
+        fn sync_case() {}
+        #[tokio::test]
+        async fn async_case() {}
+    };
+}
+cases!();
+trace!("#[test]");
+"##;
+        let path = "crates/example/tests/support/cases.rs";
+        let mut errors = Vec::new();
+        shared_test_module(path, source, &mut errors).unwrap();
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].starts_with(&format!("[shared-test-module] {path}:3:")));
+        assert!(errors[1].starts_with(&format!("[shared-test-module] {path}:5:")));
+    }
+
+    #[test]
+    fn rejects_conditional_test_attributes_in_shared_modules() {
+        let source = r#"#[cfg_attr(windows, test)]
+fn sync_case() {}
+#[cfg_attr(any(unix, windows), allow(dead_code), tokio::test)]
+async fn async_case() {}
+#[cfg_attr(test, allow(dead_code))]
+fn helper() {}
+"#;
+        let path = "crates/example/tests/support/cases.rs";
+        let mut errors = Vec::new();
+        shared_test_module(path, source, &mut errors).unwrap();
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].starts_with(&format!("[shared-test-module] {path}:1:")));
+        assert!(errors[1].starts_with(&format!("[shared-test-module] {path}:3:")));
     }
 
     #[test]

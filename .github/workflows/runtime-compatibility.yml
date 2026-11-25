@@ -96,4 +96,4 @@ jobs:
             New-ItemProperty -Path $consoleKey -Name $setting -PropertyType String -Value '{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}' -Force | Out-Null
           }
       - name: Verify console close and session end using isolated EMP processes
-        run: cargo test --locked -p emp-app --test exit_process
+        run: cargo test --locked -p emp-app --test exit_process --test http_support
