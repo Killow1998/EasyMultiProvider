@@ -87,7 +87,7 @@ const FORBIDDEN: &[(&str, &str, &str)] = &[
 /// Forbidden paths that still exist until the named PLAN step removes them.
 const TRANSITIONAL: &[(&str, &str, &str)] = &[];
 
-pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result {
+pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result<test_scope::Index> {
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .current_dir(root)
         .args([
@@ -109,6 +109,7 @@ pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result {
     let metadata: Value = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("[arch] cargo metadata JSON: {error}"))?;
     dependencies(&metadata, TRANSITIONAL, errors)?;
+    let mut test_scopes = test_scope::Index::default();
     for package in workspace_packages(&metadata)? {
         let directory = package["manifest_path"]
             .as_str()
@@ -117,12 +118,21 @@ pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result {
         let targets = package["targets"]
             .as_array()
             .ok_or("[arch] package 缺少 targets")?;
-        let files = targets
-            .iter()
-            .filter_map(|target| target["src_path"].as_str().map(Path::new));
-        module_paths::check(root, directory, files, errors)?;
+        let files = targets.iter().filter_map(|target| {
+            use test_scope::SourceKind;
+            let file = Path::new(target["src_path"].as_str()?);
+            let kind = if target["kind"].as_array()?.iter().any(|kind| kind == "test") {
+                SourceKind::Integration
+            } else if package["name"] == "emp-test-support" {
+                SourceKind::Fixture
+            } else {
+                SourceKind::Production
+            };
+            Some((file, kind))
+        });
+        module_paths::check(root, directory, files, &mut test_scopes, errors)?;
     }
-    Ok(())
+    Ok(test_scopes)
 }
 
 fn workspace_packages(metadata: &Value) -> Result<impl Iterator<Item = &Value>> {

@@ -1,81 +1,36 @@
-use super::{Result, comments};
+use super::{Result, test_scope::TestScopes};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::{
-    Attribute, Expr, ImplItem, Item, Lit, Meta, Token,
+    ImplItem, Item,
     ext::IdentExt as _,
-    punctuated::Punctuated,
+    spanned::Spanned,
     visit::{self, Visit},
 };
 
-pub(super) fn check(path: &str, source: &str, errors: &mut Vec<String>) -> Result {
+pub(super) fn check(
+    path: &str,
+    source: &str,
+    scopes: &TestScopes,
+    errors: &mut Vec<String>,
+) -> Result {
     if !path.ends_with(".rs") || !source.contains("Drop") {
         return Ok(());
     }
     let source = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
     DropImpls {
-        test_scope: comments::test_file(path) || path.starts_with("crates/emp-test-support/src/"),
+        scopes,
         body: DropBody { path, errors },
     }
     .visit_file(&source);
     Ok(())
 }
 
-fn fixture_attribute(attr: &Attribute) -> bool {
-    comments::test_only_attribute(attr)
-        || (attr.path().is_ident("cfg")
-            && attr
-                .parse_args::<Meta>()
-                .is_ok_and(|meta| fixture_cfg(&meta)))
-}
-
-fn fixture_cfg(meta: &Meta) -> bool {
-    match meta {
-        Meta::Path(path) => path.is_ident("test"),
-        Meta::NameValue(value) => {
-            value.path.is_ident("feature")
-                && matches!(&value.value, Expr::Lit(expr) if matches!(&expr.lit, Lit::Str(feature) if feature.value() == "test-support"))
-        }
-        Meta::List(list) => {
-            let Ok(parts) = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-            else {
-                return false;
-            };
-            if list.path.is_ident("all") {
-                parts.iter().any(fixture_cfg)
-            } else {
-                list.path.is_ident("any") && !parts.is_empty() && parts.iter().all(fixture_cfg)
-            }
-        }
-    }
-}
-
 struct DropImpls<'a> {
-    test_scope: bool,
+    scopes: &'a TestScopes,
     body: DropBody<'a>,
 }
 
 impl<'ast> Visit<'ast> for DropImpls<'_> {
-    fn visit_file(&mut self, file: &'ast syn::File) {
-        self.test_scope |= file.attrs.iter().any(fixture_attribute);
-        visit::visit_file(self, file);
-    }
-
-    fn visit_item(&mut self, item: &'ast Item) {
-        let attrs = match item {
-            Item::Const(item) => &item.attrs,
-            Item::Fn(item) => &item.attrs,
-            Item::Impl(item) => &item.attrs,
-            Item::Mod(item) => &item.attrs,
-            Item::Static(item) => &item.attrs,
-            Item::Trait(item) => &item.attrs,
-            _ => return,
-        };
-        let previous = self.test_scope;
-        self.test_scope |= attrs.iter().any(fixture_attribute);
-        visit::visit_item(self, item);
-        self.test_scope = previous;
-    }
-
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
         if item.trait_.as_ref().is_some_and(|(_, path, _)| {
             path.segments
@@ -85,7 +40,7 @@ impl<'ast> Visit<'ast> for DropImpls<'_> {
             for member in &item.items {
                 if let ImplItem::Fn(method) = member
                     && method.sig.ident == "drop"
-                    && (self.test_scope || method.attrs.iter().any(fixture_attribute))
+                    && self.scopes.contains(method.block.span().start().line)
                 {
                     self.body.visit_block(&method.block);
                 }
@@ -105,7 +60,7 @@ impl DropBody<'_> {
         let path = self.path;
         let line = ident.span().start().line;
         self.errors.push(format!(
-            "[test-drop] {path}:{line}: 测试夹具的 Drop 不能直接调用 {ident}；使用 emp_test_support::drop_check"
+            "[test-drop] {path}:{line}: 测试夹具的 Drop 不能直接调用 {ident}；使用 emp_test_support::drop_check 或 join_check"
         ));
     }
 

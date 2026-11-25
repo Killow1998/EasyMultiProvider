@@ -1,4 +1,7 @@
-use super::{Path, Result, fs};
+use super::{
+    Path, Result, fs,
+    test_scope::{Index, SourceKind},
+};
 use std::{
     collections::BTreeSet,
     path::{Component, PathBuf},
@@ -8,46 +11,65 @@ use syn::{Expr, Lit, LitStr, Meta, ext::IdentExt, punctuated::Punctuated, visit:
 pub(super) fn check<'a>(
     root: &Path,
     crate_dir: &Path,
-    targets: impl Iterator<Item = &'a Path>,
+    targets: impl Iterator<Item = (&'a Path, SourceKind)>,
+    test_scopes: &mut Index,
     errors: &mut Vec<String>,
 ) -> Result {
     let mut sources = CrateSources {
         root,
+        resolved_root: resolve(root),
         crate_dir: crate_dir
             .canonicalize()
             .map_err(|error| format!("{}: {error}", crate_dir.display()))?,
         visited: BTreeSet::new(),
+        test_scopes,
         errors,
     };
-    for target in targets {
-        sources.visit_file(target, None);
+    for (target, kind) in targets {
+        sources.visit_file(target, None, kind);
     }
     Ok(())
 }
 
 struct CrateSources<'a> {
     root: &'a Path,
+    resolved_root: PathBuf,
     crate_dir: PathBuf,
-    visited: BTreeSet<(PathBuf, Option<String>)>,
+    visited: BTreeSet<(PathBuf, Option<String>, SourceKind)>,
+    test_scopes: &'a mut Index,
     errors: &'a mut Vec<String>,
 }
 
 impl CrateSources<'_> {
-    fn visit_file(&mut self, file: &Path, module: Option<String>) {
-        if !file.is_file() || !self.visited.insert((resolve(file), module.clone())) {
+    fn visit_file(&mut self, file: &Path, module: Option<String>, kind: SourceKind) {
+        if !file.is_file() {
+            return;
+        }
+        let resolved = resolve(file);
+        if !self
+            .visited
+            .insert((resolved.clone(), module.clone(), kind))
+        {
             return;
         }
         let source = fs::read_to_string(file)
             .map_err(|error| error.to_string())
             .and_then(|source| syn::parse_file(&source).map_err(|error| error.to_string()));
         match source {
-            Ok(source) => ModulePaths {
-                sources: self,
-                file,
-                directory: file.parent().expect("absolute Rust source path"),
-                module,
+            Ok(source) => {
+                let kind = kind.in_test(&source.attrs);
+                if let Ok(path) = resolved.strip_prefix(&self.resolved_root) {
+                    self.test_scopes.record(path, &source, kind);
+                }
+                ModulePaths {
+                    sources: self,
+                    file,
+                    directory: file.parent().expect("absolute Rust source path"),
+                    module,
+                    kind,
+                }
+                .visit_file(&source);
             }
-            .visit_file(&source),
             Err(error) => self.errors.push(format!(
                 "[module-paths] {}: {error}",
                 file.strip_prefix(self.root).unwrap_or(file).display()
@@ -61,10 +83,12 @@ struct ModulePaths<'a, 'source> {
     file: &'a Path,
     directory: &'a Path,
     module: Option<String>,
+    kind: SourceKind,
 }
 
 impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        let kind = self.kind.in_test(&item.attrs);
         let mut explicit = Vec::new();
         for attr in &item.attrs {
             path_attributes(&attr.meta, &mut explicit);
@@ -102,9 +126,9 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
             } else {
                 for target in targets {
                     if let Some((_, items)) = &item.content {
-                        self.visit_inline(&target, items);
+                        self.visit_inline(&target, items, kind);
                     } else {
-                        self.sources.visit_file(&target, None);
+                        self.sources.visit_file(&target, None, kind);
                     }
                 }
             }
@@ -120,22 +144,23 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
         let name = item.ident.unraw().to_string();
         let child = directory.join(&name);
         if let Some((_, items)) = &item.content {
-            self.visit_inline(&child, items);
+            self.visit_inline(&child, items, kind);
         } else {
             self.sources
-                .visit_file(&child.with_extension("rs"), Some(name));
-            self.sources.visit_file(&child.join("mod.rs"), None);
+                .visit_file(&child.with_extension("rs"), Some(name), kind);
+            self.sources.visit_file(&child.join("mod.rs"), None, kind);
         }
     }
 }
 
 impl ModulePaths<'_, '_> {
-    fn visit_inline(&mut self, directory: &Path, items: &[syn::Item]) {
+    fn visit_inline(&mut self, directory: &Path, items: &[syn::Item], kind: SourceKind) {
         let mut visitor = ModulePaths {
             sources: self.sources,
             file: self.file,
             directory,
             module: None,
+            kind,
         };
         for item in items {
             visitor.visit_item(item);
@@ -222,7 +247,8 @@ mod nested {
         check(
             root.path(),
             &crate_dir,
-            std::iter::once(entry.as_path()),
+            std::iter::once((entry.as_path(), SourceKind::Production)),
+            &mut Index::default(),
             &mut errors,
         )
         .unwrap();
@@ -258,7 +284,8 @@ mod nested {
         check(
             root.path(),
             &crate_dir,
-            std::iter::once(entry.as_path()),
+            std::iter::once((entry.as_path(), SourceKind::Production)),
+            &mut Index::default(),
             &mut errors,
         )
         .unwrap();
@@ -296,7 +323,8 @@ mod nested {
         check(
             root.path(),
             &crate_dir,
-            std::iter::once(entry.as_path()),
+            std::iter::once((entry.as_path(), SourceKind::Production)),
+            &mut Index::default(),
             &mut errors,
         )
         .unwrap();
@@ -333,7 +361,8 @@ mod nested {
         check(
             root.path(),
             &crate_dir,
-            [entry.as_path()].into_iter(),
+            [(entry.as_path(), SourceKind::Production)].into_iter(),
+            &mut Index::default(),
             &mut errors,
         )
         .unwrap();

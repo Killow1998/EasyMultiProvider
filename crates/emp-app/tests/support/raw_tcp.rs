@@ -84,10 +84,17 @@ pub fn websocket_frame(first: u8, mask: Option<[u8; 4]>, payload: &[u8]) -> Vec<
 pub async fn read_websocket_frame(
     io: &mut (impl AsyncRead + Unpin),
     masked: bool,
-    deadline: &Deadline,
+    turn_deadline: &Deadline,
 ) -> (u8, Vec<u8>) {
+    let first = timeout(turn_deadline.remaining(), io.read_u8())
+        .await
+        .expect("WebSocket frame start before deadline")
+        .unwrap();
+    let first = turn_deadline
+        .accept(first, "WebSocket frame start")
+        .unwrap();
+    let deadline = turn_deadline.capped(wire_timeout());
     let frame = timeout(deadline.remaining(), async {
-        let first = io.read_u8().await.unwrap();
         let header = io.read_u8().await.unwrap();
         assert_eq!(header & 0x80 != 0, masked);
         let length = match header & 0x7f {

@@ -68,7 +68,7 @@ impl Drop for Upstream {
             self.worker.take().ok_or("missing worker"),
             "join upstream",
         ) {
-            emp_test_support::drop_check(worker.join(), "join upstream");
+            emp_test_support::join_check(worker, "join upstream");
         }
     }
 }

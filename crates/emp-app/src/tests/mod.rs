@@ -731,7 +731,7 @@ impl Drop for OneShotUpstream {
                     b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
                 );
             }
-            emp_test_support::drop_check(worker.join(), "join upstream");
+            emp_test_support::join_check(worker, "join upstream");
         }
     }
 }

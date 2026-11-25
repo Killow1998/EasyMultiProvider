@@ -1,3 +1,6 @@
+#[cfg(unix)]
+mod raw_tcp;
+
 use super::{
     connection::{ConnectionContext, drive},
     head::RawRequestHead,

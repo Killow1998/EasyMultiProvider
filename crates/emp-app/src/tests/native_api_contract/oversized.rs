@@ -97,7 +97,7 @@ fn accept_fixture_connection(listener: &TcpListener) -> Option<TcpStream> {
 impl Drop for NativeTooLargeFallbackUpstream {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
-            emp_test_support::drop_check(worker.join(), "join upstream");
+            emp_test_support::join_check(worker, "join upstream");
         }
     }
 }

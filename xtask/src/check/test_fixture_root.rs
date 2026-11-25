@@ -1,4 +1,9 @@
-use super::{Path, Result, comments, imports::Imports, macro_arguments, read};
+use super::{
+    Path, Result,
+    imports::Imports,
+    macro_arguments, read,
+    test_scope::{Index, TestScopes},
+};
 use std::collections::BTreeMap;
 use syn::{
     Expr, Pat,
@@ -23,7 +28,12 @@ const PRODUCTION_ROOTS: &[(&str, usize)] = &[
 const FIXTURE_ROOT_GUIDANCE: &str = "临时夹具使用 emp_test_support::fixture_dir 或 fixture_root";
 const PRODUCTION_ROOT_GUIDANCE: &str = "显式传入目录，或将生产用途加入 PRODUCTION_ROOTS";
 
-pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
+pub(super) fn check(
+    root: &Path,
+    paths: &[String],
+    scopes: &Index,
+    errors: &mut Vec<String>,
+) -> Result {
     for path in paths.iter().filter(|path| {
         (path.starts_with("crates/") && !path.starts_with("crates/emp-mod-")
             || path.starts_with("xtask/")
@@ -33,22 +43,25 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
         if !root.join(path).is_file() {
             continue;
         }
-        for (line, guidance) in violations(path, &read(root, path)?)? {
+        for (line, guidance) in inspect_scoped(path, &read(root, path)?, scopes.get(path))? {
             errors.push(format!("[test-fixture-root] {path}:{line}: {guidance}"));
         }
     }
     Ok(())
 }
 
-fn violations(path: &str, contents: &str) -> Result<Vec<(usize, &'static str)>> {
+fn inspect_scoped(
+    path: &str,
+    contents: &str,
+    scopes: &TestScopes,
+) -> Result<Vec<(usize, &'static str)>> {
     if !contents.contains("temp") && !contents.contains("Temp") {
         return Ok(Vec::new());
     }
     let file = syn::parse_file(contents).map_err(|error| format!("{path}: {error}"))?;
     let mut visitor = FixtureRoots {
-        test_file: comments::test_file(path),
         xtask: path.starts_with("xtask/"),
-        scopes: comments::TestScopes::default(),
+        scopes,
         imports: Imports::file(path, &file.items),
         builder_bindings: Vec::new(),
         production_roots_remaining: PRODUCTION_ROOTS
@@ -57,17 +70,13 @@ fn violations(path: &str, contents: &str) -> Result<Vec<(usize, &'static str)>> 
             .unwrap_or_default(),
         violations: Vec::new(),
     };
-    if !visitor.test_file {
-        visitor.scopes.visit_file(&file);
-    }
     visitor.visit_file(&file);
     Ok(visitor.violations)
 }
 
 struct FixtureRoots<'source> {
-    test_file: bool,
     xtask: bool,
-    scopes: comments::TestScopes,
+    scopes: &'source TestScopes,
     imports: Imports<'source>,
     builder_bindings: Vec<BTreeMap<String, bool>>,
     production_roots_remaining: usize,
@@ -126,7 +135,7 @@ impl FixtureRoots<'_> {
     }
 
     fn in_test(&self, line: usize) -> bool {
-        self.test_file || self.scopes.contains(line)
+        self.scopes.contains(line)
     }
 
     fn uses_implicit_root(&mut self, line: usize) {
@@ -286,6 +295,14 @@ impl<'ast> Visit<'ast> for FixtureRoots<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn violations(path: &str, contents: &str) -> Result<Vec<(usize, &'static str)>> {
+        inspect_scoped(
+            path,
+            contents,
+            &super::super::test_scope::tests::fixture(path, contents),
+        )
+    }
 
     #[test]
     fn rejects_implicit_fixture_roots_in_integration_and_unit_tests() {

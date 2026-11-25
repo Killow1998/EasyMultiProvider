@@ -1,4 +1,9 @@
-use super::{Path, Result, comments, imports::Imports, macro_arguments, read};
+use super::{
+    Path, Result,
+    imports::Imports,
+    macro_arguments, read,
+    test_scope::{Index, TestScopes},
+};
 use proc_macro2::{TokenStream, TokenTree};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{
@@ -15,7 +20,12 @@ const ALLOWED: &[(&str, usize)] = &[("emp-app", 62), ("emp-codex", 2), ("emp-tra
 const SOCKET_TIMEOUTS: &[(&str, usize)] = &[("emp-app", 5)];
 const TEST_SUPPORT_LIB: &str = "crates/emp-test-support/src/lib.rs";
 
-pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
+pub(super) fn check(
+    root: &Path,
+    paths: &[String],
+    scopes: &Index,
+    errors: &mut Vec<String>,
+) -> Result {
     let mut counts: BTreeMap<&str, (Vec<String>, Vec<String>)> = ALLOWED
         .iter()
         .chain(SOCKET_TIMEOUTS)
@@ -26,7 +36,7 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
         if !root.join(path).is_file() {
             continue;
         }
-        let violations = inspect_source(path, &read(root, path)?)?;
+        let violations = inspect_scoped(path, &read(root, path)?, scopes.get(path))?;
         let (bare_locations, socket_locations) = counts.entry(group).or_default();
         bare_locations.extend(
             violations
@@ -116,22 +126,12 @@ struct Violations {
     fixed_wait_renames: BTreeSet<usize>,
 }
 
-fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
-    let test_support = path.starts_with("crates/emp-test-support/src/");
-    let test_file = test_support || comments::test_file(path);
-    if !(test_file
-        || contents.contains("FixedWait")
-        || (contents.contains("test") && contents.contains("#[")))
-    {
+fn inspect_scoped(path: &str, contents: &str, scopes: &TestScopes) -> Result<Violations> {
+    if !(scopes.has_test_scope() || contents.contains("FixedWait")) {
         return Ok(Violations::default());
     }
     let source = syn::parse_file(contents).map_err(|error| format!("{path}: {error}"))?;
-    let mut scopes = comments::TestScopes::default();
-    if !test_file || test_support {
-        scopes.visit_file(&source);
-    }
     let mut visitor = Deadlines {
-        test_file,
         emp_app: group(path) == Some("emp-app"),
         pipe_capture: path == "crates/emp-test-support/src/process/capture.rs",
         socket_implementation: path == TEST_SUPPORT_LIB,
@@ -147,19 +147,18 @@ fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
 }
 
 struct Deadlines<'source> {
-    test_file: bool,
     emp_app: bool,
     pipe_capture: bool,
     socket_implementation: bool,
     allows_fixed_wait: bool,
-    scopes: comments::TestScopes,
+    scopes: &'source TestScopes,
     imports: Imports<'source>,
     violations: Violations,
 }
 
 impl Deadlines<'_> {
     fn in_test(&self, line: usize) -> bool {
-        self.test_file || self.scopes.contains(line)
+        self.scopes.contains(line)
     }
 
     fn inspect_fixed_wait_renames(&mut self, tree: &UseTree, parent: Option<&syn::Ident>) {
@@ -195,7 +194,7 @@ impl Deadlines<'_> {
     }
 
     fn inspect_socket_timeout(&mut self, name: &str, line: usize) {
-        if (!self.socket_implementation || self.scopes.contains(line))
+        if (!self.socket_implementation || self.scopes.contains_inline(line))
             && self.in_test(line)
             && (name == "set_read_timeout" || name == "set_write_timeout")
         {
@@ -486,6 +485,14 @@ fn parse_match_arguments(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
+        inspect_scoped(
+            path,
+            contents,
+            &super::super::test_scope::tests::fixture(path, contents),
+        )
+    }
 
     fn violations(path: &str, source: &str) -> Result<Vec<usize>> {
         Ok(inspect_source(path, source)?.bare)

@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    test_scope::{Index, TestScopes},
+    *,
+};
 use std::collections::BTreeMap;
 use syn::ext::IdentExt;
 use syn::spanned::Spanned;
@@ -20,39 +23,36 @@ const ALLOWED: &[(&str, usize)] = &[
     ("web", 1),
 ];
 
-pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
+pub(super) fn check(
+    root: &Path,
+    paths: &[String],
+    scopes: &Index,
+    errors: &mut Vec<String>,
+) -> Result {
     let mut counts: BTreeMap<_, usize> = ALLOWED.iter().map(|&(name, _)| (name, 0)).collect();
     for path in paths {
         let rust = path.ends_with(".rs");
+        let test_scopes = scopes.get(path);
         let group = group(path);
         if (!rust && group.is_none()) || !root.join(path).is_file() {
             continue;
         }
         let contents = read(root, path)?;
-        let mut test_scopes = TestScopes::default();
-        let inspect_sleep =
-            rust && path != "xtask/src/check/comments.rs" && contents.contains("recv_timeout");
-        if rust
-            && (inspect_sleep
-                || (group.is_some() && contents.contains("cfg") && contents.contains("test")))
-        {
+        if rust && path != "xtask/src/check/comments.rs" && contents.contains("recv_timeout") {
             let source = syn::parse_file(&contents).map_err(|error| format!("{path}: {error}"))?;
-            test_scopes.visit_file(&source);
-            if inspect_sleep {
-                DisguisedSleep {
-                    path,
-                    test_scopes: &test_scopes,
-                    errors,
-                }
-                .visit_file(&source);
+            DisguisedSleep {
+                path,
+                test_scopes,
+                errors,
             }
+            .visit_file(&source);
         }
         if rust && path != "xtask/src/check/comments.rs" {
             msvc_only(path, &contents, errors);
             domain_purity(path, &contents, errors)?;
         }
         if let Some(group) = group {
-            *counts.entry(group).or_default() += count(&contents, &test_scopes);
+            *counts.entry(group).or_default() += count(&contents, test_scopes);
         }
     }
     for (group, count) in counts {
@@ -71,16 +71,7 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
     Ok(())
 }
 
-pub(super) fn test_file(path: &str) -> bool {
-    let mut parts = path.rsplit('/');
-    let name = parts.next().expect("source path");
-    name == "tests.rs" || name.ends_with("_tests.rs") || parts.any(|part| part == "tests")
-}
-
 fn group(path: &str) -> Option<&str> {
-    if test_file(path) {
-        return None;
-    }
     let parts = path.split('/').collect::<Vec<_>>();
     match parts.as_slice() {
         ["crates", "emp-app", "web", name] if name.ends_with(".js") => Some("web"),
@@ -230,85 +221,6 @@ impl<'ast> Visit<'ast> for DomainPurity<'_> {
     }
 }
 
-#[derive(Default)]
-pub(super) struct TestScopes(Vec<std::ops::RangeInclusive<usize>>);
-
-impl TestScopes {
-    pub(super) fn contains(&self, line: usize) -> bool {
-        self.0.iter().any(|range| range.contains(&line))
-    }
-
-    fn add(&mut self, item: &impl Spanned, attrs: &[syn::Attribute]) -> bool {
-        let test_only = attrs.iter().any(test_only_attribute);
-        if test_only {
-            let span = item.span();
-            self.0.push(span.start().line..=span.end().line);
-        }
-        test_only
-    }
-}
-
-pub(super) fn test_only_attribute(attr: &syn::Attribute) -> bool {
-    let path = attr.path();
-    path.is_ident("test")
-        || (path.is_ident("cfg")
-            && attr
-                .parse_args::<syn::Meta>()
-                .is_ok_and(|meta| requires_test(&meta)))
-        || path
-            .segments
-            .iter()
-            .map(|segment| &segment.ident)
-            .eq(["tokio", "test"])
-}
-
-pub(super) fn requires_test(meta: &syn::Meta) -> bool {
-    if matches!(meta, syn::Meta::Path(path) if path.is_ident("test")) {
-        return true;
-    }
-    let syn::Meta::List(list) = meta else {
-        return false;
-    };
-    let Ok(parts) = list.parse_args_with(
-        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-    ) else {
-        return false;
-    };
-    if list.path.is_ident("all") {
-        parts.iter().any(requires_test)
-    } else {
-        list.path.is_ident("any") && !parts.is_empty() && parts.iter().all(requires_test)
-    }
-}
-
-macro_rules! visit_test_items {
-    ($method:ident, $kind:ident; $($variant:ident),+) => {
-        fn $method(&mut self, item: &'ast syn::$kind) {
-            let attrs = match item {
-                $(syn::$kind::$variant(item) => &item.attrs,)+
-                _ => return,
-            };
-            if !self.add(item, attrs) {
-                visit::$method(self, item);
-            }
-        }
-    };
-}
-
-impl<'ast> Visit<'ast> for TestScopes {
-    fn visit_file(&mut self, file: &'ast syn::File) {
-        if !self.add(file, &file.attrs) {
-            visit::visit_file(self, file);
-        }
-    }
-
-    visit_test_items!(visit_item, Item; Const, Enum, ExternCrate, Fn, ForeignMod, Impl,
-        Macro, Mod, Static, Struct, Trait, TraitAlias, Type, Union, Use);
-    visit_test_items!(visit_impl_item, ImplItem; Const, Fn, Macro, Type);
-    visit_test_items!(visit_trait_item, TraitItem; Const, Fn, Macro, Type);
-    visit_test_items!(visit_foreign_item, ForeignItem; Fn, Macro, Static, Type);
-}
-
 struct DisguisedSleep<'a> {
     path: &'a str,
     test_scopes: &'a TestScopes,
@@ -322,7 +234,7 @@ impl<'ast> Visit<'ast> for DisguisedSleep<'_> {
                 continue;
             };
             let line = local.span().start().line;
-            if !test_file(self.path) && !self.test_scopes.contains(line) {
+            if !self.test_scopes.contains(line) {
                 continue;
             }
             let Some((sender, receiver)) = channel_bindings(local) else {
@@ -487,7 +399,10 @@ fn example() {
         assert!(errors.is_empty(), "{errors:?}");
         DisguisedSleep {
             path: "crates/example/tests/journey.rs",
-            test_scopes: &test_scopes,
+            test_scopes: &TestScopes::scan(
+                &source,
+                super::super::test_scope::SourceKind::Integration,
+            ),
             errors: &mut errors,
         }
         .visit_file(&source);

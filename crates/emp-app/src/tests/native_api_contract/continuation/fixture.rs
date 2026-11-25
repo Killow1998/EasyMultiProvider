@@ -295,7 +295,7 @@ impl Drop for Upstream {
             self.worker.take().ok_or("missing worker"),
             "join upstream",
         ) {
-            emp_test_support::drop_check(worker.join(), "join upstream");
+            emp_test_support::join_check(worker, "join upstream");
         }
     }
 }
@@ -373,7 +373,7 @@ pub(super) fn large_context_turn() -> TestBudget {
 pub(super) fn turn(client: &mut ClientWebSocket, body: &Value) -> Value {
     let started = Instant::now();
     let deadline = Deadline::starting_at(started, large_context_turn());
-    client.send_json(body).unwrap();
+    client.send_json_before(body, &deadline).unwrap();
     loop {
         assert!(!deadline.is_expired(), "fixture turn did not terminate");
         let event: Value = match client

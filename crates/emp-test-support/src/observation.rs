@@ -57,7 +57,7 @@ impl Drop for Worker {
             self.0.take().ok_or("missing worker"),
             "observation worker panicked",
         ) {
-            crate::drop_check(worker.join(), "observation worker panicked");
+            crate::join_check(worker, "observation worker panicked");
         }
     }
 }

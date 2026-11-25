@@ -1,6 +1,7 @@
 use super::{
-    Path, Result, comments, read,
+    Path, Result, read,
     test_deadlines::{assertion_expressions, check_baseline, group},
+    test_scope::{Index, TestScopes},
 };
 use std::collections::BTreeMap;
 use syn::{
@@ -10,7 +11,12 @@ use syn::{
 
 const ALLOWED: &[(&str, usize)] = &[("emp-app", 33), ("emp-codex", 3), ("emp-transport", 6)];
 
-pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
+pub(super) fn check(
+    root: &Path,
+    paths: &[String],
+    scopes: &Index,
+    errors: &mut Vec<String>,
+) -> Result {
     let mut counts: BTreeMap<&str, Vec<String>> = ALLOWED
         .iter()
         .map(|&(name, _)| (name, Vec::new()))
@@ -20,7 +26,7 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
         if !root.join(path).is_file() {
             continue;
         }
-        let lines = inspect_source(path, &read(root, path)?)?;
+        let lines = inspect_scoped(path, &read(root, path)?, scopes.get(path))?;
         counts
             .entry(group)
             .or_default()
@@ -44,21 +50,12 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
     Ok(())
 }
 
-fn inspect_source(path: &str, contents: &str) -> Result<Vec<usize>> {
-    if !(contents.contains("spawn") && contents.contains("recv")) {
-        return Ok(Vec::new());
-    }
-    let test_file = comments::test_file(path);
-    if !(test_file || (contents.contains("test") && contents.contains("#["))) {
+fn inspect_scoped(path: &str, contents: &str, scopes: &TestScopes) -> Result<Vec<usize>> {
+    if !(scopes.has_test_scope() && contents.contains("spawn") && contents.contains("recv")) {
         return Ok(Vec::new());
     }
     let source = syn::parse_file(contents).map_err(|error| format!("{path}: {error}"))?;
-    let mut scopes = comments::TestScopes::default();
-    if !test_file {
-        scopes.visit_file(&source);
-    }
     let mut visitor = TestFunctions {
-        test_file,
         scopes,
         lines: Vec::new(),
     };
@@ -66,15 +63,14 @@ fn inspect_source(path: &str, contents: &str) -> Result<Vec<usize>> {
     Ok(visitor.lines)
 }
 
-struct TestFunctions {
-    test_file: bool,
-    scopes: comments::TestScopes,
+struct TestFunctions<'a> {
+    scopes: &'a TestScopes,
     lines: Vec<usize>,
 }
 
-impl TestFunctions {
+impl TestFunctions<'_> {
     fn inspect(&mut self, block: &syn::Block) {
-        if self.test_file || self.scopes.contains(block.span().start().line) {
+        if self.scopes.contains(block.span().start().line) {
             let mut body = ThreadBody::default();
             body.visit_block(block);
             if body.receives {
@@ -84,7 +80,7 @@ impl TestFunctions {
     }
 }
 
-impl<'ast> Visit<'ast> for TestFunctions {
+impl<'ast> Visit<'ast> for TestFunctions<'_> {
     fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
         self.inspect(&function.block);
         visit::visit_item_fn(self, function);
@@ -184,6 +180,14 @@ impl<'ast> Visit<'ast> for ThreadBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn inspect_source(path: &str, contents: &str) -> Result<Vec<usize>> {
+        inspect_scoped(
+            path,
+            contents,
+            &super::super::test_scope::tests::fixture(path, contents),
+        )
+    }
 
     #[test]
     fn flags_manual_observation_in_one_test_function() {

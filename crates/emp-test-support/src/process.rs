@@ -252,7 +252,8 @@ impl OwnedChild {
     }
 
     /// XNU [killpg1](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c#L1709-L1718)
-    /// skips zombies and returns EPERM for an existing group with no eligible members.
+    /// skips zombies. All members are test children with the same credentials,
+    /// so EPERM after the leader exits means only zombies remain.
     #[cfg(unix)]
     fn terminate_group(&self) -> io::Result<()> {
         use rustix::{

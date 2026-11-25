@@ -109,7 +109,7 @@ impl RefreshUpstream {
 impl Drop for RefreshUpstream {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
-            emp_test_support::drop_check(worker.join(), "join refresh upstream");
+            emp_test_support::join_check(worker, "join refresh upstream");
         }
     }
 }
@@ -213,7 +213,7 @@ impl ScenarioUpstream {
 impl Drop for ScenarioUpstream {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
-            emp_test_support::drop_check(worker.join(), "join scenario upstream");
+            emp_test_support::join_check(worker, "join scenario upstream");
         }
     }
 }

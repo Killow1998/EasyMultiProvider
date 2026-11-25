@@ -18,6 +18,22 @@ pub mod websocket;
 pub use observation::{Observation, ObservationResult, Probe};
 pub use process::{ChildError, OwnedChild};
 
+pub fn join_check<T>(worker: thread::JoinHandle<T>, label: &str) -> Option<T> {
+    match worker.join() {
+        Ok(value) => Some(value),
+        Err(payload) if thread::panicking() => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("non-string panic payload");
+            let _ = writeln!(io::stderr(), "{label}: {message}");
+            None
+        }
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
 pub fn drop_check<T, E: Debug>(result: Result<T, E>, label: &str) -> Option<T> {
     match result {
         Ok(value) => Some(value),
@@ -239,6 +255,15 @@ mod tests {
     use std::net::TcpListener;
 
     #[test]
+    #[should_panic(expected = "fixture worker assertion: expected progress")]
+    fn join_check_propagates_worker_assertion() {
+        let worker = thread::spawn(|| {
+            assert_eq!(0, 1, "fixture worker assertion: expected progress");
+        });
+        join_check(worker, "join fixture");
+    }
+
+    #[test]
     fn drop_failure_during_unwind_does_not_abort() {
         const CASE: &str = "EMP_TEST_DROP_FAILURE_DURING_UNWIND";
         if std::env::var_os(CASE).is_some() {
@@ -246,7 +271,7 @@ mod tests {
             impl Drop for FailingFixture {
                 fn drop(&mut self) {
                     if let Some(worker) = self.0.take() {
-                        drop_check(worker.join(), "join failing fixture");
+                        join_check(worker, "join failing fixture");
                     }
                 }
             }
@@ -270,7 +295,10 @@ mod tests {
         let output = isolated::run(command, deadline);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("original test failed"), "{stderr}");
-        assert!(stderr.contains("join failing fixture"), "{stderr}");
+        assert!(
+            stderr.contains("join failing fixture: fixture worker failed"),
+            "{stderr}"
+        );
     }
     #[test]
     fn test_budget_construction_and_composition_saturate() {

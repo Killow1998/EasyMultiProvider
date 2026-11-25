@@ -9,6 +9,7 @@ mod prose;
 mod test_deadlines;
 mod test_drop;
 mod test_fixture_root;
+mod test_scope;
 mod test_thread_observations;
 mod workflows;
 
@@ -26,7 +27,7 @@ pub fn run(args: &[String]) -> Result {
     }
     let root = project_root();
     let mut errors = Vec::new();
-    arch::check(&root, &mut errors)?;
+    let test_scopes = arch::check(&root, &mut errors)?;
     modules::check(&root, &mut errors)?;
     let list_files = [
         "ls-files",
@@ -36,23 +37,24 @@ pub fn run(args: &[String]) -> Result {
         "-z",
     ];
     let paths = git_paths(&root, &list_files)?;
-    comments::check(&root, &paths, &mut errors)?;
-    cfg_test::check(&root, &paths, &mut errors)?;
-    test_deadlines::check(&root, &paths, &mut errors)?;
-    test_fixture_root::check(&root, &paths, &mut errors)?;
-    test_thread_observations::check(&root, &paths, &mut errors)?;
+    comments::check(&root, &paths, &test_scopes, &mut errors)?;
+    cfg_test::check(&root, &paths, &test_scopes, &mut errors)?;
+    test_deadlines::check(&root, &paths, &test_scopes, &mut errors)?;
+    test_fixture_root::check(&root, &paths, &test_scopes, &mut errors)?;
+    test_thread_observations::check(&root, &paths, &test_scopes, &mut errors)?;
     for path in paths {
         if !root.join(&path).is_file() {
             continue;
         }
         let bytes = fs::read(root.join(&path)).map_err(|error| format!("{path}: {error}"))?;
+        let scopes = test_scopes.get(&path);
         if let Ok(source) = std::str::from_utf8(&bytes) {
             single_http_driver(&path, source, &mut errors);
-            production_sockets::check(&path, source, &mut errors)?;
-            test_drop::check(&path, source, &mut errors)?;
+            production_sockets::check(&path, source, scopes, &mut errors)?;
+            test_drop::check(&path, source, scopes, &mut errors)?;
             shared_test_module(&path, source, &mut errors)?;
         }
-        if path.starts_with("crates/") && path.split('/').nth(2) == Some("tests") {
+        if path.starts_with("crates/") && scopes.integration {
             test_boundary(&path, &bytes, &mut errors);
         } else if prose::includes(&path) {
             prose::check(&path, &read(&root, &path)?, &mut errors);

@@ -94,7 +94,7 @@ impl Drop for StreamServer {
         self.shutdown.store(true, Ordering::Release);
         let _ = TcpStream::connect(self.address);
         if let Some(thread) = self.thread.take() {
-            emp_test_support::drop_check(thread.join(), "join stream upstream");
+            emp_test_support::join_check(thread, "join stream upstream");
         }
     }
 }

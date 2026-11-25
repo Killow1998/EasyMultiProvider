@@ -167,7 +167,7 @@ impl Drop for RefreshCatalogFixture {
             let _ = release.send(());
         }
         if let Some(worker) = self.worker.take() {
-            emp_test_support::drop_check(worker.join(), "refresh fixture worker panicked");
+            emp_test_support::join_check(worker, "refresh fixture worker panicked");
         }
     }
 }

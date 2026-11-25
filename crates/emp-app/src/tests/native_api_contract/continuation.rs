@@ -9,6 +9,58 @@ mod transport;
 use fixture::*;
 
 #[test]
+fn large_websocket_upload_expires_while_the_peer_keeps_reading() {
+    use emp_test_support::websocket::ClientWebSocket;
+    use std::io::ErrorKind;
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let stop = AtomicBool::new(false);
+    let payload = json!({"input": "x".repeat(14 * 1024 * 1024)});
+    let io_budget = test_timeout(Duration::from_secs(5));
+    thread::scope(|scope| {
+        let peer = scope.spawn(|| {
+            let stream = super::interrupt::complete_upgrade(listener.accept().unwrap().0);
+            let deadline = Deadline::after(io_budget);
+            let mut input = deadline.io(stream);
+            let mut reads = 0;
+            while !stop.load(Ordering::Acquire) {
+                match input.read(&mut [0; 8192]) {
+                    Ok(0) => break,
+                    Ok(_) => reads += 1,
+                    Err(error) if error.kind() == ErrorKind::TimedOut => break,
+                    Err(error) => panic!("read upload: {error}"),
+                }
+                #[expect(clippy::disallowed_methods, reason = "模拟对端持续慢读")]
+                thread::sleep(test_timeout(Duration::from_millis(10)).duration());
+            }
+            reads
+        });
+        let mut client = ClientWebSocket::connect(
+            &format!("ws://{address}/v1/responses"),
+            &Default::default(),
+            io_budget.duration(),
+        )
+        .unwrap();
+        let start = Instant::now();
+        let deadline = Deadline::starting_at(start, test_timeout(Duration::from_secs(1)));
+        let finish_by = Deadline::starting_at(start, test_timeout(Duration::from_secs(3)));
+        let result = client.send_json_before(&payload, &deadline);
+        stop.store(true, Ordering::Release);
+        finish_by
+            .accept((), "WebSocket send returned near its deadline")
+            .unwrap();
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::TimedOut);
+        assert!(deadline.is_expired());
+        assert_eq!(
+            client.poll_receive_text().unwrap(),
+            emp_test_support::websocket::WebSocketPoll::Closed { code: None }
+        );
+        assert!(peer.join().unwrap() > 1, "peer did not keep reading");
+    });
+}
+
+#[test]
 #[ignore = "memory smoke: requires at least 1536 MiB available"]
 fn native_websocket_accepts_a_full_128_mib_message_without_http_replay() {
     let maximum = emp_transport::MAX_RESPONSES_WEBSOCKET_BYTES;
@@ -393,7 +445,7 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
         if fault == Fault::SilentPrefill {
             let started = Instant::now();
             let deadline = Deadline::starting_at(started, large_context_turn());
-            client.send_json(&request).unwrap();
+            client.send_json_before(&request, &deadline).unwrap();
             while upstream.traffic.lock().unwrap().warmups == 0 {
                 assert!(!deadline.is_expired());
                 #[expect(

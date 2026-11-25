@@ -1,4 +1,4 @@
-use super::{Result, comments};
+use super::{Result, test_scope::TestScopes};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 use syn::{
@@ -6,7 +6,12 @@ use syn::{
     visit::{self, Visit},
 };
 
-pub(super) fn check(path: &str, source: &str, errors: &mut Vec<String>) -> Result {
+pub(super) fn check(
+    path: &str,
+    source: &str,
+    scopes: &TestScopes,
+    errors: &mut Vec<String>,
+) -> Result {
     let Some((package, module)) = path
         .strip_prefix("crates/")
         .and_then(|path| path.split_once("/src/"))
@@ -16,17 +21,15 @@ pub(super) fn check(path: &str, source: &str, errors: &mut Vec<String>) -> Resul
     if !module.ends_with(".rs")
         || matches!(package, "emp-transport" | "emp-test-support")
         || (package == "emp-app" && module.starts_with("server/"))
-        || comments::test_file(path)
+        || scopes.entire_file()
     {
         return Ok(());
     }
     let syntax = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
-    let mut test_scopes = comments::TestScopes::default();
-    test_scopes.visit_file(&syntax);
     let mut sockets = SocketUses::default();
     sockets.visit_file(&syntax);
     for (line, api) in sockets.0 {
-        if !test_scopes.contains(line) {
+        if !scopes.contains(line) {
             errors.push(format!(
                 "[production-sockets] {path}:{line}: {api} 只能在连接层 server/ 或 emp-transport 使用；向业务层传递协议数据或取消信号"
             ));
@@ -142,7 +145,16 @@ impl<'ast> Visit<'ast> for SocketUses {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{check as check_scoped, *};
+
+    fn check(path: &str, source: &str, errors: &mut Vec<String>) -> Result {
+        check_scoped(
+            path,
+            source,
+            &super::super::test_scope::tests::fixture(path, source),
+            errors,
+        )
+    }
 
     #[test]
     fn rejects_methods_on_an_inferred_listener_and_stream() {

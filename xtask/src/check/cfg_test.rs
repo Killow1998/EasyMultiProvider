@@ -1,4 +1,7 @@
-use super::{Path, Result, comments, read};
+use super::{
+    Path, Result, read,
+    test_scope::{self, Index},
+};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::collections::BTreeMap;
 use syn::punctuated::Punctuated;
@@ -17,10 +20,15 @@ const BASELINE: &[(&str, usize)] = &[
     ("emp-updater", 1),
 ];
 
-pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
+pub(super) fn check(
+    root: &Path,
+    paths: &[String],
+    scopes: &Index,
+    errors: &mut Vec<String>,
+) -> Result {
     let mut counts: BTreeMap<_, usize> = BASELINE.iter().map(|&(group, _)| (group, 0)).collect();
     for path in paths {
-        if !path.ends_with(".rs") || comments::test_file(path) || !root.join(path).is_file() {
+        if !path.ends_with(".rs") || scopes.get(path).entire_file() || !root.join(path).is_file() {
             continue;
         }
         let mut parts = path.split('/');
@@ -118,7 +126,7 @@ impl<'ast> TestCfg<'ast> {
         let previous_scope = self.test_scope;
         self.test_scope |= attributes.iter().any(|attr| {
             (allows_inner_attributes || matches!(attr.style, AttrStyle::Outer))
-                && comments::test_only_attribute(attr)
+                && test_scope::test_only_attribute(attr)
         });
         visit(self, item);
         self.test_scope = previous_scope;
@@ -190,7 +198,7 @@ impl<'ast> Visit<'ast> for TestCfg<'ast> {
         if attribute.path().is_ident("cfg")
             && attribute
                 .parse_args::<Meta>()
-                .is_ok_and(|meta| comments::requires_test(&meta))
+                .is_ok_and(|meta| test_scope::requires_test(&meta))
         {
             self.findings.count += 1;
         }

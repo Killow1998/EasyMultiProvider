@@ -171,7 +171,7 @@ impl Drop for HttpsProxy {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
-            emp_test_support::drop_check(worker.join(), "HTTPS proxy worker");
+            emp_test_support::join_check(worker, "HTTPS proxy worker");
         }
     }
 }

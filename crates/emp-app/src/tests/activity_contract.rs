@@ -84,7 +84,7 @@ impl Drop for HeldUpstream {
     fn drop(&mut self) {
         self.releases.clear();
         if let Some(worker) = self.worker.take() {
-            emp_test_support::drop_check(worker.join(), "join held upstream");
+            emp_test_support::join_check(worker, "join held upstream");
         }
     }
 }

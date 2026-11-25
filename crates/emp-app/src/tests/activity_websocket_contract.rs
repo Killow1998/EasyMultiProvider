@@ -95,7 +95,7 @@ impl Drop for HeldActivityUpstream {
             self.worker.take().ok_or("missing worker"),
             "join held upstream",
         ) {
-            emp_test_support::drop_check(worker.join(), "join held upstream");
+            emp_test_support::join_check(worker, "join held upstream");
         }
     }
 }
