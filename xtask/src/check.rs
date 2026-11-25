@@ -61,13 +61,12 @@ pub fn run(args: &[String]) -> Result {
             && (path.ends_with(".yml") || path.ends_with(".yaml"))
         {
             let contents = read(&root, &path)?;
-            workflows::check(&path, &contents, &mut errors);
-            workflows::check_test_targets(&path, &contents, &app_tests, &mut errors);
+            workflows::check(&path, &contents, &app_tests, &mut errors);
         }
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, workflow-test-targets, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
+            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, workflow-contexts, workflow-test-targets, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
         );
         Ok(())
     } else {
