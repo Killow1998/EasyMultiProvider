@@ -133,6 +133,7 @@ impl UpdateState {
 #[cfg(all(test, unix))]
 impl UpdateState {
     /// The budget limits the wait for in-flight requests to finish.
+    /// `TestBudget` guarantees that the budget is positive.
     /// With no requests in flight, draining succeeds even after the deadline.
     pub(crate) fn drain_for_test(&self, budget: TestBudget) -> impl Future<Output = bool> + use<> {
         let deadline = Deadline::after(budget);

@@ -4,6 +4,7 @@ use std::{
     fmt::{Debug, Display},
     io::{self, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
+    num::NonZeroU64,
     ops::Add,
     path::PathBuf,
     sync::OnceLock,
@@ -66,23 +67,24 @@ pub fn fixture_dir() -> std::io::Result<tempfile::TempDir> {
     tempfile::tempdir_in(fixture_root()?)
 }
 
-/// A test duration capped at one day so it can be added to the current instant.
+/// A test duration between one nanosecond and one day.
 #[derive(Clone, Copy, Debug)]
-pub struct TestBudget(Duration);
+pub struct TestBudget(NonZeroU64);
 
 impl TestBudget {
     const MAX: Duration = Duration::from_secs(24 * 60 * 60);
 
     fn capped(duration: Duration) -> Self {
-        Self(duration.min(Self::MAX))
+        let nanos = duration.min(Self::MAX).as_nanos() as u64;
+        Self(NonZeroU64::new(nanos).unwrap_or(NonZeroU64::MIN))
     }
 
     pub fn with_product_wait(self, wait: FixedWait) -> Self {
-        Self::capped(self.0.saturating_add(wait.get()))
+        Self::capped(self.duration().saturating_add(wait.get()))
     }
 
     pub fn duration(self) -> Duration {
-        self.0
+        Duration::from_nanos(self.0.get())
     }
 }
 
@@ -90,7 +92,7 @@ impl Add for TestBudget {
     type Output = Self;
 
     fn add(self, other: Self) -> Self {
-        Self::capped(self.0.saturating_add(other.0))
+        Self::capped(self.duration().saturating_add(other.duration()))
     }
 }
 
@@ -98,6 +100,10 @@ impl Add for TestBudget {
 pub struct Deadline(Instant);
 
 impl Deadline {
+    pub fn expired() -> Self {
+        Self(Instant::now())
+    }
+
     pub fn after(budget: TestBudget) -> Self {
         Self::starting_at(Instant::now(), budget)
     }
@@ -218,10 +224,15 @@ fn socket_timeout(error: io::Error) -> io::Error {
     }
 }
 
+/// A positive duration that scales to zero is rounded up to one nanosecond.
 pub fn test_timeout(duration: Duration) -> TestBudget {
     const MIN_SCALE: f64 = 1.0 / 16.0;
     const MAX_SCALE: f64 = 64.0;
     static SCALE: OnceLock<f64> = OnceLock::new();
+    assert!(
+        !duration.is_zero(),
+        "test timeout must be positive; use Deadline::expired() for an expired deadline"
+    );
     let scale = SCALE.get_or_init(|| match std::env::var("EMP_TEST_TIME_SCALE") {
         Ok(value) => value
             .parse::<f64>()
@@ -316,6 +327,37 @@ mod tests {
                 .duration(),
             TestBudget::MAX
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "use Deadline::expired() for an expired deadline")]
+    fn test_timeout_rejects_zero() {
+        test_timeout(Duration::ZERO);
+    }
+
+    #[test]
+    fn test_timeout_stays_positive_at_minimum_scale() {
+        const CASE: &str = "EMP_TEST_MINIMUM_TIME_SCALE";
+        if std::env::var_os(CASE).is_some() {
+            assert_eq!(
+                test_timeout(Duration::from_nanos(1)).duration(),
+                Duration::from_nanos(1)
+            );
+            isolated::report(Ok(()));
+            return;
+        }
+
+        let mut command = isolated::command("tests::test_timeout_stays_positive_at_minimum_scale");
+        command.env(CASE, "1").env("EMP_TEST_TIME_SCALE", "0.0625");
+        isolated::run(
+            command,
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+        );
+    }
+
+    #[test]
+    fn expired_deadline_is_expired_immediately() {
+        assert!(Deadline::expired().is_expired());
     }
 
     #[test]

@@ -104,7 +104,7 @@ pub(in crate::process) fn check_escaped_child_capture() -> Result<(), &'static s
     }
     let (socket, _) = crate::accept_blocking(&listener).unwrap();
 
-    let expired = Deadline::after(test_timeout(Duration::ZERO));
+    let expired = Deadline::expired();
     for (capture, payload) in [
         (stdout, b"escaped stdout\n".as_slice()),
         (stderr, b"escaped stderr\n".as_slice()),
