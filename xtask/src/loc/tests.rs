@@ -78,3 +78,77 @@ fn accepts_repeated_merge_and_prefix_options() {
     assert!(Options::parse(&args[..3]).is_err());
     assert!(Options::parse(&args[..1]).is_err());
 }
+
+#[test]
+fn validates_merge_revisions_and_deduplicates_short_and_full_ids() {
+    let repo = fixture_repository();
+    let root = repo.path();
+    let tree = fixture_git(root, &["write-tree"]);
+    let base = fixture_git(root, &["commit-tree", &tree, "-m", "base"]);
+    let first = fixture_git(root, &["commit-tree", &tree, "-p", &base, "-m", "first"]);
+    let second = fixture_git(root, &["commit-tree", &tree, "-p", &base, "-m", "second"]);
+    let merge = fixture_git(
+        root,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            &first,
+            "-p",
+            &second,
+            "-m",
+            "merge",
+        ],
+    );
+    let short = fixture_git(root, &["rev-parse", "--short", &merge]);
+    assert_eq!(
+        merge_commits(root, &[&short, &merge]).unwrap(),
+        [(short.as_str(), merge.clone())]
+    );
+
+    let non_merge = fixture_git(root, &["rev-parse", "--short", &first]);
+    let error = merge_commits(root, &[&non_merge]).unwrap_err();
+    assert!(
+        error.contains(&non_merge) && error.contains("not a merge commit"),
+        "{error}"
+    );
+
+    let missing = "missing-merge";
+    let error = merge_commits(root, &[missing]).unwrap_err();
+    assert!(error.contains(missing), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn counts_rust_when_the_git_tree_has_a_non_utf8_non_rust_path() {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+
+    let repo = fixture_repository();
+    let root = repo.path();
+    fs::write(root.join("lib.rs"), "fn example() {}\n").unwrap();
+    fs::write(root.join(OsStr::from_bytes(b"image-\xff.dat")), b"data").unwrap();
+    fixture_git(root, &["add", "--force", "--all"]);
+    let tree = fixture_git(root, &["write-tree"]);
+
+    let counts = Counter::new().count(&read_tree(root, &tree).unwrap());
+    assert_eq!(counts.len(), 1);
+    assert_eq!(counts["lib.rs"].production, 1);
+}
+
+fn fixture_repository() -> tempfile::TempDir {
+    let root = emp_test_support::fixture_dir().unwrap();
+    fixture_git(root.path(), &["init", "--quiet"]);
+    root
+}
+
+fn fixture_git(root: &Path, args: &[&str]) -> String {
+    let output = git(Command::new("git")
+        .current_dir(root)
+        .env("GIT_AUTHOR_NAME", "Fixture")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Fixture")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+        .args(args))
+    .unwrap();
+    String::from_utf8(output).unwrap().trim().to_owned()
+}

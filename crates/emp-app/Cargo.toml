@@ -58,7 +58,7 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 emp-storage = { path = "../emp-storage", features = ["test-support"] }
-emp-test-support = { path = "../emp-test-support" }
+emp-test-support = { path = "../emp-test-support", features = ["websocket"] }
 emp-state = { path = "../emp-state", features = ["test-support"] }
 emp-mod-decision = { path = "../emp-mod-decision" }
 emp-mod-gateway = { path = "../emp-mod-gateway" }

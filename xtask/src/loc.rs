@@ -3,6 +3,7 @@ use regex::Regex;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{BufRead, Cursor, Read, Write},
+    path::Path,
     process::{Command, Stdio},
 };
 
@@ -69,13 +70,7 @@ impl<'a> Options<'a> {
         };
         for pair in rest.chunks(2) {
             match pair {
-                [flag, value]
-                    if flag == "--subtract-merge"
-                        && !value.is_empty()
-                        && !value.starts_with('-') =>
-                {
-                    options.merges.push(value);
-                }
+                [flag, value] if flag == "--subtract-merge" => options.merges.push(value),
                 [flag, value] if flag == "--prefix" => options.prefixes.push(value),
                 _ => return Err(USAGE.into()),
             }
@@ -86,9 +81,11 @@ impl<'a> Options<'a> {
 
 pub(super) fn run(args: &[String]) -> Result {
     let options = Options::parse(args)?;
+    let root = Path::new(".");
+    let merges = merge_commits(root, &options.merges)?;
     let counter = Counter::new();
-    let base = counter.count(&read_tree(options.base)?);
-    let head = counter.count(&read_tree(options.head)?);
+    let base = counter.count(&read_tree(root, options.base)?);
+    let head = counter.count(&read_tree(root, options.head)?);
     let before = Lines::totals(&base, "");
     let after = Lines::totals(&head, "");
     let interval = after.delta(before);
@@ -98,12 +95,12 @@ pub(super) fn run(args: &[String]) -> Result {
     print_delta("interval", interval);
 
     let mut phase = interval;
-    for merge in options.merges {
-        let parent = format!("{merge}^1");
-        let before = Lines::totals(&counter.count(&read_tree(&parent)?), "");
-        let after = Lines::totals(&counter.count(&read_tree(merge)?), "");
+    for (merge, id) in merges {
+        let parent = format!("{id}^1");
+        let before = Lines::totals(&counter.count(&read_tree(root, &parent)?), "");
+        let after = Lines::totals(&counter.count(&read_tree(root, &id)?), "");
         let upstream = after.delta(before);
-        print_total(&parent, before);
+        print_total(&format!("{merge}^1"), before);
         print_total(merge, after);
         print_delta(&format!("upstream {merge}"), upstream);
         phase = phase.delta(upstream);
@@ -134,6 +131,43 @@ pub(super) fn run(args: &[String]) -> Result {
         print_path(path, before, after);
     }
     Ok(())
+}
+
+fn merge_commits<'a>(root: &Path, merges: &[&'a str]) -> Result<Vec<(&'a str, String)>> {
+    let mut seen = BTreeSet::new();
+    let mut commits = Vec::new();
+    for &merge in merges {
+        let id = git(Command::new("git").current_dir(root).args([
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{merge}^{{commit}}"),
+        ]))
+        .and_then(|output| String::from_utf8(output).map_err(|error| error.to_string()))
+        .map_err(|error| format!("--subtract-merge {merge:?}: {error}"))?;
+        let id = id.trim().to_owned();
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let parents = git(Command::new("git").current_dir(root).args([
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            &id,
+            "--",
+        ]))
+        .map_err(|error| format!("--subtract-merge {merge:?}: {error}"))?;
+        if String::from_utf8_lossy(&parents)
+            .split_ascii_whitespace()
+            .nth(2)
+            .is_none()
+        {
+            return Err(format!("--subtract-merge {merge:?}: not a merge commit"));
+        }
+        commits.push((merge, id));
+    }
+    Ok(commits)
 }
 
 fn print_total(label: &str, lines: Lines) {
@@ -202,18 +236,41 @@ fn git_with_input(command: &mut Command, input: Vec<u8>) -> Result<Vec<u8>> {
     stdout(command, output)
 }
 
-fn read_tree(rev: &str) -> Result<Files<String>> {
-    let output = git(Command::new("git").args(["ls-tree", "-rz", "--full-tree", rev, "--"]))?;
-    let tree = String::from_utf8(output).map_err(|error| format!("git ls-tree {rev}: {error}"))?;
+fn read_tree(root: &Path, rev: &str) -> Result<Files<String>> {
+    let output = git(Command::new("git").current_dir(root).args([
+        "ls-tree",
+        "-rz",
+        "--full-tree",
+        rev,
+        "--",
+    ]))?;
     let mut blobs = Vec::new();
-    for entry in tree.split_terminator('\0') {
-        let (metadata, path) = entry.split_once('\t').ok_or("invalid git ls-tree record")?;
-        let [mode, "blob", oid] = metadata.split(' ').collect::<Vec<_>>()[..] else {
+    for entry in output
+        .split(|&byte| byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let mut fields = entry.splitn(2, |&byte| byte == b'\t');
+        let (Some(metadata), Some(path)) = (fields.next(), fields.next()) else {
+            return Err("invalid git ls-tree record".into());
+        };
+        if !path.ends_with(b".rs") {
+            continue;
+        }
+        let mut metadata = metadata.split(|&byte| byte == b' ');
+        let (Some(b"100644" | b"100755"), Some(b"blob"), Some(oid)) =
+            (metadata.next(), metadata.next(), metadata.next())
+        else {
             continue;
         };
-        if mode != "120000" && path.ends_with(".rs") {
-            blobs.push((path.to_owned(), oid));
-        }
+        let path = std::str::from_utf8(path).map_err(|error| {
+            format!(
+                "git ls-tree {rev}: {}: {error}",
+                String::from_utf8_lossy(path)
+            )
+        })?;
+        let oid =
+            std::str::from_utf8(oid).map_err(|error| format!("git ls-tree {rev}: {error}"))?;
+        blobs.push((path.to_owned(), oid));
     }
     if blobs.is_empty() {
         return Ok(Files::new());
@@ -224,7 +281,9 @@ fn read_tree(rev: &str) -> Result<Files<String>> {
         .map(|(_, oid)| format!("{oid}\n"))
         .collect::<String>();
     let output = git_with_input(
-        Command::new("git").args(["cat-file", "--batch"]),
+        Command::new("git")
+            .current_dir(root)
+            .args(["cat-file", "--batch"]),
         requests.into_bytes(),
     )?;
     let mut batch = Cursor::new(output);

@@ -36,7 +36,6 @@ const NORMAL_BUILD: &[(&str, &str)] = &[
     ("emp-state", "emp-storage"),
     ("emp-storage", "emp-domain"),
     ("emp-storage", "emp-files"),
-    ("emp-test-support", "emp-transport"),
     ("emp-updater", "emp-files"),
     ("xtask", "emp-modules"),
     ("xtask", "emp-updater"),
@@ -170,7 +169,13 @@ fn dependencies(
             if !dev && enables_test_support(&dependency["features"]) {
                 errors.push(format!("[arch] {} [dependencies]: {from} → {to} 在正常依赖里打开了 test-support；测试钩子只能由 [dev-dependencies] 或本 crate 的 test-support 特性打开", package["manifest_path"].as_str().unwrap_or("Cargo.toml")));
             }
-            let allowed = NORMAL_BUILD.contains(&(from, to)) || dev && DEV.contains(&(from, to));
+            let allowed = match (from, to) {
+                ("emp-test-support", "emp-transport") => {
+                    websocket_transport(package, dependency, errors);
+                    true
+                }
+                _ => NORMAL_BUILD.contains(&(from, to)) || dev && DEV.contains(&(from, to)),
+            };
             if edges.insert((from, to, dev)) && !allowed {
                 let kind = if dev { "dev" } else { "normal/build" };
                 errors.push(format!("[arch] {} [dependencies, {kind}]: 新的 crate 依赖 {from} → {to} 不在允许清单里；如果确实需要，先更新 PLAN §3.2 和 xtask 清单", package["manifest_path"].as_str().unwrap_or("Cargo.toml")));
@@ -187,6 +192,42 @@ fn enables_test_support(features: &Value) -> bool {
             .as_str()
             .is_some_and(|feature| feature.rsplit('/').next() == Some(TEST_SUPPORT))
     })
+}
+
+fn websocket_transport(package: &Value, dependency: &Value, errors: &mut Vec<String>) {
+    let name = dependency["rename"].as_str().unwrap_or("emp-transport");
+    let dep_feature = format!("dep:{name}");
+    let enabled_by_websocket =
+        package["features"]["websocket"]
+            .as_array()
+            .is_some_and(|features| {
+                features
+                    .iter()
+                    .any(|feature| feature == dep_feature.as_str())
+            });
+    let enabled_elsewhere = package["features"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| name.as_str() != "websocket")
+        .filter_map(|(_, features)| features.as_array())
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|feature| {
+            feature == "websocket"
+                || feature == dep_feature
+                || feature.split_once('/').is_some_and(|(dep, _)| dep == name)
+        });
+    if !dependency["kind"].is_null()
+        || dependency["optional"].as_bool() != Some(true)
+        || !enabled_by_websocket
+        || enabled_elsewhere
+    {
+        errors.push(format!(
+            "[arch] {}: emp-test-support → emp-transport 必须是仅由 websocket 特性启用的可选正常依赖",
+            package["manifest_path"].as_str().unwrap_or("Cargo.toml")
+        ));
+    }
 }
 
 const TEST_SUPPORT: &str = "test-support";

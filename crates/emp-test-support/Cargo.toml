@@ -6,13 +6,16 @@ edition.workspace = true
 license.workspace = true
 description = "Shared fixtures and deadlines for EMP tests."
 
+[features]
+websocket = ["dep:emp-transport", "dep:polling", "dep:serde_json", "dep:socket2", "dep:tokio"]
+
 [dependencies]
-emp-transport = { path = "../emp-transport" }
-polling = { version = "=3.11.0", default-features = false }
-serde_json.workspace = true
-socket2 = { version = "0.6.5", features = ["all"] }
+emp-transport = { path = "../emp-transport", optional = true }
+polling = { version = "=3.11.0", default-features = false, optional = true }
+serde_json = { workspace = true, optional = true }
+socket2 = { version = "0.6.5", features = ["all"], optional = true }
 tempfile = "3.27"
-tokio = { version = "1.53.1", features = ["rt", "time"] }
+tokio = { version = "1.53.1", features = ["rt", "time"], optional = true }
 
 [lints]
 workspace = true

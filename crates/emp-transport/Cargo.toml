@@ -37,7 +37,7 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
-emp-test-support = { path = "../emp-test-support" }
+emp-test-support = { path = "../emp-test-support", features = ["websocket"] }
 brotli = "9"
 rcgen = "0.14.10"
 rustls = "0.23"

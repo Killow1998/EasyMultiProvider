@@ -9,6 +9,7 @@ use std::{
 };
 
 mod observation;
+#[cfg(feature = "websocket")]
 pub mod websocket;
 pub use observation::{Observation, ObservationResult, Probe};
 
