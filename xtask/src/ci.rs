@@ -328,15 +328,57 @@ fn count_passed(passed: usize, line: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
 
     #[test]
     fn counts_a_summary_split_across_reads() {
-        let first = b"running 2 tests\ntest result: ok. 2 ";
-        let second = b"passed; 0 failed; 0 ignored\n";
-        let mut forwarded = Vec::new();
-        let passed = forward_test_output(first.as_slice().chain(second.as_slice()), &mut forwarded);
+        const FIRST: &[u8] = b"running 2 tests\ntest result: ok. 2 ";
+        const SECOND: &[u8] = b"passed; 0 failed; 0 ignored\n";
+
+        #[derive(Default)]
+        struct TestOutput {
+            bytes: RefCell<Vec<u8>>,
+            flushed_bytes: Cell<usize>,
+        }
+
+        impl Write for &TestOutput {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.bytes.borrow_mut().write(bytes)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.flushed_bytes.set(self.bytes.borrow().len());
+                Ok(())
+            }
+        }
+
+        struct SecondChunk<'a> {
+            bytes: &'static [u8],
+            output_to_check: Option<&'a TestOutput>,
+        }
+
+        impl Read for SecondChunk<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if let Some(output) = self.output_to_check.take() {
+                    assert_eq!(output.bytes.borrow().as_slice(), FIRST);
+                    assert_eq!(
+                        output.flushed_bytes.get(),
+                        FIRST.len(),
+                        "first chunk was not flushed"
+                    );
+                }
+                self.bytes.read(buffer)
+            }
+        }
+
+        let output = TestOutput::default();
+        let second = SecondChunk {
+            bytes: SECOND,
+            output_to_check: Some(&output),
+        };
+        let passed = forward_test_output(FIRST.chain(second), &output);
         assert_eq!(passed.unwrap(), 2);
-        assert_eq!(forwarded, [first.as_slice(), second.as_slice()].concat());
+        assert_eq!(output.bytes.into_inner(), [FIRST, SECOND].concat());
     }
 
     #[test]

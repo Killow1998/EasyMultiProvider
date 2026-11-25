@@ -1,4 +1,5 @@
 use super::arch::TestTargets;
+use super::workflows::strip_comment;
 use crate::ci::{Packages, Profile, Targets};
 use regex::Regex;
 use std::collections::BTreeSet;
@@ -23,8 +24,7 @@ pub(super) fn check_references(
             .expect("CI profile workflow pattern")
     });
     for (index, line) in contents.lines().enumerate() {
-        let code = line.split_once('#').map_or(line, |(code, _)| code);
-        for capture in CI_PROFILE.captures_iter(code) {
+        for capture in CI_PROFILE.captures_iter(strip_comment(line)) {
             let name = capture.get(1).map_or("", |name| name.as_str());
             if !valid_profile_name(name) {
                 errors.push(format!(
@@ -167,20 +167,33 @@ mod tests {
 
     #[test]
     fn requires_bare_workflow_profile_names() {
-        let mut errors = Vec::new();
-        let mut referenced = BTreeSet::new();
-        check_references(
-            "workflow.yml",
-            "run: cargo xtask ci \"native-tls\"\nrun: cargo xtask ci native-tls",
-            crate::ci::PROFILES,
-            &mut referenced,
-            &mut errors,
-        );
-        assert_eq!(referenced, ["native-tls"].into());
-        assert_eq!(
-            errors,
-            ["[ci-profiles] workflow.yml:1: profile 名不加引号，使用 [a-z0-9-]+"]
-        );
+        for (command, valid) in [
+            ("run: cargo xtask ci \"native-tls\"", false),
+            ("run: cargo xtask ci native-tls", true),
+            ("run: cargo xtask ci native-tls#验收", false),
+            ("run: cargo xtask ci native-tls # 验收", true),
+        ] {
+            let mut errors = Vec::new();
+            let mut referenced = BTreeSet::new();
+            check_references(
+                "workflow.yml",
+                command,
+                crate::ci::PROFILES,
+                &mut referenced,
+                &mut errors,
+            );
+            if valid {
+                assert_eq!(referenced, ["native-tls"].into(), "{command}");
+                assert!(errors.is_empty(), "{command}: {errors:?}");
+            } else {
+                assert!(referenced.is_empty(), "{command}: {referenced:?}");
+                assert_eq!(
+                    errors,
+                    ["[ci-profiles] workflow.yml:1: profile 名不加引号，使用 [a-z0-9-]+"],
+                    "{command}"
+                );
+            }
+        }
     }
 
     #[test]

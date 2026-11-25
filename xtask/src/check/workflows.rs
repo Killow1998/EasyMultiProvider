@@ -6,6 +6,12 @@ const ALLOWED: &[(&str, &str)] = &[(
     "M04 验收真实 Aero 包；Python 仅用于安装 PyInstaller 和打包，场景由 Rust 执行",
 )];
 
+pub(super) fn strip_comment(line: &str) -> &str {
+    line.match_indices('#')
+        .find(|(index, _)| *index == 0 || line[..*index].ends_with(char::is_whitespace))
+        .map_or(line, |(index, _)| &line[..index])
+}
+
 fn check_python(path: &str, contents: &str, errors: &mut Vec<String>) {
     if ALLOWED.iter().any(|(file, _reason)| *file == path) {
         return;
@@ -30,7 +36,7 @@ fn check_python(path: &str, contents: &str, errors: &mut Vec<String>) {
 pub(super) fn check(path: &str, contents: &str, errors: &mut Vec<String>) {
     check_python(path, contents, errors);
     for (index, line) in contents.lines().enumerate() {
-        let code = line.split_once('#').map_or(line, |(code, _)| code);
+        let code = strip_comment(line);
         let mut words = code.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
         if words.any(|word| word == "cargo") && words.any(|word| matches!(word, "test" | "nextest"))
         {
