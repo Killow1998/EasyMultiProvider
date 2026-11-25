@@ -97,15 +97,11 @@ impl TestScopes {
 
 pub(super) fn test_only_attribute(attr: &syn::Attribute) -> bool {
     let path = attr.path();
-    is_test_attribute(path)
+    path.is_ident("test")
         || (path.is_ident("cfg")
             && attr
                 .parse_args::<syn::Meta>()
                 .is_ok_and(|meta| requires_test_scope(&meta, true)))
-}
-
-pub(super) fn is_test_attribute(path: &syn::Path) -> bool {
-    path.is_ident("test")
         || path
             .segments
             .iter()

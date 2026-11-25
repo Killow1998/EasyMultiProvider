@@ -4,7 +4,6 @@ use super::{
 };
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::collections::BTreeMap;
-use syn::parse::Parser as _;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
@@ -226,38 +225,21 @@ pub(super) fn visit_macro_attributes(tokens: TokenStream, visit: &mut impl FnMut
     }
 }
 
-pub(super) fn registers_test(meta: &Meta) -> bool {
-    test_scope::is_test_attribute(meta.path())
-        || cfg_attr_parts(meta).is_some_and(|(_, attributes)| attributes.iter().any(registers_test))
-}
-
-fn cfg_attr_parts(meta: &Meta) -> Option<(TokenStream, Punctuated<Meta, Token![,]>)> {
-    let Meta::List(list) = meta else { return None };
-    if !list.path.is_ident("cfg_attr") {
-        return None;
-    }
-    let mut tokens = list.tokens.clone().into_iter();
-    let condition = tokens
-        .by_ref()
-        .take_while(|token| !matches!(token, TokenTree::Punct(punct) if punct.as_char() == ','))
-        .collect();
-    let attributes = Punctuated::parse_terminated.parse2(tokens.collect()).ok()?;
-    Some((condition, attributes))
-}
-
 fn condition_mentions_test(meta: &Meta) -> bool {
-    if let Meta::List(list) = meta
-        && list.path.is_ident("cfg")
-    {
+    let Meta::List(list) = meta else { return false };
+    if list.path.is_ident("cfg") {
         return list
             .parse_args::<Meta>()
             .is_ok_and(|meta| predicate_mentions_test(&meta));
     }
-    cfg_attr_parts(meta).is_some_and(|(condition, attributes)| {
-        syn::parse2(condition).is_ok_and(|condition| {
-            predicate_mentions_test(&condition) || attributes.iter().any(condition_mentions_test)
-        })
-    })
+    list.path.is_ident("cfg_attr")
+        && list
+            .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            .is_ok_and(|parts| {
+                let mut parts = parts.iter();
+                parts.next().is_some_and(predicate_mentions_test)
+                    || parts.any(condition_mentions_test)
+            })
 }
 
 fn predicate_mentions_test(meta: &Meta) -> bool {

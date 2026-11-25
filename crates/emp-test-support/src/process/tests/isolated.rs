@@ -25,12 +25,8 @@ pub(crate) fn report(result: Result<(), &str>) {
 
 pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
     let root = fixture_root().expect("resolve test fixture root");
-    let (stdout, stdout_path) = NamedTempFile::new_in(&root)
-        .expect("isolated test stdout file")
-        .into_parts();
-    let (stderr, stderr_path) = NamedTempFile::new_in(&root)
-        .expect("isolated test stderr file")
-        .into_parts();
+    let (stdout_reader, stdout) = diagnostic_file(&root);
+    let (stderr_reader, stderr) = diagnostic_file(&root);
     command.stdin(Stdio::null()).stdout(stdout).stderr(stderr);
     let mut child = command.spawn().expect("spawn isolated test");
     let status = loop {
@@ -64,8 +60,8 @@ pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
         },
     });
 
-    let stdout = read_output(&stdout_path);
-    let stderr = read_output(&stderr_path);
+    let stdout = read_output(&stdout_reader);
+    let stderr = read_output(&stderr_reader);
     let stdout_text = String::from_utf8_lossy(&stdout);
     let stderr_text = String::from_utf8_lossy(&stderr);
     let diagnostics = || format!("{command:?}\n{stdout_text}\n{stderr_text}");
@@ -101,8 +97,13 @@ pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
     }
 }
 
-fn read_output(path: &Path) -> Vec<u8> {
-    let file = File::open(path).expect("open isolated test output");
+fn diagnostic_file(root: &Path) -> (File, File) {
+    let output = NamedTempFile::new_in(root).expect("create isolated test output");
+    let reader = File::open(output.path()).expect("open isolated test output");
+    (reader, output.into_file())
+}
+
+fn read_output(file: &File) -> Vec<u8> {
     let length = file.metadata().expect("isolated test output length").len();
     let mut bytes = Vec::new();
     file.take(length)
@@ -115,27 +116,28 @@ fn read_output(path: &Path) -> Vec<u8> {
 fn reading_diagnostics_preserves_live_child_output() {
     use super::fixture;
     use crate::{OwnedChild, test_timeout};
-    use std::time::Duration;
+    use std::{io::Seek, time::Duration};
 
-    let stdout = NamedTempFile::new_in(fixture_root().unwrap()).unwrap();
+    let (mut reader, stdout) = diagnostic_file(&fixture_root().unwrap());
     let mut command = fixture("diagnostics");
     command
         .stdin(Stdio::piped())
-        .stdout(stdout.as_file().try_clone().unwrap())
+        .stdout(stdout.try_clone().unwrap())
         .stderr(Stdio::piped());
     let mut child = OwnedChild::spawn(command).unwrap();
     let ready = Deadline::after(test_timeout(Duration::from_secs(5)));
     assert_eq!(child.stderr_line(ready).unwrap().as_deref(), Some("ready"));
 
-    let length = stdout.as_file().metadata().unwrap().len();
-    stdout.as_file().set_len(length + 1).unwrap();
-    let snapshot = read_output(stdout.path());
+    let length = stdout.metadata().unwrap().len();
+    stdout.set_len(length + 1).unwrap();
+    let snapshot = read_output(&reader);
     let prefix = snapshot.strip_suffix(b"\0").unwrap();
     assert!(prefix.ends_with(b"before diagnostics\n"));
 
     let exit = Deadline::after(test_timeout(Duration::from_secs(5)));
     assert!(child.wait_until(exit).unwrap().status.success());
-    let diagnostics = read_output(stdout.path());
+    reader.rewind().unwrap();
+    let diagnostics = read_output(&reader);
     assert!(
         diagnostics.starts_with(&[prefix, b"after diagnostics\n"].concat()),
         "{:?}",

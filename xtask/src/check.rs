@@ -14,11 +14,11 @@ mod test_thread_observations;
 mod workflows;
 
 use crate::{Result, project_root};
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use syn::spanned::Spanned as _;
-use syn::visit::Visit;
+use syn::ext::IdentExt as _;
 use syn::{Expr, Macro, Token, parse::Parser as _, punctuated::Punctuated};
 
 pub fn run(args: &[String]) -> Result {
@@ -154,37 +154,60 @@ fn shared_test_module(path: &str, source: &str, errors: &mut Vec<String>) -> Res
         return Ok(());
     }
 
-    struct TestAttributes<'a> {
-        file: &'a str,
-        errors: &'a mut Vec<String>,
-    }
-
-    impl TestAttributes<'_> {
-        fn check(&mut self, meta: &syn::Meta, line: usize) {
-            if cfg_test::registers_test(meta) {
-                let file = self.file;
-                self.errors.push(format!(
-                    "[shared-test-module] {file}:{line}: 共享测试辅助模块不能注册用例；请将用例移到独立的集成测试目标"
-                ));
-            }
-        }
-    }
-
-    impl<'ast> Visit<'ast> for TestAttributes<'_> {
-        fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
-            self.check(&attribute.meta, attribute.span().start().line);
-        }
-
-        fn visit_macro(&mut self, invocation: &'ast Macro) {
-            cfg_test::visit_macro_attributes(invocation.tokens.clone(), &mut |meta, line| {
-                self.check(meta, line);
-            });
-        }
-    }
-
-    let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
-    TestAttributes { file: path, errors }.visit_file(&file);
+    let tokens = source
+        .parse::<TokenStream>()
+        .map_err(|error| format!("{path}: {error}"))?;
+    check_shared_test_tokens(path, tokens, errors);
     Ok(())
+}
+
+fn check_shared_test_tokens(path: &str, tokens: TokenStream, errors: &mut Vec<String>) {
+    let tokens: Vec<_> = tokens.into_iter().collect();
+    for (index, token) in tokens.iter().enumerate() {
+        let restriction = match &tokens[index..] {
+            [TokenTree::Punct(hash), rest @ ..] if hash.as_char() == '#' => {
+                let rest = match rest {
+                    [TokenTree::Punct(bang), rest @ ..] if bang.as_char() == '!' => rest,
+                    _ => rest,
+                };
+                let [TokenTree::Group(attribute), ..] = rest else {
+                    continue;
+                };
+                if attribute.delimiter() != Delimiter::Bracket
+                    || !contains_test_ident(attribute.stream())
+                {
+                    continue;
+                }
+                "属性中禁止出现 test 标识符"
+            }
+            [
+                TokenTree::Ident(name),
+                TokenTree::Punct(bang),
+                TokenTree::Ident(_),
+                TokenTree::Group(_),
+                ..,
+            ] if name.unraw() == "macro_rules" && bang.as_char() == '!' => {
+                "禁止定义 macro_rules! 宏"
+            }
+            [TokenTree::Group(group), ..] => {
+                check_shared_test_tokens(path, group.stream(), errors);
+                continue;
+            }
+            _ => continue,
+        };
+        let line = token.span().start().line;
+        errors.push(format!(
+            "[shared-test-module] {path}:{line}: {restriction}；请将用例移到独立的集成测试目标，辅助逻辑写成函数"
+        ));
+    }
+}
+
+fn contains_test_ident(tokens: TokenStream) -> bool {
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Ident(name) => name.unraw() == "test",
+        TokenTree::Group(group) => contains_test_ident(group.stream()),
+        _ => false,
+    })
 }
 
 #[cfg(test)]
@@ -230,7 +253,7 @@ mod fixtures {
         let source = r##"#[test]
 fn sync_case() {}
 mod nested {
-    #[::tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "current_thread")]
     async fn async_case() {}
 }
 const TEXT: &str = "#[test]";
@@ -252,63 +275,42 @@ const TEXT: &str = "#[test]";
     }
 
     #[test]
-    fn rejects_test_attributes_in_shared_macros() {
-        let source = r##"macro_rules! cases {
-    () => {
-        #[test]
-        fn sync_case() {}
-        #[tokio::test]
-        async fn async_case() {}
+    fn rejects_test_tokens_and_macro_definitions_in_shared_modules() {
+        let source = r#"#![cfg(test)]
+macro_rules! cases {
+    (#[cfg_attr($p:meta, test)] $item:item) => {
+        #[cfg_attr($p, $extra, test)]
+        $item
     };
 }
-cases!();
-trace!("#[test]");
+macro_rules! helper { () => {} }
+#[cfg_attr(unix, allow(dead_code), cfg(any(unix, r#test)))]
+fn gated() {}
+"#;
+        let path = "crates/example/tests/support/cases.rs";
+        let mut errors = Vec::new();
+        shared_test_module(path, source, &mut errors).unwrap();
+        assert_eq!(errors.len(), 6, "{errors:?}");
+        for (error, line) in errors.iter().zip([1, 2, 3, 4, 8, 9]) {
+            assert!(
+                error.starts_with(&format!("[shared-test-module] {path}:{line}:")),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_helper_functions_and_non_test_attributes_in_shared_modules() {
+        let source = r##"#[allow(dead_code)]
+#[cfg(feature = "test")]
+fn test() {
+    trace!("#[test]");
+}
 "##;
         let path = "crates/example/tests/support/cases.rs";
         let mut errors = Vec::new();
         shared_test_module(path, source, &mut errors).unwrap();
-        assert_eq!(errors.len(), 2, "{errors:?}");
-        assert!(errors[0].starts_with(&format!("[shared-test-module] {path}:3:")));
-        assert!(errors[1].starts_with(&format!("[shared-test-module] {path}:5:")));
-    }
-
-    #[test]
-    fn rejects_conditional_test_attributes_in_shared_modules() {
-        let source = r#"#[cfg_attr(windows, test)]
-fn sync_case() {}
-#[cfg_attr(any(unix, windows), allow(dead_code), tokio::test)]
-async fn async_case() {}
-#[cfg_attr(test, allow(dead_code))]
-fn helper() {}
-"#;
-        let path = "crates/example/tests/support/cases.rs";
-        let mut errors = Vec::new();
-        shared_test_module(path, source, &mut errors).unwrap();
-        assert_eq!(errors.len(), 2, "{errors:?}");
-        assert!(errors[0].starts_with(&format!("[shared-test-module] {path}:1:")));
-        assert!(errors[1].starts_with(&format!("[shared-test-module] {path}:3:")));
-    }
-
-    #[test]
-    fn rejects_test_attributes_with_macro_conditions_in_shared_modules() {
-        let source = r#"macro_rules! cases {
-    ($platform:meta) => {
-        #[cfg_attr($platform, test)]
-        fn sync_case() {}
-        #[cfg_attr($platform, allow(dead_code), cfg_attr(all(unix, target_pointer_width = "64"), tokio::test))]
-        async fn async_case() {}
-        #[cfg_attr($platform, allow(dead_code))]
-        fn helper() {}
-    };
-}
-cases!(windows);
-"#;
-        let path = "crates/example/tests/support/cases.rs";
-        let mut errors = Vec::new();
-        shared_test_module(path, source, &mut errors).unwrap();
-        assert_eq!(errors.len(), 2, "{errors:?}");
-        assert!(errors[0].starts_with(&format!("[shared-test-module] {path}:3:")));
-        assert!(errors[1].starts_with(&format!("[shared-test-module] {path}:5:")));
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
