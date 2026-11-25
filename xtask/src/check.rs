@@ -362,6 +362,55 @@ mod tests {
     }
 
     #[test]
+    fn checks_decoded_markdown_url_paths() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let path = "docs/guide.md".to_owned();
+        fs::create_dir_all(root.join("docs/assets")).unwrap();
+        for file in ["assets/x.gif", "a b.md", "a#b.md", "%zz"] {
+            fs::write(root.join("docs").join(file), "").unwrap();
+        }
+        fs::write(
+            root.join(&path),
+            "[image](assets/x.gif?raw=1) [space](a%20b.md) [hash](a%23b.md?raw=1#section)\n\
+             [missing](missing.md?x=1)\n\
+             [invalid](%zz)\n",
+        )
+        .unwrap();
+        let mut errors = Vec::new();
+
+        doc_links::check(root, &[path], &mut errors).unwrap();
+
+        assert_eq!(
+            errors,
+            [
+                "[doc-links] docs/guide.md:2: missing.md 不存在",
+                "[doc-links] docs/guide.md:3: %zz 不存在",
+            ]
+        );
+    }
+
+    #[test]
+    fn checks_markdown_footnote_links() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let path = "guide.md".to_owned();
+        fs::write(root.join("implementation.rs"), "").unwrap();
+        fs::write(
+            root.join(&path),
+            "参见说明[^src]和示例[^example]。\n\n\
+             [^src]: [实现](missing.rs)\n\n\
+             [^example]: [示例](implementation.rs)\n",
+        )
+        .unwrap();
+        let mut errors = Vec::new();
+
+        doc_links::check(root, &[path], &mut errors).unwrap();
+
+        assert_eq!(errors, ["[doc-links] guide.md:3: missing.rs 不存在"]);
+    }
+
+    #[test]
     fn skips_source_baselines_when_a_source_fails_to_parse() {
         let directory = emp_test_support::fixture_dir().unwrap();
         let root = directory.path();
