@@ -7,7 +7,7 @@ use std::{
     net::{Shutdown, TcpStream as StdStream},
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard},
-    task::{Context, Poll, ready},
+    task::{Context, Poll},
 };
 use std::{io::Read, time::Instant};
 use tokio::{
@@ -18,6 +18,7 @@ use tokio::{
 #[derive(Clone)]
 pub(super) struct ConnectionIo {
     stream: Arc<Mutex<TcpStream>>,
+    #[cfg(test)]
     pub(super) write_hook: WriteHook,
 }
 
@@ -25,6 +26,7 @@ impl ConnectionIo {
     pub(super) fn new(stream: TcpStream) -> Self {
         Self {
             stream: Arc::new(Mutex::new(stream)),
+            #[cfg(test)]
             write_hook: WriteHook::default(),
         }
     }
@@ -43,6 +45,7 @@ impl ConnectionIo {
 
     pub(super) fn cancel(&self) {
         let _ = SockRef::from(&*self.stream()).shutdown(Shutdown::Both);
+        #[cfg(test)]
         self.write_hook.cancel();
     }
 }
@@ -63,7 +66,8 @@ impl AsyncWrite for ConnectionIo {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        ready!(self.write_hook.poll(cx, buf));
+        #[cfg(test)]
+        std::task::ready!(self.write_hook.poll(cx, buf));
         Pin::new(&mut *self.stream()).poll_write(cx, buf)
     }
 
@@ -75,6 +79,7 @@ impl AsyncWrite for ConnectionIo {
         Pin::new(&mut *self.stream()).poll_shutdown(cx)
     }
 }
+#[cfg(test)]
 use super::test_hooks::WriteHook;
 
 pub(crate) struct HttpListener(std::net::TcpListener);

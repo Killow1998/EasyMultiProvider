@@ -1,6 +1,5 @@
 //! Passive receipts end at the downstream boundary and cannot access routing, retries,
 //! accounts or accounting; model outcomes retain their separate upstream boundary.
-use crate::services::events::TerminalEvent;
 use crate::services::observation::diagnostics::{Diagnostics, schema};
 use crate::services::request_facts::reasoning_effort;
 use emp_context::HistoryError;
@@ -35,6 +34,17 @@ impl Phase {
     }
 }
 
+struct EventError {
+    origin: &'static str,
+    code: String,
+    phase: Phase,
+}
+
+struct EventDelivery {
+    error: Option<EventError>,
+    terminal: Option<&'static str>,
+}
+
 pub(crate) struct RequestObservation {
     diagnostics: Arc<Diagnostics>,
     errors: crate::services::error_presentation::ErrorPresentation,
@@ -45,6 +55,7 @@ pub(crate) struct RequestObservation {
     execution_started: Option<Instant>,
     phase: Phase,
     fields: Value,
+    pending_event: Option<EventDelivery>,
     continuation: Option<super::continuation::NativeContinuation>,
 }
 
@@ -77,6 +88,7 @@ impl RequestObservation {
             execution_started: None,
             phase: Phase::Authentication,
             fields,
+            pending_event: None,
             continuation: None,
         }
     }
@@ -251,45 +263,78 @@ impl RequestObservation {
         self.event_type_written(event["type"].as_str().unwrap_or_default(), result)
     }
 
-    pub(crate) fn sse_event_written<T, E>(
+    pub(crate) fn queue_event(
         &mut self,
         event: Option<&Value>,
+        event_type: &str,
         upstream: bool,
-        terminal: Option<TerminalEvent>,
-        result: Result<T, E>,
-    ) -> Result<T, E> {
-        if let Some(event) = event {
-            self.record_event_error(event, result.is_ok(), upstream.then_some("upstream"));
+        queued: std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        let delivery = EventDelivery {
+            error: event.and_then(|event| self.event_error(event, upstream.then_some("upstream"))),
+            terminal: terminal_outcome(event_type),
+        };
+        assert!(self.pending_event.replace(delivery).is_none());
+        match queued {
+            Ok(()) => Ok(()),
+            Err(error) => self.flush_event(Err(error)),
         }
-        self.record_event_delivery(terminal.and_then(TerminalEvent::response_outcome), result)
     }
 
-    fn record_event_error(&mut self, event: &Value, delivered: bool, boundary: Option<&str>) {
-        let error = event.get("error").or_else(|| {
-            event
-                .get("response")
-                .and_then(|response| response.get("error"))
-        });
-        if let Some(error) = error.filter(|error| error.is_object()) {
-            let origin = boundary.unwrap_or_else(|| {
-                error["origin"]
-                    .as_str()
-                    .filter(|origin| {
-                        matches!(
-                            *origin,
-                            "emp" | "upstream" | "transport" | "claude_cli" | "client"
-                        )
-                    })
-                    .unwrap_or("unknown")
-            });
-            self.fields["error_origin"] = json!(origin);
-            self.fields["error_code"] = json!(schema::id(&error["code"]));
-            self.diagnostics.journal.event("warning", "response_error", &json!({
-                "request_id":self.fields["request_id"], "connection_id":self.fields["connection_id"],
-                "phase":self.phase.name(), "error_origin":origin, "error_code":self.fields["error_code"],
-                "delivered":delivered,
-            }));
+    pub(crate) fn flush_event(&mut self, result: std::io::Result<()>) -> std::io::Result<()> {
+        if let Some(delivery) = self.pending_event.take() {
+            if let Some(error) = delivery.error {
+                self.write_event_error(error, result.is_ok());
+            }
+            return self.record_event_delivery(delivery.terminal, result);
         }
+        result
+    }
+
+    fn event_error(&self, event: &Value, boundary: Option<&'static str>) -> Option<EventError> {
+        let error = event
+            .get("error")
+            .or_else(|| event.get("response")?.get("error"))?;
+        if !error.is_object() {
+            return None;
+        }
+        let origin = boundary.or_else(|| {
+            let origin = error["origin"].as_str()?;
+            ["emp", "upstream", "transport", "claude_cli", "client"]
+                .into_iter()
+                .find(|&valid| valid == origin)
+        });
+        Some(EventError {
+            origin: origin.unwrap_or("unknown"),
+            code: schema::id(&error["code"]),
+            phase: self.phase,
+        })
+    }
+
+    fn record_event_error(
+        &mut self,
+        event: &Value,
+        delivered: bool,
+        boundary: Option<&'static str>,
+    ) {
+        if let Some(error) = self.event_error(event, boundary) {
+            self.write_event_error(error, delivered);
+        }
+    }
+
+    fn write_event_error(&mut self, error: EventError, delivered: bool) {
+        let EventError {
+            origin,
+            code,
+            phase,
+        } = error;
+        self.fields["error_origin"] = json!(origin);
+        self.fields["error_code"] = json!(code);
+        self.diagnostics.journal.event("warning", "response_error", &json!({
+            "request_id":self.fields["request_id"], "connection_id":self.fields["connection_id"],
+            "phase":phase.name(), "error_origin":origin, "error_code":self.fields["error_code"],
+            "delivered":delivered,
+        }));
     }
 
     pub(crate) fn buffered_error(&mut self, body: &[u8], delivered: bool) {
@@ -305,11 +350,7 @@ impl RequestObservation {
         event_type: &str,
         result: Result<T, E>,
     ) -> Result<T, E> {
-        self.record_event_delivery(
-            TerminalEvent::response(event_type.as_bytes())
-                .and_then(TerminalEvent::response_outcome),
-            result,
-        )
+        self.record_event_delivery(terminal_outcome(event_type), result)
     }
 
     fn record_event_delivery<T, E>(
@@ -329,6 +370,16 @@ impl RequestObservation {
         self.fields["transport"] = json!("http");
         self.fields["response_status"] = status.clone();
         let _ = self.written(result, true);
+    }
+}
+
+fn terminal_outcome(event_type: &str) -> Option<&'static str> {
+    match event_type {
+        "response.completed" => Some("completed"),
+        "response.incomplete" => Some("incomplete"),
+        "response.failed" => Some("failed"),
+        "error" => Some("error"),
+        _ => None,
     }
 }
 

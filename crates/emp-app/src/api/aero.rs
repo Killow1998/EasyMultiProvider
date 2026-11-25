@@ -5,14 +5,13 @@ use crate::{
     server::http::{error::HttpReply, inference::InferenceOutcome},
     services::{
         disconnect::{DisconnectMonitor, DisconnectRace},
-        events::SseFrame,
         gateway_clients::Caller,
         modules::aero::{CallLease, Relay},
         observation::request::{Phase, RequestObservation},
     },
 };
 use axum::body::Bytes;
-use emp_transport::{HttpMethod, HttpResponse};
+use emp_transport::{HttpMethod, HttpResponse, SseJsonParser};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -107,14 +106,6 @@ pub(crate) fn relay(
         .header("content-type")
         .unwrap_or("application/json");
     let sse = content_type.starts_with("text/event-stream");
-    let content_length = if content_type.starts_with("application/json") {
-        upstream
-            .response
-            .header("content-length")
-            .and_then(|length| length.parse::<u64>().ok())
-    } else {
-        None
-    };
     if observation
         .written(
             downstream.head(status, content_type, std::iter::empty()),
@@ -124,44 +115,39 @@ pub(crate) fn relay(
     {
         return InferenceOutcome::Streamed;
     }
-    let mut parser = sse.then(|| SseFrame::new(true));
-    let mut received = 0_u64;
+    let mut parser = sse.then(SseJsonParser::new);
+    let mut pending = None;
     loop {
-        match state.backend.transport.runtime.block_on(await_module(
-            state,
-            &mut monitor,
-            upstream.response.next_chunk(),
-        )) {
+        let next = state
+            .backend
+            .transport
+            .runtime
+            .block_on(monitor.race(upstream.response.next_chunk()));
+        let flushed = if matches!(next, DisconnectRace::Ready(Ok(Some(_)))) {
+            downstream.flush_frame()
+        } else {
+            downstream.finish_producing()
+        };
+        if let Some(events) = pending.take() {
+            if observation.written(flushed, false).is_err() {
+                break;
+            }
+            for event in events {
+                let _ =
+                    observation.event_written(&Value::Object(event), Ok::<(), std::io::Error>(()));
+            }
+        }
+        match next {
             DisconnectRace::Ready(Ok(Some(chunk))) => {
-                received += chunk.len() as u64;
-                let mut terminal = false;
-                let mut events = Vec::new();
-                if let Some(parser) = &mut parser {
-                    parser.push(&chunk, |event, data| {
-                        let event = event.filter(|event| event.response_outcome().is_some());
-                        terminal |= event.is_some();
-                        if data.is_some() || event.is_some() {
-                            events.push((data.map(Value::Object), event));
-                        }
-                    });
-                }
-                let chunk = Bytes::from(chunk);
-                let written = if terminal || content_length == Some(received) {
-                    downstream.finish_frame(chunk)
-                } else {
-                    downstream.write_frame(chunk)
-                };
-                if observation.written(written, false).is_err() {
+                let events = parser
+                    .as_mut()
+                    .and_then(|parser| parser.push(&chunk).ok())
+                    .unwrap_or_default();
+                if let Err(error) = downstream.write_frame(Bytes::from(chunk)) {
+                    let _ = observation.written(Err::<(), _>(error), false);
                     break;
                 }
-                for (event, outcome) in events {
-                    let _ = observation.sse_event_written(
-                        event.as_ref(),
-                        false,
-                        outcome,
-                        Ok::<(), std::io::Error>(()),
-                    );
-                }
+                pending = Some(events);
             }
             DisconnectRace::Ready(Ok(None)) => {
                 if !sse {

@@ -93,6 +93,7 @@ async fn read(
     page: PageRead,
     State(state): State<Arc<ServerState>>,
 ) -> Result<HttpReply, EntryError> {
+    #[cfg(test)]
     state
         .lifecycle
         .test_hooks

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::server::ServerHooks;
 mod catalog;
 
 pub(crate) use catalog::{augment_catalog, augment_public, validate_update};
@@ -5,7 +7,6 @@ pub(crate) use catalog::{augment_catalog, augment_public, validate_update};
 use super::{ActiveWorker, Modules};
 use crate::{
     app::ServerState,
-    server::ServerHooks,
     services::{
         connection_admission::{BusinessToken, ConnectionSlot},
         gateway_clients::Caller,
@@ -115,9 +116,12 @@ impl Callers {
     pub(crate) fn identify_callback(
         &self,
         key: &str,
-        hooks: &ServerHooks,
+        #[cfg(test)] hooks: &ServerHooks,
     ) -> Option<(CallerDelegation, Option<CallbackLease>)> {
-        let calls = hooks.lock_callback_delegations(&self.active).ok()?;
+        let lock = || self.active.lock();
+        #[cfg(test)]
+        let lock = || hooks.lock_callback_delegations(&self.active, lock);
+        let calls = lock().ok()?;
         let (identity, lease) = calls.get(key)?;
         Some((
             identity.clone(),

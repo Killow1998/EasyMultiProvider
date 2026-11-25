@@ -3,7 +3,7 @@ use std::{
     io,
     sync::mpsc::{self, Receiver, Sender},
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 /// Owns a probe's trigger channel and its worker. Call `begin` with the
@@ -104,8 +104,8 @@ impl<T> ObservationResult<T> {
         self.wait_until(deadline)
     }
 
-    pub fn wait_for(self, timeout: Duration) -> io::Result<T> {
-        let deadline = self.deadline.capped(timeout);
+    pub fn wait_for(self, deadline: Deadline) -> io::Result<T> {
+        let deadline = Deadline(self.deadline.0.min(deadline.0));
         self.wait_until(deadline)
     }
 
@@ -127,6 +127,7 @@ impl<T> ObservationResult<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn queued_observation_is_accepted_at_completion_against_the_tighter_deadline() {
@@ -141,7 +142,7 @@ mod tests {
             let request = observation.worker().next_request().unwrap();
             request.send.send((completed_at, 7)).unwrap();
             assert_eq!(
-                result.wait_until(tightened).map_err(|error| error.kind()),
+                result.wait_for(tightened).map_err(|error| error.kind()),
                 expected
             );
         }

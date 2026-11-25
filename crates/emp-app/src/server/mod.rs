@@ -7,7 +7,9 @@ pub(crate) mod http;
 pub(crate) mod lan;
 pub(crate) mod recovery;
 pub(crate) mod team_discovery;
+#[cfg(test)]
 mod test_hooks;
+#[cfg(test)]
 pub(crate) use test_hooks::ServerHooks;
 pub(crate) mod transport;
 
@@ -109,6 +111,7 @@ pub(crate) struct ServerControl {
     pub(crate) shutdown: Arc<AtomicBool>,
     stopped: watch::Sender<Option<(ShutdownReason, DrainInstant)>>,
     drain_clock: DrainClock,
+    #[cfg(test)]
     test_hooks: Arc<test_hooks::ServerHooks>,
     updates: Option<UpdateState>,
     management_events: Option<Arc<ManagementEvents>>,
@@ -122,6 +125,7 @@ impl ServerControl {
             shutdown: Arc::default(),
             stopped: watch::Sender::new(None),
             drain_clock: DrainClock::default(),
+            #[cfg(test)]
             test_hooks: Arc::default(),
             updates: None,
             management_events: None,

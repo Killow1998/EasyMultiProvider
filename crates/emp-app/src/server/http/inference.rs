@@ -235,10 +235,11 @@ async fn submit(
                 delivery,
                 sender,
                 business,
+                #[cfg(test)]
                 state.lifecycle.test_hooks.clone(),
             );
             let reply = route.execute(&mut sink, request, body, &state, observation.as_mut());
-            sink.finish(|| match reply {
+            let flushed = sink.finish(|| match reply {
                 InferenceOutcome::Buffered(reply) => {
                     buffered(reply, observation.as_ref(), &inference.receipt)
                 }
@@ -248,10 +249,14 @@ async fn submit(
                 }
                 InferenceOutcome::Streamed => no_response(),
             });
+            if let Some(observation) = &mut observation {
+                let _ = observation.flush_event(flushed);
+            }
             *inference.model.lock().expect("model observation") = observation;
         }
     });
     *inference.stream.worker.lock().expect("stream worker") = Some(worker);
+    #[cfg(test)]
     state.lifecycle.test_hooks.before_response_receive().await;
     response.await.map_err(|_| EntryError::internal().reply())
 }

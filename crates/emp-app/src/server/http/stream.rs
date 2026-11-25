@@ -1,10 +1,10 @@
+#[cfg(test)]
 use crate::server::test_hooks::{ServerHooks, WriteHook};
 use crate::{
     http::response::status_text,
     server::http::error::response_head,
     services::{
         connection_admission::BusinessToken,
-        events::{SseFrame, TerminalEvent, sse_frame},
         gateway_clients::Caller,
         modules::aero::{Call, CallLease, CallParent, Callers},
     },
@@ -15,7 +15,6 @@ use axum::{
     response::Response,
 };
 use hyper::body::{Body as HttpBody, Frame};
-use serde_json::json;
 use std::{
     convert::Infallible,
     io,
@@ -25,7 +24,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    task::{Context, Poll},
+    task::{Context, Poll, Waker, ready},
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -38,9 +37,10 @@ pub(in crate::server) struct StreamConnection {
 }
 
 impl StreamConnection {
-    pub(in crate::server) fn new(write_hook: WriteHook) -> Self {
+    pub(in crate::server) fn new(#[cfg(test)] write_hook: WriteHook) -> Self {
         Self {
             delivery: Arc::new(Delivery {
+                #[cfg(test)]
                 write_hook,
                 ..Delivery::default()
             }),
@@ -51,9 +51,16 @@ impl StreamConnection {
 
 #[derive(Default)]
 pub(in crate::server) struct Delivery {
-    pending: Mutex<Option<Flushed>>,
+    pending: Mutex<PendingFlush>,
     bytes: AtomicUsize,
+    #[cfg(test)]
     write_hook: WriteHook,
+}
+
+#[derive(Default)]
+struct PendingFlush {
+    ack: Option<Flushed>,
+    body: Option<Waker>,
 }
 
 #[derive(Clone)]
@@ -61,7 +68,12 @@ pub(in crate::server) struct Flushed(mpsc::Sender<()>);
 
 impl Delivery {
     pub(in crate::server) fn await_flush(&self, flushed: Flushed) {
-        let previous = self.pending.lock().expect("HTTP flush").replace(flushed);
+        let previous = self
+            .pending
+            .lock()
+            .expect("HTTP flush")
+            .ack
+            .replace(flushed);
         assert!(previous.is_none());
     }
 
@@ -74,13 +86,28 @@ impl Delivery {
     }
 
     pub(in crate::server) fn flushed(&self) {
-        if let Some(sender) = self.pending.lock().expect("HTTP flush").take() {
+        let PendingFlush { ack, body } =
+            std::mem::take(&mut *self.pending.lock().expect("HTTP flush"));
+        if let Some(sender) = ack {
             let _ = sender.0.try_send(());
+        }
+        if let Some(body) = body {
+            body.wake();
         }
     }
 
     pub(in crate::server) fn close(&self) {
-        self.pending.lock().expect("HTTP flush").take();
+        std::mem::take(&mut *self.pending.lock().expect("HTTP flush"));
+    }
+
+    fn poll_flushed(&self, cx: &Context<'_>) -> Poll<()> {
+        let mut pending = self.pending.lock().expect("HTTP flush");
+        if pending.ack.is_some() {
+            pending.body = Some(cx.waker().clone());
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
     }
 }
 
@@ -90,6 +117,8 @@ pub(crate) struct BodyOutput {
     response: Option<oneshot::Sender<Response>>,
     stream: Option<StreamFrames>,
     work: Option<ResponseWork>,
+    frame_pending: bool,
+    #[cfg(test)]
     hooks: Arc<ServerHooks>,
 }
 
@@ -114,7 +143,7 @@ impl BodyOutput {
         delivery: Arc<Delivery>,
         response: oneshot::Sender<Response>,
         business: BusinessToken,
-        hooks: Arc<ServerHooks>,
+        #[cfg(test)] hooks: Arc<ServerHooks>,
     ) -> Self {
         Self {
             socket,
@@ -122,6 +151,8 @@ impl BodyOutput {
             response: Some(response),
             stream: None,
             work: Some(ResponseWork::Request(business)),
+            frame_pending: false,
+            #[cfg(test)]
             hooks,
         }
     }
@@ -175,102 +206,97 @@ impl BodyOutput {
             .wait_for_flush()
     }
 
-    pub(crate) fn response_event(
-        &mut self,
-        frames: &[Vec<u8>],
-    ) -> (io::Result<()>, Option<TerminalEvent>) {
-        let mut terminal = None;
-        for frame in frames {
-            let (result, event) = self.write_sse_frame(Bytes::copy_from_slice(frame), false);
-            terminal = event.or(terminal);
-            if result.is_err() {
-                return (result, terminal);
-            }
-        }
-        (Ok(()), terminal)
-    }
-
-    pub(super) fn report_terminal(&mut self, frame: Vec<u8>) -> io::Result<()> {
-        self.write_sse_frame(Bytes::from(frame), true).0
-    }
-
-    fn write_sse_frame(
-        &mut self,
-        bytes: Bytes,
-        report: bool,
-    ) -> (io::Result<()>, Option<TerminalEvent>) {
-        let mut terminal = None;
-        SseFrame::new(false).push(&bytes, |event, _| {
-            terminal = event
-                .filter(|event| report || event.response_outcome().is_some())
-                .or(terminal);
-        });
-        let result = if terminal.is_some() {
-            self.finish_frame(bytes)
-        } else {
-            self.write_frame(bytes)
-        };
-        (result, terminal)
-    }
-
-    pub(super) fn report_progress(&mut self, completed: i64, total: i64) -> io::Result<()> {
-        let frame = sse_frame("progress", &json!({"completed":completed,"total":total}))?;
-        self.write_frame(Bytes::from(frame))
-    }
-
     pub(crate) fn write_frame(&mut self, bytes: Bytes) -> io::Result<()> {
-        let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
+        self.flush_frame()?;
+        let stream = self.stream.as_mut().expect("response stream");
+        #[cfg(test)]
+        let queued = self.delivery.write_hook.pause_for_frame(&bytes);
+        #[cfg(test)]
+        let observed = queued.as_ref().map(|_| bytes.to_vec());
         stream
             .send
             .blocking_send(bytes)
             .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        stream.wait_for_flush()
+        self.frame_pending = true;
+        #[cfg(test)]
+        if let Some(queued) = queued {
+            let _ = queued.send(observed);
+        }
+        Ok(())
     }
 
-    pub(crate) fn finish_frame(&mut self, bytes: Bytes) -> io::Result<()> {
-        let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
-        let permit = tokio::runtime::Handle::current()
-            .block_on(stream.send.reserve())
-            .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        ResponseWork::handoff(self.work.take(), || {
-            self.hooks
-                .publish_output(Some(&self.delivery.write_hook), Some(&bytes), || {
-                    permit.send(bytes.clone());
-                });
-        });
-        stream.wait_for_flush()
+    pub(crate) fn flush_frame(&mut self) -> io::Result<()> {
+        if std::mem::take(&mut self.frame_pending) {
+            self.stream
+                .as_mut()
+                .expect("response stream")
+                .wait_for_flush()?;
+        }
+        Ok(())
     }
 
-    pub(super) fn finish(mut self, response: impl FnOnce() -> Response) {
+    pub(super) fn finish(mut self, response: impl FnOnce() -> Response) -> io::Result<()> {
         let reply = self.response.is_some().then(response);
-        self.close(reply);
+        self.finish_output(reply)
     }
 
-    fn close(&mut self, reply: Option<Response>) {
-        let stream = self.stream.take();
+    pub(crate) fn finish_producing(&mut self) -> io::Result<()> {
+        if matches!(self.work, Some(ResponseWork::Aero(_))) {
+            return self.finish_output(None);
+        }
+        ResponseWork::handoff(self.work.take(), || {
+            #[cfg(test)]
+            self.hooks.stream_handoff();
+        });
+        self.flush_frame()
+    }
+
+    fn finish_output(&mut self, reply: Option<Response>) -> io::Result<()> {
+        let confirmation = self.close(reply);
+        if std::mem::take(&mut self.frame_pending) {
+            confirmation
+                .expect("queued response frame")
+                .blocking_recv()
+                .ok_or(io::ErrorKind::BrokenPipe)?;
+        }
+        Ok(())
+    }
+
+    fn close(&mut self, reply: Option<Response>) -> Option<mpsc::Receiver<()>> {
+        let (send, confirmation) = self
+            .stream
+            .take()
+            .map(|stream| (stream.send, stream.confirmation))
+            .unzip();
         let sender = self.response.take();
         let work = self.work.take();
-        let aero_eof = matches!(work, Some(ResponseWork::Aero(_))) && stream.is_some();
+        #[cfg(test)]
+        let stream_handoff = send.is_some() && work.is_some();
         ResponseWork::handoff(work, || {
             if let (Some(sender), Some(response)) = (sender, reply) {
-                self.hooks
-                    .publish_output(Some(&self.delivery.write_hook), None, || {
-                        let _ = sender.send(response);
-                    });
+                let publish = || {
+                    let _ = sender.send(response);
+                };
+                #[cfg(test)]
+                let publish = || {
+                    self.hooks
+                        .publish_output(Some(&self.delivery.write_hook), publish)
+                };
+                publish();
             }
-            if aero_eof {
-                self.hooks
-                    .publish_output(Some(&self.delivery.write_hook), None, || drop(stream));
-            } else {
-                drop(stream);
+            #[cfg(test)]
+            if stream_handoff {
+                self.hooks.stream_handoff();
             }
+            drop(send);
         });
+        confirmation
     }
 }
 
 impl Drop for BodyOutput {
     fn drop(&mut self) {
-        self.close(None);
+        drop(self.close(None));
     }
 }
 
@@ -335,6 +361,7 @@ impl HttpBody for EventBody {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+        ready!(self.delivery.poll_flushed(cx));
         self.frames.poll_recv(cx).map(|frame| {
             frame.map(|bytes| {
                 self.delivery.await_flush(self.flushed.clone());

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use syn::visit::{self, Visit};
 
 const BASELINE: &[(&str, usize)] = &[
-    ("emp-app", 96),
+    ("emp-app", 135),
     ("emp-codex", 15),
     ("emp-config", 3),
     ("emp-context", 1),

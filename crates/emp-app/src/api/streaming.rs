@@ -8,11 +8,12 @@ use crate::services::disconnect::DisconnectMonitor;
 use crate::services::disconnect::DisconnectRace;
 use crate::services::events::sse_frame;
 use crate::services::events::stream_event_activity;
-use crate::services::events::{TerminalEvent, terminal_stream_event};
+use crate::services::events::terminal_stream_event;
 use crate::services::native;
 use crate::services::observation::request::RequestObservation;
 use crate::services::providers::persist_protocol_observation;
 use crate::util::random_hex;
+use axum::body::Bytes;
 use emp_domain::ResolvedRoute;
 use emp_router::ExternalStream;
 use emp_router::ProjectionIds;
@@ -71,49 +72,50 @@ impl<'a> ObservedSse<'a> {
         )
     }
     pub(crate) fn frames(&mut self, frames: &[Vec<u8>], last_event: &str) -> std::io::Result<()> {
-        let (result, terminal) = self.write_frames(frames, last_event, false);
-        self.observation
-            .sse_event_written(None, false, terminal, result)
+        self.write_frames(frames, None, last_event, false)
     }
 
     pub(crate) fn event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
-        let (result, terminal) =
-            self.write_frames(frames, event["type"].as_str().unwrap_or_default(), false);
-        self.observation
-            .sse_event_written(Some(event), false, terminal, result)
+        self.write_frames(
+            frames,
+            Some(event),
+            event["type"].as_str().unwrap_or_default(),
+            false,
+        )
     }
 
     fn upstream_event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
-        let (result, terminal) =
-            self.write_frames(frames, event["type"].as_str().unwrap_or_default(), true);
-        self.observation
-            .sse_event_written(Some(event), true, terminal, result)
+        self.write_frames(
+            frames,
+            Some(event),
+            event["type"].as_str().unwrap_or_default(),
+            true,
+        )
     }
 
     fn write_frames(
         &mut self,
         frames: &[Vec<u8>],
+        event: Option<&Value>,
         event_type: &str,
         upstream: bool,
-    ) -> (std::io::Result<()>, Option<TerminalEvent>) {
-        if !matches!(event_type, "response.failed" | "error") {
-            return self.sink.response_event(frames);
-        }
-        let formatted = frames
-            .iter()
-            .map(|frame| {
-                self.observation
-                    .errors()
-                    .frame(frame, upstream)
-                    .unwrap_or_else(|| frame.clone())
-            })
-            .collect::<Vec<_>>();
-        self.sink.response_event(&formatted)
+    ) -> std::io::Result<()> {
+        self.observation.flush_event(self.sink.flush_frame())?;
+        let format_error = matches!(event_type, "response.failed" | "error");
+        let queued = frames.iter().try_for_each(|frame| {
+            let bytes = format_error
+                .then(|| self.observation.errors().frame(frame, upstream))
+                .flatten()
+                .map_or_else(|| Bytes::copy_from_slice(frame), Bytes::from);
+            self.sink.write_frame(bytes)
+        });
+        self.observation
+            .queue_event(event, event_type, upstream, queued)
     }
 }
 
 pub(crate) fn serve_external_stream(
-    downstream: ObservedSse<'_>,
+    mut downstream: ObservedSse<'_>,
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
@@ -135,8 +137,8 @@ pub(crate) fn serve_external_stream(
         }
     };
     let completed = relay_stream(
+        &mut downstream,
         RelayContext {
-            downstream,
             state,
             route: &candidate,
             body,
@@ -147,13 +149,16 @@ pub(crate) fn serve_external_stream(
         monitor,
     )?;
     if completed {
-        persist_protocol_observation(state, &candidate);
+        let flushed = downstream.sink.finish_producing();
+        if downstream.observation.flush_event(flushed).is_ok() {
+            persist_protocol_observation(state, &candidate);
+        }
     }
     Ok(())
 }
 
 pub(crate) fn serve_native_stream(
-    downstream: ObservedSse<'_>,
+    mut downstream: ObservedSse<'_>,
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
@@ -186,8 +191,8 @@ pub(crate) fn serve_native_stream(
     let (upstream, usage) = upstream;
     let response_headers = upstream.headers.clone();
     relay_stream(
+        &mut downstream,
         RelayContext {
-            downstream,
             state,
             route,
             body,
@@ -275,7 +280,6 @@ impl RelaySource for ExternalRelay {
 }
 
 struct RelayContext<'a> {
-    downstream: ObservedSse<'a>,
     state: &'a ServerState,
     route: &'a ResolvedRoute,
     body: &'a Value,
@@ -284,12 +288,12 @@ struct RelayContext<'a> {
 }
 
 fn relay_stream(
+    downstream: &mut ObservedSse<'_>,
     context: RelayContext<'_>,
     mut source: impl RelaySource,
     monitor: Option<DisconnectMonitor>,
 ) -> Result<bool, HttpReply> {
     let RelayContext {
-        mut downstream,
         state,
         route,
         body,
@@ -303,6 +307,17 @@ fn relay_stream(
     let mut started = false;
     loop {
         let event = source.next(runtime, monitor.as_mut());
+        if started {
+            let flushed = match event {
+                RelayEvent::Incomplete | RelayEvent::Disconnected => {
+                    downstream.sink.finish_producing()
+                }
+                _ => downstream.sink.flush_frame(),
+            };
+            if downstream.observation.flush_event(flushed).is_err() {
+                return Ok(false);
+            }
+        }
         usage.upstream_observation(source.observation());
         let terminal =
             matches!(&event, RelayEvent::Event { body, .. } if terminal_stream_event(body));

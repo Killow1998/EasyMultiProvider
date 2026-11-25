@@ -91,10 +91,11 @@ impl ConnectionIntake {
             .filter(|request| request.method == RequestMethod::Post)
             .and_then(|request| aero_delegation_key(request, state, peer))
             .and_then(|key| {
-                state
-                    .backend
-                    .aero_callers
-                    .identify_callback(key, &state.lifecycle.test_hooks)
+                state.backend.aero_callers.identify_callback(
+                    key,
+                    #[cfg(test)]
+                    &state.lifecycle.test_hooks,
+                )
             });
         if let Some((identity, Some(lease))) = callback {
             drop(self);

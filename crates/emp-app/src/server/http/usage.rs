@@ -15,6 +15,7 @@ use crate::{
 };
 use axum::{
     Extension, Router,
+    body::Bytes,
     extract::State,
     response::{IntoResponse, Response},
     routing::get,
@@ -94,26 +95,8 @@ impl ReportQuery {
         self,
         state: &ServerState,
         cancelled: Arc<AtomicBool>,
-        write_progress: impl Fn(i64, i64) -> io::Result<()> + Send + 'static,
+        progress: impl Fn(i64, i64) -> io::Result<()> + Send + 'static,
     ) -> Result<Vec<u8>, serde_json::Error> {
-        #[cfg(test)]
-        let gate = state.backend.usage.report_gate.clone();
-        let progress = {
-            #[cfg(test)]
-            let cancelled = cancelled.clone();
-            move |completed, total| {
-                write_progress(completed, total)?;
-                #[cfg(test)]
-                if completed == 0 {
-                    let gate = gate.lock().unwrap().take();
-                    if let Some(gate) = gate {
-                        let _ = gate.first_frame.send(cancelled.clone());
-                        let _ = gate.release.blocking_recv();
-                    }
-                }
-                Ok(())
-            }
-        };
         let (report, message) = match self {
             Self::Calls(filter) => (
                 calls::query(state, &filter, progress, Some(cancelled)),
@@ -154,8 +137,10 @@ async fn read_report(
     let stream = request.extensions().get::<Arc<StreamConnection>>();
     let delivery = stream.map(|stream| stream.delivery.clone());
     let (sender, response) = oneshot::channel();
+    #[cfg(test)]
     let hooks = state.lifecycle.test_hooks.clone();
     let worker = spawn_response_work({
+        #[cfg(test)]
         let hooks = hooks.clone();
         move |business| {
             let Some(delivery) = delivery else {
@@ -167,23 +152,33 @@ async fn read_report(
                     )
                     .into_response();
                 handoff_response(Some(business), || {
-                    hooks.publish_output(None, None, || {
+                    let publish = || {
                         let _ = sender.send(response);
-                    });
+                    };
+                    #[cfg(test)]
+                    let publish = || hooks.publish_output(None, publish);
+                    publish();
                 });
                 return;
             };
             let socket = socket.expect("report stream socket").0;
-            let mut output = BodyOutput::new(socket, delivery, sender, business, hooks);
+            let mut output = BodyOutput::new(
+                socket,
+                delivery,
+                sender,
+                business,
+                #[cfg(test)]
+                hooks,
+            );
             let query = match report.prepare_stream(raw.request(), &state, system_now()) {
                 Ok(query) => query,
                 Err(reply) => {
-                    output.finish(|| reply.into_response());
+                    let _ = output.finish(|| reply.into_response());
                     return;
                 }
             };
             let Ok(mut monitor) = output.disconnect() else {
-                output.finish(no_response);
+                let _ = output.finish(no_response);
                 return;
             };
             if output
@@ -192,25 +187,40 @@ async fn read_report(
             {
                 let output = Arc::new(Mutex::new(output));
                 let progress_output = output.clone();
-                let terminal =
-                    query.stream(&state, monitor.cancellation(), move |completed, total| {
-                        progress_output
-                            .lock()
-                            .expect("report output")
-                            .report_progress(completed, total)
-                    });
+                let cancelled = monitor.cancellation();
+                #[cfg(test)]
+                let (gate, cancellation) =
+                    (state.backend.usage.report_gate.clone(), cancelled.clone());
+                let terminal = query.stream(&state, cancelled, move |completed, total| {
+                    let mut output = progress_output.lock().expect("report output");
+                    let frame =
+                        sse_frame("progress", &json!({"completed":completed,"total":total}))?;
+                    output.write_frame(Bytes::from(frame))?;
+                    #[cfg(test)]
+                    if completed == 0 {
+                        let gate = gate.lock().unwrap().take();
+                        if let Some(gate) = gate {
+                            output.flush_frame()?;
+                            let _ = gate.first_frame.send(cancellation.clone());
+                            let _ = gate.release.blocking_recv();
+                        }
+                    }
+                    Ok(())
+                });
+                let mut output = output.lock().expect("report output");
                 if let Ok(terminal) = terminal {
-                    let _ = output
-                        .lock()
-                        .expect("report output")
-                        .report_terminal(terminal);
+                    let _ = output.write_frame(Bytes::from(terminal));
                 }
+                let _ = output.finish_producing();
+            } else {
+                let _ = output.finish_producing();
             }
         }
     });
     if let Some(stream) = stream {
         *stream.worker.lock().expect("stream worker") = Some(worker);
     }
+    #[cfg(test)]
     hooks.before_response_receive().await;
     response.await.map_err(|_| EntryError::internal())
 }
