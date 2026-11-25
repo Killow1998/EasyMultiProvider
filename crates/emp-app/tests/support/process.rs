@@ -12,6 +12,10 @@ use tempfile::TempDir;
 
 use super::{NATIVE_TOKEN, ORIGINAL_CODEX_CONFIG, PROVIDER_KEY, Response, Upstream, http};
 
+pub fn emp_startup_deadline() -> Deadline {
+    Deadline::after(test_timeout(Duration::from_secs(30)))
+}
+
 pub fn emp_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_EMP"));
     for key in [
@@ -218,7 +222,7 @@ impl Emp {
             collected.lock().expect("stderr").push_str(&text);
         });
         let mut startup_output = Vec::new();
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
+        let deadline = emp_startup_deadline();
         let opened = loop {
             match received
                 .recv_timeout(deadline.remaining())
@@ -388,24 +392,23 @@ impl Emp {
 
     /// Graceful stop (SIGTERM), as a user closing the service would do.
     pub fn stop(mut self) {
-        self.shutdown();
+        self.shutdown().expect("send EMP shutdown signal");
     }
 
-    fn shutdown(&mut self) {
+    fn shutdown(&mut self) -> std::io::Result<()> {
         if self.child.try_wait().ok().flatten().is_some() {
-            return;
+            return Ok(());
         }
         #[cfg(unix)]
-        if let Err(error) = self.send_signal(libc::SIGTERM)
-            && error.raw_os_error() != Some(libc::ESRCH)
-        {
-            eprintln!("EMP shutdown signal: {error}");
-        }
+        let signal = self.send_signal(libc::SIGTERM);
         #[cfg(windows)]
-        let _ = self.post("/api/quit", &json!({}));
+        let signal = {
+            let _ = self.post("/api/quit", &json!({}));
+            Ok(())
+        };
         for _ in 0..500 {
             if self.child.try_wait().ok().flatten().is_some() {
-                return;
+                return signal;
             }
             #[expect(
                 clippy::disallowed_methods,
@@ -415,11 +418,14 @@ impl Emp {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        signal
     }
 }
 
 impl Drop for Emp {
     fn drop(&mut self) {
-        self.shutdown();
+        if let Err(error) = self.shutdown() {
+            eprintln!("EMP shutdown signal: {error}");
+        }
     }
 }

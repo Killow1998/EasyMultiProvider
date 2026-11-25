@@ -32,15 +32,17 @@ fn writer_uses_resolved_service_lock_directory() {
         let home = root.join("home");
         fs::create_dir(&home).unwrap();
         fs::create_dir(root.join("writer")).unwrap();
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "diagnostics::journal::tests::writer_uses_resolved_service_lock_directory",
+            ])
+            .current_dir(&root)
+            .env("HOME", home)
+            .env(CHILD, "1");
         let output = OwnedChild::output(
-            Command::new(env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "diagnostics::journal::tests::writer_uses_resolved_service_lock_directory",
-                ])
-                .current_dir(&root)
-                .env("HOME", home)
-                .env(CHILD, "1"),
+            command,
             Deadline::after(test_timeout(Duration::from_secs(10))),
         )
         .unwrap();

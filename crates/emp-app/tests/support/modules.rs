@@ -57,7 +57,7 @@ impl BuiltModule {
                 binary.display()
             )
         });
-        let output = OwnedChild::output(&mut Command::new(binary), Deadline::after(io_timeout()))
+        let output = OwnedChild::output(Command::new(binary), Deadline::after(io_timeout()))
             .unwrap_or_else(|error| panic!("{}: {error}", binary.display()));
         assert!(
             output.status.success(),
@@ -278,15 +278,24 @@ impl ModuleRelease {
             observed: Mutex::new(BTreeSet::new()),
         }
     }
+
+    pub fn finish(mut self) -> thread::Result<()> {
+        self.shutdown()
+    }
+
+    fn shutdown(&mut self) -> thread::Result<()> {
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        self.stopping.store(true, Ordering::Release);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        worker.join()
+    }
 }
 
 impl Drop for ModuleRelease {
     fn drop(&mut self) {
-        self.stopping.store(true, Ordering::Release);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(worker) = self.worker.take()
-            && worker.join().is_err()
-        {
+        if self.shutdown().is_err() {
             eprintln!("module release server worker panicked");
         }
     }
@@ -307,11 +316,10 @@ impl Deref for ModuleEmp {
 }
 
 fn processes(deadline: Deadline) -> io::Result<Vec<(i32, String)>> {
-    let output = OwnedChild::output(
-        Command::new("ps").args(["-A", "-ww", "-o", "pid=", "-o", "args="]),
-        deadline,
-    )
-    .map_err(|error| io::Error::new(error.kind(), error.to_string()))?;
+    let mut command = Command::new("ps");
+    command.args(["-A", "-ww", "-o", "pid=", "-o", "args="]);
+    let output = OwnedChild::output(command, deadline)
+        .map_err(|error| io::Error::new(error.kind(), error.to_string()))?;
     if !output.status.success() {
         return Err(io::Error::other(format!("ps failed: {}", output.status)));
     }

@@ -65,11 +65,13 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool, s
         "models":[{"id":"demo/model","provider":"demo","upstream_id":"upstream","context_window":100000,"enabled":true}]
     })).unwrap()).unwrap();
     let binary = std::env::var("EMP_TEST_CODEX_CLI").expect("explicit installed engine");
+    let mut command = std::process::Command::new(&binary);
+    command
+        .arg("--version")
+        .env("CODEX_HOME", &home)
+        .env("HOME", &home);
     let version = OwnedChild::output(
-        std::process::Command::new(&binary)
-            .arg("--version")
-            .env("CODEX_HOME", &home)
-            .env("HOME", &home),
+        command,
         Deadline::after(test_timeout(Duration::from_secs(15))),
     )
     .expect("selected Codex version");

@@ -148,10 +148,12 @@ fn price_worker_start_failure_closes_admission_and_signals_usage_before_the_jour
     const CHILD_PASSED: &str = "EMP_TEST_PRICE_WORKER_START_FAILURE_PASSED";
     const TEST_NAME: &str = "lifecycle::startup::tests::price_worker_start_failure_closes_admission_and_signals_usage_before_the_journal_receipt";
     if std::env::var_os(CHILD_FLAG).is_none() {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
+            .env(CHILD_FLAG, "1");
         let output = OwnedChild::output(
-            Command::new(std::env::current_exe().unwrap())
-                .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
-                .env(CHILD_FLAG, "1"),
+            command,
             Deadline::after(test_timeout(Duration::from_secs(10))),
         )
         .unwrap_or_else(|error| panic!("price worker startup child: {error}"));

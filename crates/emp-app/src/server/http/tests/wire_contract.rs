@@ -312,46 +312,46 @@ fn fixture_defaults_stay_under_config_root() {
     )
     .unwrap();
     let (_, module) = module_path!().split_once("::").unwrap();
-    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-    command.args([
-        "--exact",
-        &format!("{module}::fixture_defaults_stay_under_config_root"),
-    ]);
-    for variable in [
-        UNUSED_HOME,
-        "HOME",
-        "USERPROFILE",
-        "CODEX_HOME",
-        "CLAUDE_CONFIG_DIR",
-        "XDG_CONFIG_HOME",
-        "XDG_DATA_HOME",
-        "APPDATA",
-        "LOCALAPPDATA",
-        "NVM_DIR",
-        "NVM_HOME",
-        "NPM_CONFIG_PREFIX",
-        "npm_config_prefix",
-        "HOMEBREW_PREFIX",
-    ] {
-        command.env(variable, &home);
-    }
-    command
-        .env("XDG_CACHE_HOME", parent.path().join("cache"))
-        .env("EASY_MULTI_PROVIDER_CONFIG", home.join("config.json"))
-        .env("EMP_OFFICIAL_MODELS_PATH", &registry)
-        .env("EMP_UPDATE_READY", home.join("ready.json"))
-        .env(
-            emp_state::filesystem::MASTER_KEY_FILE_ENV,
-            home.join("master.key"),
-        );
     for inline_key in [None, Some("invalid-inline-fixture-key")] {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--exact",
+            &format!("{module}::fixture_defaults_stay_under_config_root"),
+        ]);
+        for variable in [
+            UNUSED_HOME,
+            "HOME",
+            "USERPROFILE",
+            "CODEX_HOME",
+            "CLAUDE_CONFIG_DIR",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "NVM_DIR",
+            "NVM_HOME",
+            "NPM_CONFIG_PREFIX",
+            "npm_config_prefix",
+            "HOMEBREW_PREFIX",
+        ] {
+            command.env(variable, &home);
+        }
+        command
+            .env("XDG_CACHE_HOME", parent.path().join("cache"))
+            .env("EASY_MULTI_PROVIDER_CONFIG", home.join("config.json"))
+            .env("EMP_OFFICIAL_MODELS_PATH", &registry)
+            .env("EMP_UPDATE_READY", home.join("ready.json"))
+            .env(
+                emp_state::filesystem::MASTER_KEY_FILE_ENV,
+                home.join("master.key"),
+            );
         if let Some(key) = inline_key {
             command.env(emp_state::filesystem::MASTER_KEY_ENV, key);
         } else {
             command.env_remove(emp_state::filesystem::MASTER_KEY_ENV);
         }
         let output = emp_test_support::OwnedChild::output(
-            &mut command,
+            command,
             Deadline::after(test_timeout(Duration::from_secs(10))),
         )
         .unwrap();

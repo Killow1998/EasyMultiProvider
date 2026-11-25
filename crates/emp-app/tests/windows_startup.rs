@@ -26,18 +26,16 @@ fn cli_output_and_errors_survive_with_or_without_a_console() {
             ),
         ] {
             let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-            let output = OwnedChild::spawn_with_creation_flags(
-                workspace
-                    .command()
-                    .arg(argument)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped()),
-                flags,
-            )
-            .expect("start CLI command")
-            .wait_until(deadline)
-            .expect("run CLI command");
+            let mut command = workspace.command();
+            command
+                .arg(argument)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let output = OwnedChild::spawn_with_creation_flags(command, flags)
+                .expect("start CLI command")
+                .wait_until(deadline)
+                .expect("run CLI command");
             assert_eq!(output.status.code(), Some(code));
             let text = if stream { output.stdout } else { output.stderr };
             assert!(String::from_utf8_lossy(&text).contains(expected));

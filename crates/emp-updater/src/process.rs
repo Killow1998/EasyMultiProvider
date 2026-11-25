@@ -298,14 +298,13 @@ mod tests {
         use std::process::{Command, Stdio};
         use std::time::Duration;
         for code in [0, 259] {
-            let mut child = OwnedChild::spawn(
-                Command::new("cmd.exe")
-                    .args(["/D", "/C", &format!("exit {code}")])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null()),
-            )
-            .unwrap();
+            let mut command = Command::new("cmd.exe");
+            command
+                .args(["/D", "/C", &format!("exit {code}")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let mut child = OwnedChild::spawn(command).unwrap();
             let output = child
                 .wait_until(Deadline::after(test_timeout(Duration::from_secs(5))))
                 .unwrap();

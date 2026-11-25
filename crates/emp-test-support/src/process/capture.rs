@@ -1,56 +1,122 @@
-use super::{POLL_INTERVAL, poll_pause};
-use crate::Deadline;
+use super::{Failure, POLL_INTERVAL};
+use crate::{Deadline, test_timeout};
 use std::{
     io::{self, Read},
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
+    sync::{Arc, Condvar, Mutex, PoisonError},
+    thread::{self, JoinHandle},
+    time::Instant,
 };
 
 #[derive(Default)]
 struct Output {
     bytes: Vec<u8>,
     line_start: usize,
-    result: Option<io::Result<()>>,
+    completion: Option<(Instant, Result<(), io::ErrorKind>)>,
+    stop: bool,
 }
 
 #[derive(Default)]
-pub(super) struct Capture {
+struct Shared {
     output: Mutex<Output>,
     changed: Condvar,
-    cancelled: AtomicBool,
+}
+
+pub(super) struct Capture {
+    shared: Arc<Shared>,
+    worker: JoinHandle<()>,
 }
 
 impl Capture {
-    pub(super) fn start(pipe: impl ReadPipe + Send + 'static) -> io::Result<Arc<Self>> {
-        let capture = Arc::new(Self::default());
-        let worker = Arc::clone(&capture);
-        thread::Builder::new().spawn(move || {
-            let result = worker.read_output(pipe);
-            worker.output.lock().unwrap().result = Some(result);
-            worker.changed.notify_all();
+    pub(super) fn start(pipe: impl ReadPipe + Send + 'static) -> io::Result<Self> {
+        let shared = Arc::new(Shared::default());
+        let reader = Arc::clone(&shared);
+        let worker = thread::Builder::new().spawn(move || {
+            let result = reader.read_output(pipe);
+            reader.output.lock().unwrap().completion =
+                Some((Instant::now(), result.map_err(|error| error.kind())));
+            reader.changed.notify_all();
         })?;
-        Ok(capture)
+        Ok(Self { shared, worker })
     }
 
+    pub(super) fn line(&self, deadline: Deadline) -> io::Result<Option<String>> {
+        self.shared.line(deadline)
+    }
+
+    pub(super) fn wait_closed(&self, deadline: Deadline) -> bool {
+        let output = self
+            .shared
+            .output
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (output, _) = self
+            .shared
+            .changed
+            .wait_timeout_while(output, deadline.remaining(), |output| {
+                output.completion.is_none()
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        output.completion.is_some()
+    }
+
+    pub(super) fn finish(self, deadline: Deadline) -> (Vec<u8>, Result<(), Failure>) {
+        let closed = self.wait_closed(deadline);
+        while closed && !self.worker.is_finished() && !deadline.is_expired() {
+            thread::yield_now();
+        }
+        let mut output = self
+            .shared
+            .output
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let bytes = std::mem::take(&mut output.bytes);
+        if !self.worker.is_finished() {
+            output.stop = true;
+            self.shared.changed.notify_all();
+            return (bytes, Err(Failure::CaptureTimeout));
+        }
+        let completion = output.completion;
+        drop(output);
+        let result = match self.worker.join() {
+            Ok(()) => {
+                let (closed_at, result) = completion.expect("reader completion result");
+                deadline
+                    .accept_at(closed_at, result, "child output cleanup")
+                    .map_err(|_| Failure::CaptureTimeout)
+                    .and_then(|result| result.map_err(Failure::Io))
+            }
+            Err(_) => Err(Failure::Io(io::ErrorKind::Other)),
+        };
+        (bytes, result)
+    }
+}
+
+impl Shared {
     fn read_output(&self, mut pipe: impl ReadPipe) -> io::Result<()> {
         pipe.prepare()?;
         let mut buffer = [0; 8192];
-        while !self.cancelled.load(Ordering::Relaxed) {
-            match pipe.read_available(&mut buffer) {
+        let idle = test_timeout(POLL_INTERVAL).duration();
+        loop {
+            let available = pipe.read_limit(buffer.len());
+            let mut output = self.output.lock().unwrap();
+            if output.stop {
+                break;
+            }
+            let read = match available {
+                Ok(0) => break,
+                Ok(limit) => pipe.read(&mut buffer[..limit]),
+                Err(error) => Err(error),
+            };
+            match read {
                 Ok(0) => break,
                 Ok(count) => {
-                    let mut output = self.output.lock().unwrap();
-                    if self.cancelled.load(Ordering::Relaxed) {
-                        break;
-                    }
                     output.bytes.extend_from_slice(&buffer[..count]);
                     self.changed.notify_all();
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    poll_pause(POLL_INTERVAL)
+                    if self.changed.wait_timeout(output, idle).unwrap().0.stop {
+                        break;
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(error),
@@ -59,7 +125,7 @@ impl Capture {
         Ok(())
     }
 
-    pub(super) fn line(&self, deadline: Deadline) -> io::Result<Option<String>> {
+    fn line(&self, deadline: Deadline) -> io::Result<Option<String>> {
         let mut output = self.output.lock().unwrap();
         let mut inspected = output.line_start;
         loop {
@@ -68,10 +134,8 @@ impl Capture {
             let end =
                 if let Some(newline) = output.bytes[inspected..].iter().position(|&b| b == b'\n') {
                     inspected + newline + 1
-                } else if let Some(result) = &output.result {
-                    if let Err(error) = result {
-                        return Err(error.kind().into());
-                    }
+                } else if let Some((_, result)) = output.completion {
+                    result?;
                     if output.line_start == output.bytes.len() {
                         return Ok(None);
                     }
@@ -98,24 +162,6 @@ impl Capture {
             return deadline.accept(Some(line), "child output line");
         }
     }
-
-    pub(super) fn is_finished(&self) -> bool {
-        self.output.lock().unwrap().result.is_some()
-    }
-
-    pub(super) fn take_output(&self) -> (Vec<u8>, io::Result<()>) {
-        self.cancel();
-        let mut output = self.output.lock().unwrap();
-        output.line_start = 0;
-        (
-            std::mem::take(&mut output.bytes),
-            output.result.take().unwrap_or(Ok(())),
-        )
-    }
-
-    pub(super) fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
-    }
 }
 
 #[cfg(unix)]
@@ -126,8 +172,8 @@ pub(super) trait ReadPipe: Read + std::os::fd::AsFd {
         Ok(())
     }
 
-    fn read_available(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.read(buffer)
+    fn read_limit(&self, capacity: usize) -> io::Result<usize> {
+        Ok(capacity)
     }
 }
 
@@ -137,7 +183,7 @@ pub(super) trait ReadPipe: Read + std::os::windows::io::AsRawHandle {
         Ok(())
     }
 
-    fn read_available(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+    fn read_limit(&self, capacity: usize) -> io::Result<usize> {
         use std::ptr::null_mut;
         use windows_sys::Win32::{Foundation::ERROR_BROKEN_PIPE, System::Pipes::PeekNamedPipe};
 
@@ -164,10 +210,12 @@ pub(super) trait ReadPipe: Read + std::os::windows::io::AsRawHandle {
         if available == 0 {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        let count = buffer.len().min(available as usize);
-        self.read(&mut buffer[..count])
+        Ok(capacity.min(available as usize))
     }
 }
 
 impl ReadPipe for std::process::ChildStdout {}
 impl ReadPipe for std::process::ChildStderr {}
+
+#[cfg(test)]
+mod tests;

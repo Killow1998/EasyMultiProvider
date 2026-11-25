@@ -20,8 +20,8 @@ impl Recovery {
     fn start(workspace: &Workspace) -> Self {
         let mut command = workspace.command();
         command.args(workspace.serve_arguments());
-        let child =
-            OwnedChild::spawn(command.stdout(Stdio::piped()).stderr(Stdio::null())).unwrap();
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
+        let child = OwnedChild::spawn(command).unwrap();
         let mut recovery = Self {
             child,
             port: 0,
@@ -273,11 +273,12 @@ fn invalid_configuration_can_be_reset_and_external_key_override_stays_a_develope
     );
     recovery.normal_quit();
     let before = std::fs::read(&workspace.config_path).unwrap();
+    let mut command = workspace.command();
+    command
+        .args(workspace.serve_arguments())
+        .env("EASY_MULTI_PROVIDER_MASTER_KEY", "invalid-external-fixture");
     let output = OwnedChild::output(
-        workspace
-            .command()
-            .args(workspace.serve_arguments())
-            .env("EASY_MULTI_PROVIDER_MASTER_KEY", "invalid-external-fixture"),
+        command,
         Deadline::after(test_timeout(Duration::from_secs(10))),
     )
     .unwrap();

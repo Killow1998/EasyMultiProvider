@@ -1501,6 +1501,7 @@ fn drain_vertex_discards_learning_when_the_region_changes() {
                 && row["fields"]["reason"] == "route_identity_changed"
         }));
     });
+    upstream.finish().expect("Vertex fixture worker panicked");
 }
 
 #[cfg(unix)]

@@ -304,6 +304,9 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
             .is_some_and(|slug| slug.starts_with("aero/"))
     }));
     emp.stop();
+    release
+        .finish()
+        .expect("module release server worker panicked");
 }
 
 #[cfg(target_os = "linux")]
@@ -553,4 +556,7 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     );
 
     emp.stop();
+    release
+        .finish()
+        .expect("module release server worker panicked");
 }

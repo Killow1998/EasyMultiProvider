@@ -1,8 +1,15 @@
+#[allow(
+    dead_code,
+    reason = "This target uses only the shared EMP startup deadline"
+)]
+mod support;
+
 use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use support::emp_startup_deadline;
 
 use tempfile::TempDir;
 
@@ -97,45 +104,44 @@ fn spawn_emp(config: &std::path::Path) -> (u16, OwnedChild, String) {
     let root = config.parent().expect("fixture root");
     std::fs::create_dir_all(root.join("home")).expect("private HOME");
     std::fs::create_dir_all(root.join("codex")).expect("private CODEX_HOME");
-    let child = OwnedChild::spawn(
-        Command::new(env!("CARGO_BIN_EXE_EMP"))
-            .env("HOME", root.join("home"))
-            .env("USERPROFILE", root.join("home"))
-            .env("CODEX_HOME", root.join("codex"))
-            .env("XDG_CONFIG_HOME", root.join("xdg"))
-            .env("XDG_DATA_HOME", root.join("data"))
-            .env("XDG_CACHE_HOME", root.join("cache"))
-            .env("APPDATA", root.join("appdata"))
-            .env("LOCALAPPDATA", root.join("local-appdata"))
-            .env_remove("EASY_MULTI_PROVIDER_CONFIG")
-            .env_remove("EASY_MULTI_PROVIDER_MASTER_KEY_FILE")
-            .env_remove("EASY_MULTI_PROVIDER_MASTER_KEY")
-            .env_remove("EMP_OFFICIAL_MODELS_PATH")
-            .env_remove("EMP_UPDATE_READY")
-            .env_remove("EMP_UPDATE_RESULT")
-            .env_remove("NVM_DIR")
-            .env("HTTP_PROXY", "http://127.0.0.1:1")
-            .env("HTTPS_PROXY", "http://127.0.0.1:1")
-            .env("ALL_PROXY", "http://127.0.0.1:1")
-            .env("NO_PROXY", "127.0.0.1,localhost")
-            .env("http_proxy", "http://127.0.0.1:1")
-            .env("https_proxy", "http://127.0.0.1:1")
-            .env("all_proxy", "http://127.0.0.1:1")
-            .env("no_proxy", "127.0.0.1,localhost")
-            .args([
-                "serve",
-                "--config",
-                &config.to_string_lossy(),
-                "--host",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()),
-    )
-    .expect("start EMP");
-    let deadline = Deadline::after(test_timeout(std::time::Duration::from_secs(5)));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_EMP"));
+    command
+        .env("HOME", root.join("home"))
+        .env("USERPROFILE", root.join("home"))
+        .env("CODEX_HOME", root.join("codex"))
+        .env("XDG_CONFIG_HOME", root.join("xdg"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("APPDATA", root.join("appdata"))
+        .env("LOCALAPPDATA", root.join("local-appdata"))
+        .env_remove("EASY_MULTI_PROVIDER_CONFIG")
+        .env_remove("EASY_MULTI_PROVIDER_MASTER_KEY_FILE")
+        .env_remove("EASY_MULTI_PROVIDER_MASTER_KEY")
+        .env_remove("EMP_OFFICIAL_MODELS_PATH")
+        .env_remove("EMP_UPDATE_READY")
+        .env_remove("EMP_UPDATE_RESULT")
+        .env_remove("NVM_DIR")
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("HTTPS_PROXY", "http://127.0.0.1:1")
+        .env("ALL_PROXY", "http://127.0.0.1:1")
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("http_proxy", "http://127.0.0.1:1")
+        .env("https_proxy", "http://127.0.0.1:1")
+        .env("all_proxy", "http://127.0.0.1:1")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .args([
+            "serve",
+            "--config",
+            &config.to_string_lossy(),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    let child = OwnedChild::spawn(command).expect("start EMP");
+    let deadline = emp_startup_deadline();
     let read_line = || {
         child
             .stdout_line(deadline)
@@ -172,8 +178,10 @@ fn spawn_emp(config: &std::path::Path) -> (u16, OwnedChild, String) {
 
 #[test]
 fn version_output_reports_the_running_release() {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_EMP"));
+    command.arg("--version");
     let output = OwnedChild::output(
-        Command::new(env!("CARGO_BIN_EXE_EMP")).arg("--version"),
+        command,
         Deadline::after(test_timeout(std::time::Duration::from_secs(5))),
     )
     .expect("run EMP --version");

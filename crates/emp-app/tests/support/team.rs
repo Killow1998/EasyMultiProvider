@@ -34,8 +34,9 @@ fn listener() -> TcpListener {
 
 fn assert_reaped(pid: u32) {
     poll("Team process reaped", |deadline| {
-        let output = OwnedChild::output(Command::new("ps").args(["-A", "-o", "pid="]), *deadline)
-            .expect("process inventory");
+        let mut command = Command::new("ps");
+        command.args(["-A", "-o", "pid="]);
+        let output = OwnedChild::output(command, *deadline).expect("process inventory");
         assert!(output.status.success(), "ps failed: {}", output.status);
         (!String::from_utf8_lossy(&output.stdout)
             .split_whitespace()
@@ -70,24 +71,24 @@ impl TeamServer {
             .parent()
             .expect("build directory")
             .join(format!("empmod-team{}", std::env::consts::EXE_SUFFIX));
+        let mut command = Command::new(&binary);
+        command
+            .arg("serve")
+            .arg("--state")
+            .arg(self.directory.path())
+            .arg("--listen")
+            .arg(format!("127.0.0.1:{}", self.port))
+            .env("HOME", self.directory.path())
+            .env("EMP_TEAM_SPACE_PASSWORD", PASSWORD)
+            .env("EMP_TEAM_ADMIN", "deployment")
+            .env("EMP_TEAM_ADMIN_PASSWORD", PASSWORD)
+            .env("EMP_TEAM_NAME", "M03 workspace")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
         self.child = Some(
-            OwnedChild::spawn(
-                Command::new(&binary)
-                    .arg("serve")
-                    .arg("--state")
-                    .arg(self.directory.path())
-                    .arg("--listen")
-                    .arg(format!("127.0.0.1:{}", self.port))
-                    .env("HOME", self.directory.path())
-                    .env("EMP_TEAM_SPACE_PASSWORD", PASSWORD)
-                    .env("EMP_TEAM_ADMIN", "deployment")
-                    .env("EMP_TEAM_ADMIN_PASSWORD", PASSWORD)
-                    .env("EMP_TEAM_NAME", "M03 workspace")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::piped()),
-            )
-            .unwrap_or_else(|error| panic!("{}: {error}", binary.display())),
+            OwnedChild::spawn(command)
+                .unwrap_or_else(|error| panic!("{}: {error}", binary.display())),
         );
         let child = self.child.as_ref().expect("Team server");
         let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
@@ -158,118 +159,116 @@ impl TeamRelay {
         let hold = Arc::clone(&hold_reply);
         let observed = Arc::clone(&reports);
         let worker = thread::spawn(move || {
-            let mut requests = Vec::new();
-            for stream in socket.incoming() {
-                if stopped.load(Ordering::Acquire) {
-                    break;
-                }
-                let stream = stream.expect("Team relay connection");
-                let discard = Arc::clone(&discard);
-                let hold = Arc::clone(&hold);
-                let observed = Arc::clone(&observed);
-                let accepted = accepted.clone();
-                requests.push(thread::spawn(move || {
-                    let deadline = Deadline::after(io_timeout());
-                    let mut stream = deadline.io(stream);
-                    let (line, headers, body) = super::http::read_message(&mut stream, false);
-                    let method = line.split_whitespace().next().expect("Team HTTP method");
-                    let path = line.split_whitespace().nth(1).expect("Team HTTP path");
-                    if method == "GET" && path.split('?').next() == Some("/v1/models") {
-                        let model = if headers.get("chatgpt-account-id").map(String::as_str)
-                            == Some("m03-subscription")
-                        {
-                            SHARED_MODEL
-                        } else {
-                            PERSONAL_MODEL
-                        };
-                        let catalog = catalog(model).to_string();
-                        write!(
-                            stream,
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{catalog}",
-                            catalog.len()
-                        )
-                        .expect("provider catalog reply");
-                        return;
+            thread::scope(|scope| {
+                for stream in socket.incoming() {
+                    if stopped.load(Ordering::Acquire) {
+                        break;
                     }
-                    let destination = if path.starts_with("/v1/") {
-                        provider
-                    } else {
-                        server
-                    };
-                    let Ok(backend) = TcpStream::connect(("127.0.0.1", destination)) else {
-                        return;
-                    };
-                    let mut backend = Deadline::after(io_timeout()).io(backend);
-                    write!(
-                        backend,
-                        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{destination}\r\n"
-                    )
-                    .expect("forward Team request");
-                    for (name, value) in &headers {
-                        if !matches!(name.as_str(), "host" | "connection" | "content-length") {
-                            write!(backend, "{name}: {value}\r\n").expect("Team request header");
-                        }
-                    }
-                    write!(
-                        backend,
-                        "Content-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    )
-                    .and_then(|()| backend.write_all(&body))
-                    .expect("Team request body");
-                    let deadline = Deadline::after(io_timeout());
-                    backend.set_deadline(&deadline);
-                    if destination == provider {
-                        stream.set_deadline(&deadline);
-                        let _ = std::io::copy(&mut backend, &mut stream);
-                        return;
-                    }
-                    let (status, headers, reply) = super::http::read_message(&mut backend, true);
-                    if path == "/workspace/v1/report"
-                        && status.split_whitespace().nth(1) == Some("200")
-                    {
-                        let request: Value = serde_json::from_slice(&body).expect("report JSON");
-                        let receipt: Value = serde_json::from_slice(&reply).expect("real receipt");
-                        let report = Report {
-                            events: request["events"]
-                                .as_array()
-                                .expect("report events")
-                                .clone(),
-                            inserted: receipt["inserted"].as_u64().expect("inserted events"),
-                        };
-                        let gate = hold.lock().expect("report gate").take();
-                        let lose_reply = discard.swap(false, Ordering::AcqRel);
-                        observed.lock().expect("wire reports").push(report.clone());
-                        let _ = accepted.send(report);
-                        if let Some(gate) = gate {
-                            let _ = gate.recv_timeout(io_timeout().duration());
-                        }
-                        if lose_reply {
+                    let stream = stream.expect("Team relay connection");
+                    let discard = Arc::clone(&discard);
+                    let hold = Arc::clone(&hold);
+                    let observed = Arc::clone(&observed);
+                    let accepted = accepted.clone();
+                    scope.spawn(move || {
+                        let deadline = Deadline::after(io_timeout());
+                        let mut stream = deadline.io(stream);
+                        let (line, headers, body) = super::http::read_message(&mut stream, false);
+                        let method = line.split_whitespace().next().expect("Team HTTP method");
+                        let path = line.split_whitespace().nth(1).expect("Team HTTP path");
+                        if method == "GET" && path.split('?').next() == Some("/v1/models") {
+                            let model = if headers.get("chatgpt-account-id").map(String::as_str)
+                                == Some("m03-subscription")
+                            {
+                                SHARED_MODEL
+                            } else {
+                                PERSONAL_MODEL
+                            };
+                            let catalog = catalog(model).to_string();
+                            write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{catalog}",
+                                catalog.len()
+                            )
+                            .expect("provider catalog reply");
                             return;
                         }
-                    }
-                    let mut head = format!("{status}\r\n");
-                    for (name, value) in headers {
-                        if !matches!(
-                            name.as_str(),
-                            "connection" | "content-length" | "transfer-encoding"
-                        ) {
-                            head.push_str(&format!("{name}: {value}\r\n"));
+                        let destination = if path.starts_with("/v1/") {
+                            provider
+                        } else {
+                            server
+                        };
+                        let Ok(backend) = TcpStream::connect(("127.0.0.1", destination)) else {
+                            return;
+                        };
+                        let mut backend = Deadline::after(io_timeout()).io(backend);
+                        write!(
+                            backend,
+                            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{destination}\r\n"
+                        )
+                        .expect("forward Team request");
+                        for (name, value) in &headers {
+                            if !matches!(name.as_str(), "host" | "connection" | "content-length") {
+                                write!(backend, "{name}: {value}\r\n").expect("Team request header");
+                            }
                         }
-                    }
-                    head.push_str(&format!(
-                        "Content-Length: {}\r\nConnection: close\r\n\r\n",
-                        reply.len()
-                    ));
-                    stream.set_deadline(&Deadline::after(io_timeout()));
-                    let _ = stream
-                        .write_all(head.as_bytes())
-                        .and_then(|()| stream.write_all(&reply));
-                }));
-            }
-            for request in requests {
-                request.join().expect("Team relay request stopped");
-            }
+                        write!(
+                            backend,
+                            "Content-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .and_then(|()| backend.write_all(&body))
+                        .expect("Team request body");
+                        let deadline = Deadline::after(io_timeout());
+                        backend.set_deadline(&deadline);
+                        if destination == provider {
+                            stream.set_deadline(&deadline);
+                            let _ = std::io::copy(&mut backend, &mut stream);
+                            return;
+                        }
+                        let (status, headers, reply) = super::http::read_message(&mut backend, true);
+                        if path == "/workspace/v1/report"
+                            && status.split_whitespace().nth(1) == Some("200")
+                        {
+                            let request: Value = serde_json::from_slice(&body).expect("report JSON");
+                            let receipt: Value = serde_json::from_slice(&reply).expect("real receipt");
+                            let report = Report {
+                                events: request["events"]
+                                    .as_array()
+                                    .expect("report events")
+                                    .clone(),
+                                inserted: receipt["inserted"].as_u64().expect("inserted events"),
+                            };
+                            let gate = hold.lock().expect("report gate").take();
+                            let lose_reply = discard.swap(false, Ordering::AcqRel);
+                            observed.lock().expect("wire reports").push(report.clone());
+                            let _ = accepted.send(report);
+                            if let Some(gate) = gate {
+                                let _ = gate.recv_timeout(io_timeout().duration());
+                            }
+                            if lose_reply {
+                                return;
+                            }
+                        }
+                        let mut head = format!("{status}\r\n");
+                        for (name, value) in headers {
+                            if !matches!(
+                                name.as_str(),
+                                "connection" | "content-length" | "transfer-encoding"
+                            ) {
+                                head.push_str(&format!("{name}: {value}\r\n"));
+                            }
+                        }
+                        head.push_str(&format!(
+                            "Content-Length: {}\r\nConnection: close\r\n\r\n",
+                            reply.len()
+                        ));
+                        stream.set_deadline(&Deadline::after(io_timeout()));
+                        let _ = stream
+                            .write_all(head.as_bytes())
+                            .and_then(|()| stream.write_all(&reply));
+                    });
+                }
+            })
         });
         Self {
             port,
@@ -311,10 +310,15 @@ impl TeamRelay {
             .count();
         assert_eq!(count, 1, "duplicate writer delivered {id}: {reports:?}");
     }
-}
 
-impl Drop for TeamRelay {
-    fn drop(&mut self) {
+    fn finish(mut self) -> thread::Result<()> {
+        self.shutdown()
+    }
+
+    fn shutdown(&mut self) -> thread::Result<()> {
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
         self.stopping.store(true, Ordering::Release);
         drop(
             self.hold_reply
@@ -323,9 +327,13 @@ impl Drop for TeamRelay {
                 .take(),
         );
         let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(worker) = self.worker.take()
-            && worker.join().is_err()
-        {
+        worker.join()
+    }
+}
+
+impl Drop for TeamRelay {
+    fn drop(&mut self) {
+        if self.shutdown().is_err() {
             eprintln!("Team relay worker panicked");
         }
     }
@@ -689,7 +697,11 @@ impl Team {
         for device in self.devices.drain(..) {
             device.stop();
         }
+        let relay = self.relay.finish();
+        let release = self.release.finish();
         self.server.stop();
+        relay.expect("Team relay worker panicked");
+        release.expect("module release server worker panicked");
     }
 }
 

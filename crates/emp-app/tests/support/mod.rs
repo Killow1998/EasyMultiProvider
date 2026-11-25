@@ -34,7 +34,7 @@ pub use https::HttpsProxy;
 )]
 pub use self::{
     http::{Response, SseClient, http},
-    process::{Emp, Workspace, emp_command},
+    process::{Emp, Workspace, emp_command, emp_startup_deadline},
     upstream::{Upstream, UpstreamRequest},
     websocket::{WebSocket, WebSocketUpstream},
 };

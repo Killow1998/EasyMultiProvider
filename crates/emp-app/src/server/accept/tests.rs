@@ -100,15 +100,14 @@ fn listener_survives_real_descriptor_exhaustion() {
         child_fixture();
         return;
     }
-    let mut child = OwnedChild::spawn(
-        Command::new(std::env::current_exe().unwrap())
-            .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
-            .env(CHILD_FLAG, "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()),
-    )
-    .unwrap();
+    let mut fixture = Command::new(std::env::current_exe().unwrap());
+    fixture
+        .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
+        .env(CHILD_FLAG, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    let mut child = OwnedChild::spawn(fixture).unwrap();
     let mut input = child.take_stdin().unwrap();
     let next_marker = || {
         let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));

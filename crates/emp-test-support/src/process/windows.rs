@@ -37,7 +37,7 @@ fn own(handle: HANDLE) -> io::Result<OwnedHandle> {
     Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
-pub(super) fn spawn(command: &mut Command, flags: u32) -> io::Result<(Child, Job)> {
+pub(super) fn spawn(mut command: Command, flags: u32) -> io::Result<(Child, Job)> {
     // SAFETY: null attributes and name request an unnamed job with default security.
     let job = Job(own(unsafe {
         CreateJobObjectW(std::ptr::null(), std::ptr::null())

@@ -227,17 +227,34 @@ impl VertexFixture {
             .recv_timeout(Duration::from_secs(15))
             .expect("TLS fixture request")
     }
+
+    pub(crate) fn finish(mut self) -> thread::Result<()> {
+        self.shutdown()
+    }
+
+    fn shutdown(&mut self) -> thread::Result<()> {
+        self.stop.store(true, Ordering::Release);
+        self.worker.take().map_or(Ok(()), JoinHandle::join)
+    }
 }
 
 impl Drop for VertexFixture {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take()
-            && worker.join().is_err()
-        {
+        if self.shutdown().is_err() {
             eprintln!("Vertex fixture worker panicked");
         }
     }
+}
+
+#[test]
+#[should_panic(expected = "Vertex fixture worker panicked")]
+fn finishing_vertex_fixture_reports_worker_panic() {
+    let upstream = VertexFixture::start();
+    let connection = TcpStream::connect(upstream.address).unwrap();
+    connection.shutdown(std::net::Shutdown::Write).unwrap();
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
+    assert_eq!(deadline.io(&connection).read(&mut [0]).unwrap(), 0);
+    upstream.finish().expect("Vertex fixture worker panicked");
 }
 
 fn server(root: &Path, upstream: &VertexFixture) -> ServerHandle {
@@ -382,6 +399,7 @@ fn vertex_key_discovers_litellm_models_and_caches_express_count_tokens() {
     );
     assert!(upstream.requests.try_recv().is_err());
     server.shutdown().unwrap();
+    upstream.finish().expect("Vertex fixture worker panicked");
 }
 
 #[test]
@@ -428,6 +446,7 @@ fn vertex_key_keeps_thought_only_usage_and_reported_model_in_call_records() {
         assert_ne!(record["model_name_status"], "missing");
     }
     server.shutdown().unwrap();
+    upstream.finish().expect("Vertex fixture worker panicked");
 }
 
 #[test]
@@ -502,6 +521,7 @@ fn vertex_key_roundtrips_a_tool_signature_after_emp_restart() {
         initial["body"]["contents"][0]["parts"][1]
     );
     second.shutdown().unwrap();
+    upstream.finish().expect("Vertex fixture worker panicked");
 }
 
 #[test]
@@ -655,6 +675,7 @@ fn vertex_adc_routes_gemini_and_claude_with_refreshed_oauth() {
             std::env::remove_var("GOOGLE_APPLICATION_CREDENTIALS");
         }
     }
+    upstream.finish().expect("Vertex fixture worker panicked");
 }
 
 #[test]
@@ -676,17 +697,17 @@ fn installed_codex_roundtrips_a_vertex_tool_with_real_emp() {
     let log = home.join("executor.log");
     let stdout = std::fs::File::create(&log).unwrap();
     let stderr = stdout.try_clone().unwrap();
-    let executor = OwnedChild::spawn(
-        Command::new(std::env::var_os("EMP_TEST_CODEX_CLI").unwrap_or_else(|| "codex".into()))
-            .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
-            .env("HOME", &home)
-            .env("CODEX_HOME", &home)
-            .current_dir(&home)
-            .stdin(Stdio::null())
-            .stdout(stdout)
-            .stderr(stderr),
-    )
-    .unwrap();
+    let mut command =
+        Command::new(std::env::var_os("EMP_TEST_CODEX_CLI").unwrap_or_else(|| "codex".into()));
+    command
+        .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
+        .env("HOME", &home)
+        .env("CODEX_HOME", &home)
+        .current_dir(&home)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr);
+    let executor = OwnedChild::spawn(command).unwrap();
     let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     let url = loop {
         let text = std::fs::read_to_string(&log).unwrap();
@@ -749,4 +770,5 @@ fn installed_codex_roundtrips_a_vertex_tool_with_real_emp() {
     drop(codex);
     drop(executor);
     server.shutdown().unwrap();
+    upstream.finish().expect("Vertex fixture worker panicked");
 }

@@ -303,6 +303,9 @@ fn m01_real_modules_install_update_preserve_on_failure_and_uninstall() {
     );
     routes.assert_forwarded("first", "/v1/responses", "upstream-model");
     emp.stop();
+    release
+        .finish()
+        .expect("module release server worker panicked");
 }
 
 #[test]
@@ -380,6 +383,9 @@ fn m01_k2_normal_start_requires_install_and_restores_installed_modules_with_or_w
         }
         restored.stop();
     }
+    release
+        .finish()
+        .expect("module release server worker panicked");
 }
 
 #[test]
@@ -433,6 +439,9 @@ fn m02_decision_routes_to_default_and_overridden_real_services() {
     emp.active(&module);
     exercise(&emp, "decision", &routes);
     emp.stop();
+    release
+        .finish()
+        .expect("module release server worker panicked");
 }
 
 #[test]
@@ -536,6 +545,9 @@ fn m02_gateway_admits_device_keys_rejects_revoked_keys_and_attributes_usage() {
     );
     routes.assert_forwarded("first", "/v1/responses", "upstream-model");
     emp.stop();
+    release
+        .finish()
+        .expect("module release server worker panicked");
 }
 
 #[test]
@@ -581,4 +593,7 @@ fn m02_aggregate_selects_candidates_pins_sessions_and_disables_routes() {
         routes.assert_forwarded(choices[1], "/v1/responses", "upstream-model");
         emp.stop();
     }
+    release
+        .finish()
+        .expect("module release server worker panicked");
 }

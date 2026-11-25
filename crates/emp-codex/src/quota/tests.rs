@@ -309,14 +309,16 @@ for line in sys.stdin:
     for name in [b"del-\x7f".to_vec(), b"non-utf8-\xff".to_vec()] {
         let temp_root = root.path().join(std::ffi::OsString::from_vec(name));
         fs::create_dir(&temp_root).unwrap();
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "quota::tests::quota_helper_accepts_temp_roots_that_cannot_be_toml_literals",
+            ])
+            .env("EMP_QUOTA_PATH_FIXTURE", &script)
+            .env("TMPDIR", &temp_root);
         let result = OwnedChild::output(
-            Command::new(env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "quota::tests::quota_helper_accepts_temp_roots_that_cannot_be_toml_literals",
-                ])
-                .env("EMP_QUOTA_PATH_FIXTURE", &script)
-                .env("TMPDIR", &temp_root),
+            command,
             Deadline::after(test_timeout(Duration::from_secs(10))),
         )
         .unwrap();

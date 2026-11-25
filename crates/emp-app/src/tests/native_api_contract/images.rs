@@ -176,6 +176,7 @@ fn image_credit_uses_the_project_key_and_stops_dispatch_at_the_local_limit() {
     assert!(wire.starts_with("HTTP/1.1 409"), "{wire}");
     assert!(wire.contains("period is inactive"));
     server.shutdown().unwrap();
+    upstream.finish().expect("Vertex fixture worker panicked");
 }
 
 #[test]

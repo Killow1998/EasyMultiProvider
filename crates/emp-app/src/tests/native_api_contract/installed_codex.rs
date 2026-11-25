@@ -17,29 +17,27 @@ impl Codex {
     pub(super) fn start_with_no_proxy(home: &Path, no_proxy: &str) -> Self {
         let mut command =
             Command::new(std::env::var_os("EMP_TEST_CODEX_CLI").unwrap_or_else(|| "codex".into()));
-        let mut child = OwnedChild::spawn(
-            command
-                .args(["app-server", "--listen", "stdio://"])
-                .env("CODEX_HOME", home)
-                .env("HOME", home)
-                .env("XDG_CONFIG_HOME", home.join("xdg"))
-                .env("EMP_TEST_KEY", "fixture-only")
-                .env("HTTP_PROXY", "http://127.0.0.1:1")
-                .env("HTTPS_PROXY", "http://127.0.0.1:1")
-                .env("ALL_PROXY", "http://127.0.0.1:1")
-                .env("http_proxy", "http://127.0.0.1:1")
-                .env("https_proxy", "http://127.0.0.1:1")
-                .env("all_proxy", "http://127.0.0.1:1")
-                .env("NO_PROXY", no_proxy)
-                .env("no_proxy", no_proxy)
-                .env_remove("OPENAI_API_KEY")
-                .env_remove("CODEX_API_KEY")
-                .current_dir(home)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(std::fs::File::create(home.join("stderr.log")).unwrap()),
-        )
-        .expect("installed Codex app-server");
+        command
+            .args(["app-server", "--listen", "stdio://"])
+            .env("CODEX_HOME", home)
+            .env("HOME", home)
+            .env("XDG_CONFIG_HOME", home.join("xdg"))
+            .env("EMP_TEST_KEY", "fixture-only")
+            .env("HTTP_PROXY", "http://127.0.0.1:1")
+            .env("HTTPS_PROXY", "http://127.0.0.1:1")
+            .env("ALL_PROXY", "http://127.0.0.1:1")
+            .env("http_proxy", "http://127.0.0.1:1")
+            .env("https_proxy", "http://127.0.0.1:1")
+            .env("all_proxy", "http://127.0.0.1:1")
+            .env("NO_PROXY", no_proxy)
+            .env("no_proxy", no_proxy)
+            .env_remove("OPENAI_API_KEY")
+            .env_remove("CODEX_API_KEY")
+            .current_dir(home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(std::fs::File::create(home.join("stderr.log")).unwrap());
+        let mut child = OwnedChild::spawn(command).expect("installed Codex app-server");
         let input = child.take_stdin().unwrap();
         Self { child, input }
     }

@@ -8,8 +8,10 @@ use std::time::Duration;
 #[test]
 fn cli_reports_help() {
     for arguments in [&["--help"][..], &["serve", "--help"], &["doctor", "--help"]] {
+        let mut command = emp_command();
+        command.args(arguments);
         let help = OwnedChild::output(
-            emp_command().args(arguments),
+            command,
             Deadline::after(test_timeout(Duration::from_secs(5))),
         )
         .expect("run EMP");
@@ -115,8 +117,10 @@ fn second_service_for_the_same_configuration_is_rejected() {
     let emp = workspace.start();
     let before = std::fs::read(&workspace.config_path).expect("config");
 
+    let mut command = workspace.command();
+    command.args(workspace.serve_arguments());
     let contender = OwnedChild::output(
-        workspace.command().args(workspace.serve_arguments()),
+        command,
         Deadline::after(test_timeout(Duration::from_secs(10))),
     )
     .expect("run contender");

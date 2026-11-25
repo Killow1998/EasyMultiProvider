@@ -36,15 +36,17 @@ fn with_temporary_home(test_name: &str, test: impl FnOnce(&Path)) {
     }
     let home = emp_test_support::fixture_dir().unwrap();
     let (_, module) = module_path!().split_once("::").unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", &format!("{module}::{test_name}")])
+        .env(CHILD_HOME, home.path())
+        .env("HOME", home.path())
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("NVM_DIR")
+        .env("PATH", "/usr/bin:/bin");
     let result = OwnedChild::output(
-        Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &format!("{module}::{test_name}")])
-            .env(CHILD_HOME, home.path())
-            .env("HOME", home.path())
-            .env_remove("XDG_DATA_HOME")
-            .env_remove("XDG_CONFIG_HOME")
-            .env_remove("NVM_DIR")
-            .env("PATH", "/usr/bin:/bin"),
+        command,
         Deadline::after(test_timeout(Duration::from_secs(10))),
     )
     .unwrap();

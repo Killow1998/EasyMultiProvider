@@ -1,8 +1,7 @@
-use crate::Deadline;
+use crate::{Deadline, test_timeout};
 use std::{
     fmt, io,
     process::{Child, ChildStdin, Command, ExitStatus, Output, Stdio},
-    sync::Arc,
     thread,
     time::Duration,
 };
@@ -15,8 +14,25 @@ use capture::Capture;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Failure {
+    Io(io::ErrorKind),
+    CaptureTimeout,
+}
+
+impl fmt::Display for Failure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(kind) => kind.fmt(formatter),
+            Self::CaptureTimeout => {
+                formatter.write_str("output reader did not exit before cleanup deadline")
+            }
+        }
+    }
+}
+
 pub struct ChildError {
-    kind: io::ErrorKind,
+    failure: Failure,
     status: Option<ExitStatus>,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
@@ -24,7 +40,14 @@ pub struct ChildError {
 
 impl ChildError {
     pub fn kind(&self) -> io::ErrorKind {
-        self.kind
+        match self.failure {
+            Failure::Io(kind) => kind,
+            Failure::CaptureTimeout => io::ErrorKind::TimedOut,
+        }
+    }
+
+    pub fn capture_timed_out(&self) -> bool {
+        self.failure == Failure::CaptureTimeout
     }
 
     pub fn status(&self) -> Option<ExitStatus> {
@@ -43,7 +66,7 @@ impl ChildError {
 impl From<io::Error> for ChildError {
     fn from(error: io::Error) -> Self {
         Self {
-            kind: error.kind(),
+            failure: Failure::Io(error.kind()),
             status: None,
             stdout: Vec::new(),
             stderr: Vec::new(),
@@ -53,7 +76,7 @@ impl From<io::Error> for ChildError {
 
 impl fmt::Display for ChildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "child process: {}", self.kind)?;
+        write!(formatter, "child process: {}", self.failure)?;
         if let Some(status) = self.status {
             write!(formatter, " ({status})")?;
         }
@@ -65,7 +88,7 @@ impl fmt::Debug for ChildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ChildError")
-            .field("kind", &self.kind)
+            .field("failure", &self.failure)
             .field("status", &self.status)
             .finish()
     }
@@ -76,17 +99,18 @@ impl std::error::Error for ChildError {}
 pub struct OwnedChild {
     child: Child,
     status: Option<ExitStatus>,
-    stdout: Option<Arc<Capture>>,
-    stderr: Option<Arc<Capture>>,
+    stdout: Option<Capture>,
+    stderr: Option<Capture>,
     #[cfg(windows)]
     job: windows::Job,
 }
 
 impl OwnedChild {
-    pub fn spawn(command: &mut Command) -> io::Result<Self> {
+    pub fn spawn(command: Command) -> io::Result<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
+            let mut command = command;
             Self {
                 child: command.process_group(0).spawn()?,
                 status: None,
@@ -100,7 +124,7 @@ impl OwnedChild {
     }
 
     #[cfg(windows)]
-    pub fn spawn_with_creation_flags(command: &mut Command, flags: u32) -> io::Result<Self> {
+    pub fn spawn_with_creation_flags(command: Command, flags: u32) -> io::Result<Self> {
         let (child, job) = windows::spawn(command, flags)?;
         Self {
             child,
@@ -138,39 +162,37 @@ impl OwnedChild {
             .map_or(Ok(None), |capture| capture.line(deadline))
     }
 
-    pub fn output(command: &mut Command, deadline: Deadline) -> Result<Output, ChildError> {
-        Self::spawn(
-            command
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped()),
-        )?
-        .wait_until(deadline)
+    pub fn output(mut command: Command, deadline: Deadline) -> Result<Output, ChildError> {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        Self::spawn(command)?.wait_until(deadline)
     }
 
     pub fn wait_until(&mut self, deadline: Deadline) -> Result<Output, ChildError> {
         drop(self.child.stdin.take());
         let completed = self.wait_for_exit_and_output(deadline);
         let terminated = self.terminate();
-        let (stdout, stdout_result) = self
-            .stdout
-            .take()
-            .map_or((Vec::new(), Ok(())), |capture| capture.take_output());
-        let (stderr, stderr_result) = self
-            .stderr
-            .take()
-            .map_or((Vec::new(), Ok(())), |capture| capture.take_output());
-        match completed
-            .and(terminated)
-            .and_then(|status| stdout_result.and(stderr_result).map(|()| status))
-        {
+        let cleanup = reader_cleanup_deadline();
+        let (stdout, stdout_result) = finish_capture(self.stdout.take(), cleanup);
+        let (stderr, stderr_result) = finish_capture(self.stderr.take(), cleanup);
+        let result = if [stdout_result, stderr_result].contains(&Err(Failure::CaptureTimeout)) {
+            Err(Failure::CaptureTimeout)
+        } else {
+            completed
+                .and(terminated)
+                .map_err(|error| Failure::Io(error.kind()))
+                .and_then(|status| stdout_result.and(stderr_result).map(|()| status))
+        };
+        match result {
             Ok(status) => Ok(Output {
                 status,
                 stdout,
                 stderr,
             }),
-            Err(error) => Err(ChildError {
-                kind: error.kind(),
+            Err(failure) => Err(ChildError {
+                failure,
                 status: self.status,
                 stdout,
                 stderr,
@@ -179,18 +201,16 @@ impl OwnedChild {
     }
 
     fn wait_for_exit_and_output(&mut self, deadline: Deadline) -> io::Result<()> {
-        loop {
-            if (self.status.is_some() || self.has_exited()?)
-                && [&self.stdout, &self.stderr]
-                    .into_iter()
-                    .flatten()
-                    .all(|capture| capture.is_finished())
-            {
-                return deadline.accept((), "child exit and output");
-            }
+        while self.status.is_none() && !self.has_exited()? {
             let remaining = deadline.accept(deadline.remaining(), "child exit and output")?;
             poll_pause(remaining.min(POLL_INTERVAL));
         }
+        for capture in [&self.stdout, &self.stderr].into_iter().flatten() {
+            if !capture.wait_closed(deadline) {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "child output"));
+            }
+        }
+        deadline.accept((), "child exit and output")
     }
 
     #[cfg(unix)]
@@ -237,16 +257,29 @@ impl OwnedChild {
 
 impl Drop for OwnedChild {
     fn drop(&mut self) {
-        let _ = self.terminate();
-        for capture in [&self.stdout, &self.stderr].into_iter().flatten() {
-            capture.cancel();
+        if let Err(error) = self.terminate() {
+            eprintln!("child process cleanup: {}", error.kind());
+        }
+        let deadline = reader_cleanup_deadline();
+        for capture in [&mut self.stdout, &mut self.stderr] {
+            if let Err(error) = finish_capture(capture.take(), deadline).1 {
+                eprintln!("child output cleanup: {error}");
+            }
         }
     }
 }
 
+fn reader_cleanup_deadline() -> Deadline {
+    Deadline::after(test_timeout(Duration::from_secs(5)))
+}
+
+fn finish_capture(capture: Option<Capture>, deadline: Deadline) -> (Vec<u8>, Result<(), Failure>) {
+    capture.map_or_else(|| (Vec::new(), Ok(())), |capture| capture.finish(deadline))
+}
+
 #[expect(
     clippy::disallowed_methods,
-    reason = "按既有固定间隔检查子进程退出和非阻塞输出，保留期限与取消检查"
+    reason = "按既有固定间隔检查子进程退出，保留期限检查"
 )]
 fn poll_pause(interval: Duration) {
     thread::sleep(interval);
