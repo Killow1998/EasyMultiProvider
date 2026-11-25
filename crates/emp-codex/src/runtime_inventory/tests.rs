@@ -165,7 +165,7 @@ fn cached_version_does_not_wait_for_or_repeat_a_delayed_refresh() {
 fn selected_trusted_version_never_probes_a_cold_stale_or_changed_cache() {
     let root = tempfile::Builder::new()
         .prefix("emp-inventory-version-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .unwrap();
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let home = root.path().join("codex-home");

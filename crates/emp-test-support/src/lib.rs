@@ -51,20 +51,19 @@ pub fn accept_blocking(listener: &TcpListener) -> io::Result<(TcpStream, SocketA
     Ok((stream, peer))
 }
 
-pub fn fixture_root() -> PathBuf {
+pub fn fixture_root() -> io::Result<PathBuf> {
     let root = std::env::var_os("EMP_TEST_TMPDIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     if cfg!(unix) {
         root.canonicalize()
-            .unwrap_or_else(|error| panic!("canonicalize test fixture root {root:?}: {error}"))
     } else {
-        root
+        Ok(root)
     }
 }
 
 pub fn fixture_dir() -> std::io::Result<tempfile::TempDir> {
-    tempfile::tempdir_in(fixture_root())
+    tempfile::tempdir_in(fixture_root()?)
 }
 
 /// A test duration capped at one day so it can be added to the current instant.

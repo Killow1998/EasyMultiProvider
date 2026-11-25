@@ -248,7 +248,7 @@ fn partial_native_catalog_refresh_keeps_a_known_model_routable() {
     let upstream = RefreshCatalogFixture::start(false);
     let directory = tempfile::Builder::new()
         .prefix("emp-native-partial-catalog-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .unwrap();
     let (server, _) = start_server(&directory, &upstream.address, "0.159.2");
     let native_path = directory.path().join("native.json");
@@ -346,7 +346,7 @@ fn automatic_http_refresh_publishes_capabilities_etag_and_isolated_account_catal
     let upstream = RefreshCatalogFixture::start(false);
     let directory = tempfile::Builder::new()
         .prefix("emp-auto-catalog-http-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let (server, first_auth) = start_server(&directory, &upstream.address, "0.159.2");
     let second_auth = add_account(&server, "second", "second", "second-secret");
@@ -499,7 +499,7 @@ fn credential_rotation_with_same_owner_invalidates_cached_refresh() {
     let upstream = RefreshCatalogFixture::start(false);
     let directory = tempfile::Builder::new()
         .prefix("emp-auto-catalog-credential-rotation-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let (server, auth_path) = start_server(&directory, &upstream.address, "0.159.2");
     let stable_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
@@ -565,7 +565,7 @@ fn automatic_refresh_uses_the_newly_observed_selected_runtime_version() {
     let upstream = RefreshCatalogFixture::start(false);
     let directory = tempfile::Builder::new()
         .prefix("emp-auto-catalog-runtime-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let (server, _auth_path) = start_server(&directory, &upstream.address, "0.158.6");
     crate::services::account_catalog::request_refresh(&server.state, false);
@@ -621,7 +621,7 @@ fn overlapping_refresh_requests_coalesce_and_failed_refresh_retains_last_good_ca
     let upstream = RefreshCatalogFixture::start(true);
     let directory = tempfile::Builder::new()
         .prefix("emp-auto-catalog-coalesce-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let (server, auth_path) = start_server(&directory, &upstream.address, "0.159.2");
     crate::services::account_catalog::request_refresh(&server.state, false);
@@ -676,7 +676,7 @@ fn delete_and_reimport_during_refresh_rejects_the_stale_response() {
     let upstream = RefreshCatalogFixture::start(true);
     let directory = tempfile::Builder::new()
         .prefix("emp-auto-catalog-reimport-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let (server, auth_path) = start_server(&directory, &upstream.address, "0.159.2");
     crate::services::account_catalog::request_refresh(&server.state, false);

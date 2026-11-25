@@ -58,7 +58,7 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new() -> Self {
-        Self::new_in(emp_test_support::fixture_root())
+        Self::new_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
     }
 
     fn new_in(root: impl AsRef<Path>) -> Self {
@@ -89,7 +89,10 @@ impl Workspace {
 
     /// Four routes, one per upstream protocol, all pointing at `upstream`.
     pub fn with_routes(upstream: &Upstream) -> Self {
-        Self::with_routes_in(upstream, emp_test_support::fixture_root())
+        Self::with_routes_in(
+            upstream,
+            emp_test_support::fixture_root().expect("resolve test fixture root"),
+        )
     }
 
     pub fn with_routes_in(upstream: &Upstream, root: impl AsRef<Path>) -> Self {

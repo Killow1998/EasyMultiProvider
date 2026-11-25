@@ -24,7 +24,7 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
         .expect("set EMP_TEST_CODEX_CLI to the installed Codex executable");
     let root = tempfile::Builder::new()
         .prefix("emp-quota-catalog-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .unwrap();
     let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
     std::fs::write(root.path().join("ca.pem"), certificate.cert.pem()).unwrap();

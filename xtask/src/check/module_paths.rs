@@ -91,9 +91,17 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
         let kind = self.kind.in_test(&item.attrs);
         let mut explicit = Vec::new();
         for attr in &item.attrs {
-            path_attributes(&attr.meta, &mut explicit);
+            path_attributes(&attr.meta, [Some(true); 2], &mut explicit);
         }
-        for path in explicit {
+        let mut default_without_test = true;
+        let mut default_with_test = true;
+        for PathAttribute {
+            path,
+            active: [without_test, with_test],
+        } in explicit
+        {
+            default_without_test &= without_test != Some(true);
+            default_with_test &= with_test != Some(true);
             let value = path.value();
             let portable = value.replace('\\', "/");
             let rooted = portable.starts_with('/')
@@ -123,7 +131,9 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
                     path.span().start().line,
                     value
                 ));
-            } else {
+            } else if let Some(kind) =
+                path_scope(kind, without_test != Some(false), with_test != Some(false))
+            {
                 for target in targets {
                     if let Some((_, items)) = &item.content {
                         self.visit_inline(&target, items, kind);
@@ -134,9 +144,9 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
             }
         }
 
-        if item.attrs.iter().any(|attr| attr.path().is_ident("path")) {
+        let Some(kind) = path_scope(kind, default_without_test, default_with_test) else {
             return;
-        }
+        };
         let mut directory = self.directory.to_owned();
         if let Some(module) = &self.module {
             directory.push(module);
@@ -168,25 +178,86 @@ impl ModulePaths<'_, '_> {
     }
 }
 
-fn path_attributes(meta: &Meta, paths: &mut Vec<LitStr>) {
+fn path_scope(kind: SourceKind, without_test: bool, with_test: bool) -> Option<SourceKind> {
+    if without_test {
+        Some(kind)
+    } else {
+        with_test.then(|| kind.max(SourceKind::Fixture))
+    }
+}
+
+struct PathAttribute {
+    path: LitStr,
+    active: [Option<bool>; 2],
+}
+
+fn path_attributes(meta: &Meta, active: [Option<bool>; 2], paths: &mut Vec<PathAttribute>) {
     match meta {
         Meta::NameValue(attr) if attr.path.is_ident("path") => {
             if let Expr::Lit(value) = &attr.value
                 && let Lit::Str(path) = &value.lit
             {
-                paths.push(path.clone());
+                paths.push(PathAttribute {
+                    path: path.clone(),
+                    active,
+                });
             }
         }
         Meta::List(attr) if attr.path.is_ident("cfg_attr") => {
             if let Ok(parts) =
                 attr.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+                && let Some(condition) = parts.first()
             {
+                let [without_test, with_test] = active;
+                let active = [
+                    cfg_and(without_test, cfg_value(condition, false)),
+                    cfg_and(with_test, cfg_value(condition, true)),
+                ];
                 for part in parts.iter().skip(1) {
-                    path_attributes(part, paths);
+                    path_attributes(part, active, paths);
                 }
             }
         }
         _ => {}
+    }
+}
+
+fn cfg_and(left: Option<bool>, right: Option<bool>) -> Option<bool> {
+    match (left, right) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        _ => None,
+    }
+}
+
+fn cfg_value(meta: &Meta, test: bool) -> Option<bool> {
+    match meta {
+        Meta::Path(path) if path.is_ident("test") => Some(test),
+        Meta::List(list) => {
+            let parts = list
+                .parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+                .ok()?;
+            if list.path.is_ident("not") && parts.len() == 1 {
+                return cfg_value(parts.first()?, test).map(|value| !value);
+            }
+            let identity = if list.path.is_ident("all") {
+                true
+            } else if list.path.is_ident("any") {
+                false
+            } else {
+                return None;
+            };
+            let mut known = true;
+            for part in parts {
+                match cfg_value(&part, test) {
+                    Some(value) if value != identity => return Some(value),
+                    None => known = false,
+                    _ => {}
+                }
+            }
+            known.then_some(identity)
+        }
+        _ => None,
     }
 }
 

@@ -22,8 +22,9 @@ pub(crate) fn report(result: Result<(), &str>) {
 }
 
 pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
-    let stdout = tempfile::tempfile_in(fixture_root()).expect("isolated test stdout file");
-    let stderr = tempfile::tempfile_in(fixture_root()).expect("isolated test stderr file");
+    let root = fixture_root().expect("resolve test fixture root");
+    let stdout = tempfile::tempfile_in(&root).expect("isolated test stdout file");
+    let stderr = tempfile::tempfile_in(&root).expect("isolated test stderr file");
     command
         .stdin(Stdio::null())
         .stdout(stdout.try_clone().expect("redirect isolated test stdout"))

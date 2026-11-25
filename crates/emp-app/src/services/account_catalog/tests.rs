@@ -146,7 +146,7 @@ fn model_refresh_uses_each_selected_runtime_version_for_query_and_user_agent() {
     for version in ["0.155.0-alpha.9.2", "0.159.2"] {
         let directory = tempfile::Builder::new()
             .prefix("emp-account-catalog-")
-            .tempdir_in(emp_test_support::fixture_root())
+            .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
             .expect("temporary directory");
         let catalog = fake_catalog(false);
         let (server, auth_path) = start_server(&directory, &catalog.address, version);
@@ -196,7 +196,7 @@ fn model_refresh_uses_each_selected_runtime_version_for_query_and_user_agent() {
 fn model_refresh_rechecks_account_ownership_after_the_upstream_request() {
     let directory = tempfile::Builder::new()
         .prefix("emp-account-catalog-owner-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let catalog = fake_catalog(true);
     let (server, auth_path) = start_server(&directory, &catalog.address, "0.159.2");

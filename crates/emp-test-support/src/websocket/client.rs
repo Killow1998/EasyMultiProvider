@@ -65,18 +65,24 @@ impl ClientWebSocket {
     }
 
     pub fn send_json_before(&mut self, value: &Value, deadline: &Deadline) -> io::Result<()> {
-        let context = "WebSocket send deadline";
-        deadline.accept((), context)?;
+        deadline.accept((), "WebSocket send deadline")?;
         let payload = serde_json::to_string(value).map_err(io::Error::other)?;
-        let remaining = deadline.accept(deadline.remaining(), context)?;
-        let client = self
-            .client
-            .as_mut()
-            .ok_or_else(closed)
-            .map_err(io::Error::other)?;
-        let result = self
-            .runtime
-            .block_on(async { tokio::time::timeout(remaining, client.send_text(&payload)).await });
+        self.send_text_before(&payload, deadline)
+    }
+
+    pub fn send_text_before(&mut self, text: &str, deadline: &Deadline) -> io::Result<()> {
+        let context = "WebSocket send deadline";
+        let client = &mut self.client;
+        let result = self.runtime.block_on(async {
+            deadline.accept((), context)?;
+            let client = client
+                .as_mut()
+                .ok_or_else(closed)
+                .map_err(io::Error::other)?;
+            Ok::<_, io::Error>(
+                tokio::time::timeout_at(deadline.0.into(), client.send_text(text)).await,
+            )
+        })?;
         match deadline.accept(result, context) {
             Ok(Ok(result)) => result.map_err(io::Error::other),
             Ok(Err(_)) | Err(_) => {

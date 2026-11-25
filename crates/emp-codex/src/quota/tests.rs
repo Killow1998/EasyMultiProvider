@@ -121,7 +121,7 @@ fn reset_credit_projection_preserves_only_usable_ids() {
 fn isolated_process_sequences_requests_and_returns_rotated_auth() {
     let root = tempfile::Builder::new()
         .prefix("emp-fake-codex-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary root");
     let script = root.path().join("fake-codex");
     fs::write(

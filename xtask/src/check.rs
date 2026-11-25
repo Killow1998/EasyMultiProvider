@@ -54,9 +54,8 @@ pub fn run(args: &[String]) -> Result {
             test_drop::check(&path, source, scopes, &mut errors)?;
             shared_test_module(&path, source, &mut errors)?;
         }
-        if path.starts_with("crates/") && scopes.integration {
-            test_boundary(&path, &bytes, &mut errors);
-        } else if prose::includes(&path) {
+        test_boundary(&path, &bytes, scopes.integration, &mut errors);
+        if prose::includes(&path) {
             prose::check(&path, &read(&root, &path)?, &mut errors);
         } else if path.starts_with(".github/workflows/")
             && (path.ends_with(".yml") || path.ends_with(".yaml"))
@@ -130,7 +129,11 @@ fn git_paths(root: &Path, args: &[&str]) -> Result<Vec<String>> {
     Ok(paths)
 }
 
-fn test_boundary(path: &str, bytes: &[u8], errors: &mut Vec<String>) {
+fn test_boundary(path: &str, bytes: &[u8], integration: bool, errors: &mut Vec<String>) {
+    let in_tests_directory = path.starts_with("crates/") && path.split('/').nth(2) == Some("tests");
+    if !in_tests_directory && !integration {
+        return;
+    }
     for (index, line) in String::from_utf8_lossy(bytes).lines().enumerate() {
         if let Some(forbidden) = ["ServerState", "emp_app::"]
             .into_iter()
@@ -260,12 +263,23 @@ fn helper() {}
         ];
         for &(contents, count) in cases {
             let mut errors = Vec::new();
-            test_boundary("crates/emp-app/tests/e2e.rs", contents, &mut errors);
+            test_boundary("crates/emp-app/src/e2e.rs", contents, true, &mut errors);
             assert_eq!(errors.len(), count);
             if count > 0 {
                 assert!(errors[0].contains("e2e.rs:1: ServerState"));
                 assert!(errors[1].contains("e2e.rs:2: emp_app::"));
             }
         }
+    }
+
+    #[test]
+    fn test_boundary_checks_node_contracts_in_the_tests_directory() {
+        let path = "crates/emp-app/tests/frontend_contract.cjs";
+        let source = br#"const backend = readFileSync("../src/server.rs", "utf8");
+assert.match(backend, /ServerState/);"#;
+        let mut errors = Vec::new();
+        test_boundary(path, source, false, &mut errors);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains(&format!("[test-boundary] {path}:2: ServerState")));
     }
 }

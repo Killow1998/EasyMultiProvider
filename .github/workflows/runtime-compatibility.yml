@@ -62,9 +62,10 @@ jobs:
         run: |
           root=$(mktemp -d)
           trap 'rm -rf -- "$root"' EXIT
-          mkdir "$root/real"
+          mkdir -p "$root/real/fixtures"
           ln -s real "$root/link"
-          EMP_TEST_TMPDIR="$root/link" cargo test --locked -p emp-app --lib disconnect -- --test-threads=1
+          unset EMP_TEST_TMPDIR
+          TMPDIR="$root/link/fixtures" cargo test --locked -p emp-app --lib disconnect -- --test-threads=1
       - run: cargo test --locked --workspace --all-targets --no-fail-fast
 
   windows-exit:

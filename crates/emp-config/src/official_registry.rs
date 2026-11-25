@@ -93,10 +93,12 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let path = emp_test_support::fixture_root().join(format!(
-            "emp-official-registry-{}-{nonce}.json",
-            std::process::id()
-        ));
+        let path = emp_test_support::fixture_root()
+            .expect("resolve test fixture root")
+            .join(format!(
+                "emp-official-registry-{}-{nonce}.json",
+                std::process::id()
+            ));
         let provider = json!({"base_url":"https://example.test/v1"});
         let provider = provider.as_object().expect("provider object");
         for reviewed_at in ["first", "second"] {

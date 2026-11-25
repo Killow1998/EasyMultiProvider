@@ -5,7 +5,7 @@ fn failed_merged_catalog_write_recovers_from_unchanged_source_cache() {
     let upstream = RefreshCatalogFixture::start(false);
     let directory = tempfile::Builder::new()
         .prefix("emp-auto-catalog-publish-retry-")
-        .tempdir_in(emp_test_support::fixture_root())
+        .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let (server, auth_path) = start_server(&directory, &upstream.address, "0.159.2");
     let generated_path = crate::services::catalog::generated_catalog_path(&server.state);
