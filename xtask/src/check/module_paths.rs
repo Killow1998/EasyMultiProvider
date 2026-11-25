@@ -95,20 +95,22 @@ impl CrateSources<'_> {
             .or_else(|_| file.strip_prefix(&self.resolved_root))
             .unwrap_or(file);
         let resolved = resolve(file);
-        let Some(path) = resolved
+        let tracked = resolved
             .strip_prefix(&self.resolved_root)
             .ok()
             .filter(|path| {
                 self.is_tracked_source(path)
                     && (relative == *path || self.is_tracked_source(relative))
-            })
-        else {
+            });
+        if tracked.is_none() {
             self.errors.push(format!(
                 "[tracked-sources] {}: 编译源码必须是未被 .gitignore 排除的 .rs 文件；生成代码请写到 OUT_DIR，再用 include!(concat!(env!(\"OUT_DIR\"), ...)) 引入",
                 relative.display()
             ));
-            return;
-        };
+            if !resolved.starts_with(&self.crate_dir) {
+                return;
+            }
+        }
         if !file.is_file() {
             return;
         }
@@ -130,7 +132,9 @@ impl CrateSources<'_> {
             return;
         };
         let kind = kind.in_test(&source.attrs);
-        self.test_scopes.record(path, &source, kind);
+        if let Some(path) = tracked {
+            self.test_scopes.record(path, &source, kind);
+        }
         ModulePaths {
             sources: self,
             file,
@@ -427,6 +431,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn checks_module_boundaries_in_ignored_sources() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let crate_dir = root.join("app");
+        let entry = crate_dir.join("src/lib.rs");
+        fs::create_dir_all(crate_dir.join("src")).unwrap();
+        fs::create_dir_all(root.join("other/src")).unwrap();
+        fs::write(&entry, "mod helper;").unwrap();
+        fs::write(
+            crate_dir.join("src/helper.rs"),
+            r#"#[path = "../../other/src/lib.rs"] mod outside;"#,
+        )
+        .unwrap();
+        fs::write(root.join("other/src/lib.rs"), "").unwrap();
+
+        let errors = diagnostics(
+            root,
+            &crate_dir,
+            &entry,
+            &["app/src/lib.rs", "other/src/lib.rs"],
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors[0]
+                .replace('\\', "/")
+                .starts_with("[tracked-sources] app/src/helper.rs:")
+        );
+        assert!(
+            errors[1]
+                .replace('\\', "/")
+                .starts_with("[module-paths] app/src/helper.rs:1:")
+        );
+        assert!(errors[1].contains("指向本 crate 目录之外"));
     }
 
     #[test]

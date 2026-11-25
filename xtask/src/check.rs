@@ -68,18 +68,11 @@ pub fn run(args: &[String]) -> Result {
         "--exclude-standard",
         "-z",
     ];
-    let mut paths = git_paths(&root, &list_files)?;
+    let paths = git_paths(&root, &list_files)?;
     let cached_or_unignored: BTreeSet<&Path> = paths.iter().map(Path::new).collect();
     let (test_scopes, test_targets) = arch::check(&root, &cached_or_unignored, &mut errors)?;
     modules::check(&root, &mut errors)?;
-    let (referenced_profiles, invalid_sources) =
-        check_files(&root, &paths, &test_scopes, &mut errors)?;
-    paths.retain(|path| !invalid_sources.contains(path));
-    comments::check(&root, &paths, &test_scopes, &mut errors)?;
-    cfg_test::check(&root, &paths, &test_scopes, &mut errors)?;
-    test_deadlines::check(&root, &paths, &test_scopes, &mut errors)?;
-    test_fixture_root::check(&root, &paths, &test_scopes, &mut errors)?;
-    test_thread_observations::check(&root, &paths, &test_scopes, &mut errors)?;
+    let referenced_profiles = check_sources(&root, &paths, &test_scopes, &mut errors)?;
     ci_profiles::check_profiles(PROFILES, &test_targets, &referenced_profiles, &mut errors);
     if errors.is_empty() {
         println!("check: {} passed", RULES.join(", "));
@@ -87,6 +80,25 @@ pub fn run(args: &[String]) -> Result {
     } else {
         Err(errors.join("\n"))
     }
+}
+
+fn check_sources(
+    root: &Path,
+    paths: &[String],
+    test_scopes: &test_scope::Index,
+    errors: &mut Vec<String>,
+) -> Result<BTreeSet<&'static str>> {
+    let (referenced_profiles, invalid_sources) = check_files(root, paths, test_scopes, errors)?;
+    if invalid_sources.is_empty() {
+        comments::check(root, paths, test_scopes, errors)?;
+        cfg_test::check(root, paths, test_scopes, errors)?;
+        test_deadlines::check(root, paths, test_scopes, errors)?;
+        test_fixture_root::check(root, paths, test_scopes, errors)?;
+        test_thread_observations::check(root, paths, test_scopes, errors)?;
+    } else {
+        errors.push("存在无法解析的源文件，已跳过基线计数检查；修复语法错误后重新运行".into());
+    }
+    Ok(referenced_profiles)
 }
 
 fn check_files(
@@ -123,6 +135,7 @@ fn check_files(
             production_sockets::check(path, source, scopes, errors)?;
             test_drop::check(path, source, scopes, errors)?;
             shared_test_module(path, source, errors)?;
+            comments::check_source(path, source, scopes, errors)?;
         }
         test_boundary(path, &bytes, scopes.integration, errors);
         if prose::includes(path) {
@@ -313,6 +326,30 @@ fn contains_ident(tokens: TokenStream, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skips_source_baselines_when_a_source_fails_to_parse() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let paths = [
+            "crates/emp-router/src/lib.rs",
+            "crates/emp-router/src/request_policy.rs",
+        ]
+        .map(str::to_owned);
+        fs::create_dir_all(root.join("crates/emp-router/src")).unwrap();
+        fs::write(root.join(&paths[0]), "mod request_policy;").unwrap();
+        fs::write(root.join(&paths[1]), "#[cfg(test)] mod tests {").unwrap();
+
+        let mut errors = Vec::new();
+        check_sources(root, &paths, &test_scope::Index::default(), &mut errors).unwrap();
+
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].starts_with("[module-paths] crates/emp-router/src/request_policy.rs:"));
+        assert_eq!(
+            errors[1],
+            "存在无法解析的源文件，已跳过基线计数检查；修复语法错误后重新运行"
+        );
+    }
 
     #[test]
     fn rejects_uppercase_rust_extensions() {

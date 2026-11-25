@@ -31,28 +31,11 @@ pub(super) fn check(
 ) -> Result {
     let mut counts: BTreeMap<_, usize> = ALLOWED.iter().map(|&(name, _)| (name, 0)).collect();
     for path in paths {
-        let rust = path.ends_with(".rs");
-        let test_scopes = scopes.get(path);
-        let group = group(path);
-        if (!rust && group.is_none()) || !root.join(path).is_file() {
+        let Some(group) = group(path) else {
             continue;
-        }
-        let contents = read(root, path)?;
-        if rust && path != "xtask/src/check/comments.rs" && contents.contains("recv_timeout") {
-            let source = syn::parse_file(&contents).map_err(|error| format!("{path}: {error}"))?;
-            DisguisedSleep {
-                path,
-                test_scopes,
-                errors,
-            }
-            .visit_file(&source);
-        }
-        if rust && path != "xtask/src/check/comments.rs" {
-            msvc_only(path, &contents, errors);
-            domain_purity(path, &contents, errors)?;
-        }
-        if let Some(group) = group {
-            *counts.entry(group).or_default() += count(&contents, test_scopes);
+        };
+        if root.join(path).is_file() {
+            *counts.entry(group).or_default() += count(&read(root, path)?, scopes.get(path));
         }
     }
     for (group, count) in counts {
@@ -69,6 +52,28 @@ pub(super) fn check(
         }
     }
     Ok(())
+}
+
+pub(super) fn check_source(
+    path: &str,
+    contents: &str,
+    test_scopes: &TestScopes,
+    errors: &mut Vec<String>,
+) -> Result {
+    if !path.ends_with(".rs") || path == "xtask/src/check/comments.rs" {
+        return Ok(());
+    }
+    if contents.contains("recv_timeout") {
+        let source = syn::parse_file(contents).map_err(|error| format!("{path}: {error}"))?;
+        DisguisedSleep {
+            path,
+            test_scopes,
+            errors,
+        }
+        .visit_file(&source);
+    }
+    msvc_only(path, contents, errors);
+    domain_purity(path, contents, errors)
 }
 
 fn group(path: &str) -> Option<&str> {
