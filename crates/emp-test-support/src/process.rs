@@ -220,6 +220,10 @@ impl OwnedChild {
     }
 
     #[cfg(unix)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "只观察测试夹具持有的子进程，保留其回收所有权"
+    )]
     fn has_exited(&self) -> io::Result<bool> {
         use rustix::{
             io::Errno,

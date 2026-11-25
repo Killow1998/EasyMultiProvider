@@ -4,4 +4,13 @@ disallowed-methods = [
     { path = "std::fs::File::try_lock", reason = "用 emp_files 的锁守卫，Drop 时显式解锁" },
     { path = "std::fs::File::lock_shared", reason = "用 emp_files 的锁守卫，Drop 时显式解锁" },
     { path = "std::fs::File::try_lock_shared", reason = "用 emp_files 的锁守卫，Drop 时显式解锁" },
+    { path = "libc::wait", reason = "子进程只由 process_tree 回收；EMP 独占回收" },
+    { path = "libc::waitpid", reason = "子进程只由 process_tree 回收；EMP 独占回收" },
+    { path = "libc::wait4", reason = "子进程只由 process_tree 回收；EMP 独占回收" },
+    { path = "libc::waitid", reason = "子进程只由 process_tree 回收；EMP 独占回收" },
+    { path = "libc::signal", reason = "子进程只由 process_tree 回收；EMP 独占回收" },
+    { path = "libc::sigaction", reason = "子进程只由 process_tree 回收；EMP 独占回收" },
+    { path = "rustix::process::wait", reason = "子进程只由 process_tree 回收；EMP 独占回收" },
+    { path = "rustix::process::waitpid", reason = "子进程只由 process_tree 回收；EMP 独占回收" },
+    { path = "rustix::process::waitid", reason = "子进程只由 process_tree 回收；EMP 独占回收" },
 ]

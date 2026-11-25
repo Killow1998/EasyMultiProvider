@@ -13,6 +13,7 @@ use rustix::{
 };
 use serde_json::{Value, json};
 use std::{
+    cell::Cell,
     fs::OpenOptions,
     io::{self, BufRead, BufReader, Read, Write},
     net::Ipv4Addr,
@@ -581,10 +582,21 @@ fn child_waiting_for_input() -> (Child, ProcessTree) {
     (child, tree)
 }
 
+thread_local! {
+    static OBSERVATION_ERROR: Cell<Option<Errno>> = const { Cell::new(None) };
+}
+
+impl ProcessTree {
+    pub(crate) fn take_observation_error() -> Option<Errno> {
+        OBSERVATION_ERROR.take()
+    }
+}
+
 #[test]
-fn echild_disables_process_tree_signals() {
+fn observation_echild_disables_process_tree_signals() {
     let (mut child, tree) = child_waiting_for_input();
-    let error = tree.handle_observation_error(&mut child, Errno::CHILD);
+    OBSERVATION_ERROR.set(Some(Errno::CHILD));
+    let error = tree.wait(&mut child).unwrap_err();
     let stopped = tree.is_stopped();
     tree.request_stop();
     tree.request_graceful_stop();
@@ -595,10 +607,15 @@ fn echild_disables_process_tree_signals() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "验证 ProcessTree 已回收指定的测试子进程"
+)]
 fn observation_failure_kills_and_reaps_the_child_before_returning_the_original_error() {
     let (mut child, tree) = child_waiting_for_input();
     let leader = Pid::from_child(&child);
-    let error = tree.handle_observation_error(&mut child, Errno::PERM);
+    OBSERVATION_ERROR.set(Some(Errno::PERM));
+    let error = tree.has_exited(&mut child).unwrap_err();
     let observed = waitid(
         WaitId::Pid(leader),
         WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,

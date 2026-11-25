@@ -116,7 +116,14 @@ impl ProcessTree {
     }
 
     #[cfg(unix)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "只观察当前进程组的组长，并保留回收所有权"
+    )]
     fn observe_exit(&self, options: WaitIdOptions) -> rustix::io::Result<bool> {
+        if let Some(error) = Self::take_observation_error() {
+            return Err(error);
+        }
         let options = options | WaitIdOptions::EXITED | WaitIdOptions::NOWAIT;
         loop {
             match waitid(WaitId::Pid(self.leader), options) {
@@ -125,6 +132,11 @@ impl ProcessTree {
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    #[cfg(all(unix, not(test)))]
+    fn take_observation_error() -> Option<Errno> {
+        None
     }
 
     pub(crate) fn wait(&self, child: &mut Child) -> io::Result<ExitStatus> {
@@ -143,7 +155,7 @@ impl ProcessTree {
     }
 
     #[cfg(unix)]
-    pub(crate) fn handle_observation_error(&self, child: &mut Child, error: Errno) -> io::Error {
+    fn handle_observation_error(&self, child: &mut Child, error: Errno) -> io::Error {
         if error == Errno::CHILD {
             *self.stopped.lock().unwrap() = true;
         } else {

@@ -191,6 +191,10 @@ fn deadline_kills_and_reaps_a_hung_child_and_retains_both_streams() {
         );
     }
     #[cfg(unix)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "验证测试夹具已回收自己创建的子进程"
+    )]
     {
         use rustix::{
             io::Errno,

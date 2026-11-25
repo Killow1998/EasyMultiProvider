@@ -116,17 +116,22 @@ struct Connection {
     next_id: u64,
     pending: HashMap<RequestId, PendingReply>,
     incoming: HashMap<RequestId, CancellationToken>,
+    draining_replies: bool,
 }
 
 impl Connection {
-    fn disconnect(self, result: io::Result<()>) {
-        for pending in self.pending.into_values() {
+    fn disconnect(mut self, result: io::Result<()>) {
+        for (_, pending) in self.pending.drain() {
             pending.reply.complete(Err(CallError::Disconnected));
         }
-        for token in self.incoming.into_values() {
+        self.cancel_incoming();
+        let _ = self.closed.send(result);
+    }
+
+    fn cancel_incoming(&mut self) {
+        for (_, token) in self.incoming.drain() {
             token.cancel();
         }
-        let _ = self.closed.send(result);
     }
 }
 
@@ -207,6 +212,7 @@ impl Peer {
                 next_id: 1,
                 pending: HashMap::new(),
                 incoming: HashMap::new(),
+                draining_replies: false,
             }))),
         };
         let output = handle.clone();
@@ -263,6 +269,9 @@ impl Drop for Peer {
         let mut state = self.handle.connection.lock().unwrap();
         if let Some(connection) = state.take_if(|connection| connection.writer.is_some()) {
             connection.disconnect(Ok(()));
+        } else if let Some(connection) = state.as_mut() {
+            connection.draining_replies = true;
+            connection.cancel_incoming();
         }
     }
 }
@@ -411,6 +420,7 @@ impl PeerHandle {
                             .complete(response.response_result.map_err(CallError::Remote));
                     }
                 }
+                _ if connection.draining_replies => {}
                 Message::Notification(notification) if notification.method == CANCEL_REQUEST => {
                     #[derive(serde::Deserialize)]
                     struct CancelParams {

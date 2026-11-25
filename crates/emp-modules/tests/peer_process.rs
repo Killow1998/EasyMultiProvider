@@ -2,7 +2,7 @@
 
 use emp_modules::peer::{CallError, ErrorCode, Handlers, Peer, PendingRequest, Side};
 use emp_test_support::{Deadline, Observation, OwnedChild, test_timeout};
-use lsp_server::{Message, Request, RequestId, Response};
+use lsp_server::{Message, Notification, Request, RequestId, Response};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -370,6 +370,20 @@ fn check_broken_write_pipe() {
     let (reader, mut output) = io::pipe().unwrap();
     let (entered, writing) = mpsc::channel();
     let (release, gate) = mpsc::channel();
+    let (started, starting) = mpsc::channel();
+    let (finish, finishing) = mpsc::channel();
+    let finishing = Mutex::new(finishing);
+    let (called, callbacks) = mpsc::channel();
+    let mut handlers = Handlers::default();
+    handlers.register("host.active", move |_, token, _| {
+        started.send(token).unwrap();
+        finishing.lock().unwrap().recv_timeout(budget()).unwrap();
+        Ok(Value::Null)
+    });
+    handlers.register("host.unexpected", move |params, _, _| {
+        called.send(params).unwrap();
+        Ok(Value::Null)
+    });
     let peer = Peer::connect(
         Side::Host,
         BufReader::new(reader),
@@ -378,7 +392,7 @@ fn check_broken_write_pipe() {
             first_flush: false,
             gate: Some((entered, gate)),
         },
-        Handlers::default(),
+        handlers,
     )
     .unwrap();
     let host = peer.handle();
@@ -394,6 +408,14 @@ fn check_broken_write_pipe() {
         panic!("expected the request written before stdin closed");
     };
     assert_eq!(received.params, json!(1));
+    Message::Request(Request::new(
+        "m:1".to_owned().into(),
+        "host.active".to_owned(),
+        Value::Null,
+    ))
+    .write(&mut output)
+    .unwrap();
+    let token = starting.recv_timeout(budget()).unwrap();
     drop(input);
     let (registered, registration) = mpsc::channel();
     let waiter = Observation::spawn(move |probe| {
@@ -426,10 +448,34 @@ fn check_broken_write_pipe() {
         host.start_request("module.echo", json!(4)),
         Err(CallError::Disconnected)
     ));
+    let cancelled_on_drop = token.is_cancelled();
+    finish.send(()).unwrap();
+    Message::Request(Request::new(
+        "m:2".to_owned().into(),
+        "host.unexpected".to_owned(),
+        json!("request"),
+    ))
+    .write(&mut output)
+    .unwrap();
+    Message::Notification(Notification::new(
+        "host.unexpected".to_owned(),
+        json!("notification"),
+    ))
+    .write(&mut output)
+    .unwrap();
     Message::Response(Response::new_ok(received.id, 1))
         .write(&mut output)
         .unwrap();
     assert_eq!(written.wait(budget()).unwrap(), json!(1));
+    drop(output);
+    assert_eq!(
+        callbacks.recv_timeout(budget()),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    );
+    assert!(
+        cancelled_on_drop,
+        "active request was not cancelled on peer drop"
+    );
 }
 
 #[test]
