@@ -116,7 +116,7 @@ fn activity_request_body(stream: bool) -> Vec<u8> {
     .expect("encode activity request")
 }
 
-fn next_activity_snapshot(
+pub(super) fn next_activity_snapshot(
     events: &mut SseReader,
     mut matches: impl FnMut(&Value) -> bool,
 ) -> Value {

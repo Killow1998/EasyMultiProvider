@@ -80,7 +80,7 @@ pub(crate) fn execute(
             ));
         }
     };
-    let mut usage = crate::services::request_outcome::RequestOutcome::new(
+    let mut usage = crate::services::request_outcome::RequestGuard::new(
         state, &route, &body, &incoming, None, "compact",
     );
     let mut monitor = downstream.disconnect().ok();

@@ -37,7 +37,7 @@ pub(crate) fn execute_summary_request(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
-    usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
+    usage: &mut crate::services::request_outcome::RequestGuard<'_>,
 ) -> Result<(CompleteResponse, ResolvedRoute), SummaryExecutionError> {
     if crate::services::claude_cli::selected(route) {
         return match crate::services::claude_cli::execute_complete(
@@ -200,7 +200,7 @@ pub(crate) fn external_compaction_response(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     mut monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
-    usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
+    usage: &mut crate::services::request_outcome::RequestGuard<'_>,
 ) -> Result<(Value, ResolvedRoute), CompactionError> {
     let summary_body = compaction_summary_body(body);
     let candidates = protocol_candidates(route);

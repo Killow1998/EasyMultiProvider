@@ -2,7 +2,7 @@ use crate::app::ServerState;
 use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, race};
 use crate::services::observation;
 use crate::services::providers::save_learned_protocol;
-use crate::services::request_outcome::RequestOutcome;
+use crate::services::request_outcome::RequestGuard;
 use emp_domain::{ResolvedRoute, RouteResolutionError};
 use emp_router::failure_policy;
 use emp_router::{CompleteResponse, ExternalRouter, ExternalStream, ProjectionIds, RouterError};
@@ -34,7 +34,7 @@ pub(crate) fn complete(
     .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
     let router = &router;
     let mut outcome =
-        RequestOutcome::new(state, route, body, incoming, None, "responses").started_at(started);
+        RequestGuard::new(state, route, body, incoming, None, "responses").started_at(started);
     let _activity_guard =
         state
             .backend
@@ -77,7 +77,7 @@ pub(crate) fn open_stream<'a>(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     monitor: Option<&mut DisconnectMonitor>,
-) -> Result<(ExternalStream, ResolvedRoute, RequestOutcome<'a>), ExternalRequestError> {
+) -> Result<(ExternalStream, ResolvedRoute, RequestGuard<'a>), ExternalRequestError> {
     state.backend.transport.runtime.block_on(open_stream_async(
         state, route, body, incoming, ids, monitor,
     ))
@@ -90,7 +90,7 @@ pub(crate) async fn open_stream_async<'a>(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     monitor: Option<&mut DisconnectMonitor>,
-) -> Result<(ExternalStream, ResolvedRoute, RequestOutcome<'a>), ExternalRequestError> {
+) -> Result<(ExternalStream, ResolvedRoute, RequestGuard<'a>), ExternalRequestError> {
     let started = Instant::now();
     let router = ExternalRouter::new(
         &state.backend.transport.client,
@@ -99,7 +99,7 @@ pub(crate) async fn open_stream_async<'a>(
     .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
     let router = &router;
     let mut outcome =
-        RequestOutcome::new(state, route, body, incoming, None, "responses").started_at(started);
+        RequestGuard::new(state, route, body, incoming, None, "responses").started_at(started);
     let (stream, candidate) = Execution {
         state,
         route,
@@ -124,7 +124,7 @@ impl Execution<'_> {
     async fn run<T, F: Future<Output = Result<T, RouterError>>>(
         &self,
         mut monitor: Option<&mut DisconnectMonitor>,
-        outcome: &mut RequestOutcome<'_>,
+        outcome: &mut RequestGuard<'_>,
         mut request: impl FnMut(ResolvedRoute) -> F,
     ) -> Result<(T, ResolvedRoute), ExternalRequestError> {
         let Self {
@@ -145,7 +145,7 @@ impl Execution<'_> {
                 let result = match race(monitor.as_deref_mut(), request(candidate.clone())).await {
                     DisconnectRace::Ready(result) => result,
                     DisconnectRace::Disconnected => {
-                        observation::request_cancelled(state, &candidate, incoming);
+                        observation::request_cancelled(state, incoming);
                         outcome.disconnected();
                         return Err(ExternalRequestError::Disconnected);
                     }
@@ -173,7 +173,7 @@ impl Execution<'_> {
                         race(monitor.as_deref_mut(), tokio::time::sleep(delay)).await,
                         DisconnectRace::Disconnected
                     ) {
-                        observation::request_cancelled(state, &candidate, incoming);
+                        observation::request_cancelled(state, incoming);
                         outcome.disconnected();
                         return Err(ExternalRequestError::Disconnected);
                     }

@@ -46,7 +46,7 @@ pub(super) async fn serve(
                 .begin(crate::services::activity::ActivityIdentity::from_route(
                     &route,
                 ));
-        let mut usage = crate::services::request_outcome::RequestOutcome::new(
+        let mut usage = crate::services::request_outcome::RequestGuard::new(
             &state,
             &route,
             &body,

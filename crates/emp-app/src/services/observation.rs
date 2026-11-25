@@ -1,22 +1,21 @@
-//! Usage, diagnostics and activity reporting; request outcomes own routing feedback.
 pub(crate) mod continuation;
 pub(crate) mod diagnostics;
 pub(crate) mod operation;
 use crate::app::ServerState;
-use emp_domain::ResolvedRoute;
+use emp_storage::diagnostics::Journal;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 pub(crate) mod http;
 pub(crate) mod request;
 pub(crate) fn retry_scheduled(
-    state: &ServerState,
+    journal: &Journal,
     request_id: &Value,
     attempt: usize,
     delay: std::time::Duration,
     error: &emp_router::RouterError,
     fallback: bool,
 ) {
-    state.backend.diagnostics.journal.event(
+    journal.event(
         "info",
         "model_retry_scheduled",
         &json!({
@@ -29,8 +28,8 @@ pub(crate) fn retry_scheduled(
 }
 
 /// An attempt is evidence of entering an executor, not proof of provider acceptance.
-pub(crate) fn record_attempt(state: &ServerState, event: &Value, boundary: &'static str) {
-    let safe = diagnostics::schema::route_record(event, &state.backend.diagnostics.journal);
+pub(crate) fn record_attempt(journal: &Journal, event: &Value, boundary: &'static str) {
+    let safe = diagnostics::schema::route_record(event, journal);
     let mut fields = serde_json::Map::new();
     for key in [
         "request_id",
@@ -45,38 +44,19 @@ pub(crate) fn record_attempt(state: &ServerState, event: &Value, boundary: &'sta
         fields.insert(key.into(), safe[key].clone());
     }
     fields.insert("attempt_boundary".into(), json!(boundary));
-    state.backend.diagnostics.journal.event(
-        "info",
-        "model_attempt_started",
-        &Value::Object(fields),
-    );
+    journal.event("info", "model_attempt_started", &Value::Object(fields));
 }
 
-pub(crate) fn request_cancelled(
-    state: &ServerState,
-    route: &ResolvedRoute,
-    incoming: &BTreeMap<String, String>,
-) {
-    record_cancellation(state, route, incoming, "client_disconnect", None);
+pub(crate) fn request_cancelled(state: &ServerState, incoming: &BTreeMap<String, String>) {
+    record_cancellation(state, incoming, "client_disconnect", None);
 }
 
-pub(crate) fn request_interrupted(
-    state: &ServerState,
-    route: &ResolvedRoute,
-    incoming: &BTreeMap<String, String>,
-) {
-    record_cancellation(
-        state,
-        route,
-        incoming,
-        "client_cancelled",
-        Some("interrupted"),
-    );
+pub(crate) fn request_interrupted(state: &ServerState, incoming: &BTreeMap<String, String>) {
+    record_cancellation(state, incoming, "client_cancelled", Some("interrupted"));
 }
 
 fn record_cancellation(
     state: &ServerState,
-    route: &ResolvedRoute,
     incoming: &BTreeMap<String, String>,
     error_class: &str,
     reason: Option<&str>,
@@ -88,9 +68,4 @@ fn record_cancellation(
         .diagnostics
         .journal
         .event("info", "model_request_cancelled", &event);
-    state.backend.activity.observe_request(
-        &event,
-        crate::services::activity::ActivityIdentity::from_route(route).as_ref(),
-        true,
-    );
 }

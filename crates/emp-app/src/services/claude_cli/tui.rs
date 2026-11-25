@@ -62,7 +62,7 @@ pub(super) fn execute(
     incoming: &BTreeMap<String, String>,
     executable: &emp_codex::installed_cli::InstalledClaudeCli,
     mut monitor: Option<&mut DisconnectMonitor>,
-    usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
+    usage: &mut crate::services::request_outcome::RequestGuard<'_>,
     text: &mut dyn FnMut(&str, &str) -> std::io::Result<()>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let candidate = route

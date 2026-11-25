@@ -34,7 +34,7 @@ pub(super) enum NativeTurnResult<'a> {
     Closed,
     HttpFallback(
         Option<ActivityGuard<'a>>,
-        Option<Box<crate::services::request_outcome::RequestOutcome<'a>>>,
+        Option<Box<crate::services::request_outcome::RequestGuard<'a>>>,
     ),
 }
 
@@ -123,7 +123,7 @@ impl NativeSession {
             let traffic_before = client.traffic();
             let compression = client.compression_enabled();
             let mut idle_deadline = Instant::now() + UPSTREAM_IDLE;
-            let mut usage = crate::services::request_outcome::RequestOutcome::new(
+            let mut usage = crate::services::request_outcome::RequestGuard::new(
                 state,
                 route,
                 request_body,

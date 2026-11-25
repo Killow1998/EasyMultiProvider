@@ -131,8 +131,12 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             Deadline::after(test_timeout(Duration::from_secs(5))),
             "first interrupt fixture request",
         );
+        let turn_id = "01a00000-0000-7000-8000-000000000001";
         client
-            .send_json(&json!({"type":"response.create","model":model,"input":"first"}))
+            .send_json(&json!({
+                "type":"response.create","model":model,"input":"first",
+                "client_metadata":{"x-codex-turn-metadata":json!({"turn_id":turn_id}).to_string()}
+            }))
             .unwrap();
         assert_eq!(
             event(&mut client, "response.created")["response"]["id"],
@@ -169,6 +173,19 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             incomplete["response"].get("usage").is_none(),
             "unreported tokens must not become zero"
         );
+        let calls = super::super::request(&server, "/api/calls", &[&session_header(&server)]);
+        let (head, body) = response_parts(&calls);
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        let report: Value = serde_json::from_slice(body).unwrap();
+        let calls = report["records"].as_array().unwrap();
+        assert_eq!(calls.len(), 1, "{report}");
+        let call = &calls[0];
+        assert_eq!(call["turn_id"], turn_id, "{call}");
+        assert_eq!(call["state"], "interrupted", "{call}");
+        assert_eq!(call["error_class"], "client_cancelled", "{call}");
+        assert_eq!(call["error_origin"], "client", "{call}");
+        assert_eq!(call["input_tokens"], Value::Null, "{call}");
+        assert_eq!(call["output_tokens"], Value::Null, "{call}");
         // An incremental request must ask Codex for full history rather than
         // pretending the cancelled HTTP upstream has a resumable WS state.
         client.send_json(&json!({"type":"response.create","model":model,"input":"after","previous_response_id":"resp_steer"})).unwrap();

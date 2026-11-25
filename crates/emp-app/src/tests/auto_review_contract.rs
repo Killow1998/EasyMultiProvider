@@ -3,7 +3,7 @@ use crate::http::request::parse_request;
 use crate::lifecycle::ServerHandle;
 use crate::server::transport::read_request_head;
 use crate::services::auto_review::{automatic_review_candidates, resolve_auto_review_route};
-use crate::services::request_outcome::RequestOutcome;
+use crate::services::request_outcome::RequestGuard;
 use emp_codex::{account_auth_headers, native_catalog_owner};
 use emp_domain::{ResolvedRoute, RouteResolutionError};
 use emp_test_support::{Deadline, test_timeout};
@@ -698,7 +698,7 @@ fn observation_failure_and_success_update_the_next_request_candidates() {
         resolve_shared_route(&server, &mut config, "codex-auto-review").expect("initial route")
     };
     assert_eq!(route.provider_id, "codex-native");
-    let mut failed = RequestOutcome::new(
+    let mut failed = RequestGuard::new(
         &server.state,
         &route,
         &model,
@@ -724,7 +724,7 @@ fn observation_failure_and_success_update_the_next_request_candidates() {
     };
     assert_eq!(after_failure.provider_id, "review-account");
 
-    let mut succeeded = RequestOutcome::new(
+    let mut succeeded = RequestGuard::new(
         &server.state,
         &after_failure,
         &model,

@@ -1,6 +1,6 @@
 //! Loopback acceptance: receipts explain execution without controlling it.
 use super::*;
-use crate::services::request_outcome::RequestOutcome;
+use crate::services::request_outcome::RequestGuard;
 use crate::services::request_preparation::{RequestOperation, prepare_request};
 
 fn settlement_fixture() -> (TempDir, ServerHandle, rusqlite::Connection) {
@@ -20,7 +20,7 @@ fn settlement_outcome<'a>(
     server: &'a ServerHandle,
     operation: &str,
     request_id: &str,
-) -> RequestOutcome<'a> {
+) -> RequestGuard<'a> {
     let headers = BTreeMap::from([("x-emp-request-id".into(), request_id.into())]);
     let prepared = prepare_request(
         &server.state,
@@ -29,7 +29,7 @@ fn settlement_outcome<'a>(
         &headers,
     )
     .unwrap();
-    RequestOutcome::new(
+    RequestGuard::new(
         &server.state,
         &prepared.route,
         &prepared.body,
@@ -689,7 +689,7 @@ fn downstream_write_failure_does_not_rewrite_or_repeat_upstream_accounting() {
     let headers = receipt.headers(BTreeMap::new());
     let terminal = json!({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}}});
     {
-        let mut upstream = RequestOutcome::new(
+        let mut upstream = RequestGuard::new(
             &server.state,
             &prepared.route,
             &prepared.body,
@@ -741,8 +741,7 @@ fn ledger_keeps_execution_facts_after_activity_eviction() {
     let route = emp_domain::resolve_route_without_catalog(&config, "demo/model").unwrap();
     let body = json!({"model":"demo/model","input":"private-fixture"});
     let headers = BTreeMap::from([("x-emp-request-id".into(), "long-request".into())]);
-    let mut outcome =
-        RequestOutcome::new(&server.state, &route, &body, &headers, None, "responses");
+    let mut outcome = RequestGuard::new(&server.state, &route, &body, &headers, None, "responses");
     outcome.dispatch();
     outcome.native_retry(NativeRetryDecision {
         retry: true,
@@ -754,7 +753,7 @@ fn ledger_keeps_execution_facts_after_activity_eviction() {
     for index in 0..128 {
         let headers = BTreeMap::from([("x-emp-request-id".into(), format!("short-{index}"))]);
         let mut short =
-            RequestOutcome::new(&server.state, &route, &body, &headers, None, "responses");
+            RequestGuard::new(&server.state, &route, &body, &headers, None, "responses");
         short.dispatch();
         short.http_status(200);
         short.finish();

@@ -100,7 +100,7 @@ pub(crate) fn execute<'a>(
     observation.phase(Phase::Execute);
     if route.dialect != emp_domain::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
         let started = std::time::Instant::now();
-        let mut usage = crate::services::request_outcome::RequestOutcome::new(
+        let mut usage = crate::services::request_outcome::RequestGuard::new(
             state,
             &route,
             &body,
@@ -217,7 +217,7 @@ pub(crate) fn execute<'a>(
                 .begin(crate::services::activity::ActivityIdentity::from_route(
                     &route,
                 ));
-        let mut usage = crate::services::request_outcome::RequestOutcome::new(
+        let mut usage = crate::services::request_outcome::RequestGuard::new(
             state,
             &route,
             &body,

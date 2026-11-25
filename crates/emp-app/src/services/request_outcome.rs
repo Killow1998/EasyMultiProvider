@@ -1,5 +1,4 @@
-//! Finalize each routed operation's feedback, usage and activity exactly once;
-//! downstream delivery receipts cannot rewrite this upstream outcome.
+use super::activity::{ActivityIdentity, ActivityService};
 use super::request_facts;
 use crate::app::ServerState;
 use crate::services::observation::diagnostics::schema;
@@ -11,15 +10,20 @@ use std::time::Instant;
 mod execution;
 mod performance;
 mod recording;
+use recording::{CompletionServices, finish_request};
 
 #[cfg(all(test, feature = "hotpath"))]
 pub(crate) fn profile_request_bytes(body: &Value) -> usize {
     request_facts::request_bytes(body)
 }
 
-pub(crate) struct RequestOutcome<'a> {
-    state: &'a ServerState,
-    identity: Option<crate::services::activity::ActivityIdentity>,
+pub(crate) struct RequestGuard<'a> {
+    services: CompletionServices<'a>,
+    pending: Option<PendingRequest>,
+}
+
+struct PendingRequest {
+    identity: Option<ActivityIdentity>,
     started: Instant,
     first_token: Option<Instant>,
     event: Value,
@@ -27,9 +31,16 @@ pub(crate) struct RequestOutcome<'a> {
     models: emp_router::model_observation::ModelObservation,
     source_clock: bool,
     buffered: bool,
-    finalized: bool,
 }
-impl<'a> RequestOutcome<'a> {
+
+struct RequestOutcome {
+    event: Value,
+    identity: Option<ActivityIdentity>,
+    started: Instant,
+    aggregate_owner: Option<String>,
+}
+
+impl<'a> RequestGuard<'a> {
     pub(crate) fn native_credentials(
         &mut self,
         route: &ResolvedRoute,
@@ -38,9 +49,10 @@ impl<'a> RequestOutcome<'a> {
     ) {
         self.owner(&account_owner(headers));
         if route.provider_id == "codex-native" {
-            self.event["team_usage"] = native_account
-                .and_then(|identity| self.state.backend.team.native_usage_scope(identity))
+            let scope = native_account
+                .and_then(|identity| self.services.team.native_usage_scope(identity))
                 .unwrap_or(Value::Null);
+            self.pending_mut().event["team_usage"] = scope;
         }
     }
 
@@ -52,6 +64,17 @@ impl<'a> RequestOutcome<'a> {
         owner: Option<&str>,
         operation: &str,
     ) -> Self {
+        let backend = &state.backend;
+        let services = CompletionServices {
+            activity: &backend.activity,
+            aggregate: &backend.aggregate_availability,
+            auto_review: &backend.auto_review,
+            diagnostics: &backend.diagnostics,
+            events: &backend.management_events,
+            memory: &backend.memory_status,
+            team: &backend.team,
+            usage: &backend.usage,
+        };
         let memory_kind = request_facts::memory_kind(body, incoming);
         let operation = if operation == "responses" && body["generate"] == false {
             "prewarm"
@@ -65,8 +88,7 @@ impl<'a> RequestOutcome<'a> {
             operation
         };
         if operation == "responses" {
-            state
-                .backend
+            backend
                 .transport
                 .image_routes
                 .remember(route, body, incoming);
@@ -138,7 +160,7 @@ impl<'a> RequestOutcome<'a> {
                 body.get("client_metadata")
             }
         ));
-        if let Some(team) = state.backend.team.usage_scope(state, route) {
+        if let Some(team) = services.team.usage_scope(state, route) {
             event["team_usage"] = team;
         }
         event["selected_name"] = route
@@ -153,12 +175,8 @@ impl<'a> RequestOutcome<'a> {
             .get("name")
             .cloned()
             .unwrap_or(Value::Null);
-        let record = schema::route_record(&event, &state.backend.diagnostics.journal);
-        if let Some(prior) = state
-            .backend
-            .diagnostics
-            .continuation_recovery_from(&record)
-        {
+        let record = schema::route_record(&event, &services.diagnostics.journal);
+        if let Some(prior) = services.diagnostics.continuation_recovery_from(&record) {
             event["continuation_recovery_from"] = json!(prior);
         }
         let started_event = if operation == "prewarm" {
@@ -166,50 +184,204 @@ impl<'a> RequestOutcome<'a> {
         } else {
             "model_operation_started"
         };
-        state.backend.diagnostics.journal.event("info", started_event, &json!({
+        services.diagnostics.journal.event("info", started_event, &json!({
             "request_id":record["request_id"], "protocol":record["protocol"], "transport":record["transport"],
             "provider_id":record["provider_id"], "model_id":record["model_id"], "route":operation,
         }));
-        let identity = crate::services::activity::ActivityIdentity::from_route(route);
-        let result = Self {
+        let pending = PendingRequest {
             aggregate_owner: route
                 .model
                 .value()
                 .get("_emp_aggregate_owner")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            state,
-            identity,
+            identity: ActivityIdentity::from_route(route),
             started: Instant::now(),
             first_token: None,
-            finalized: false,
             event,
             models: Default::default(),
             source_clock: false,
             buffered: crate::services::claude_cli::selected(route),
         };
-        result.publish(false);
-        result
+        pending.publish_active(services.activity);
+        Self {
+            services,
+            pending: Some(pending),
+        }
     }
+
+    fn pending_mut(&mut self) -> &mut PendingRequest {
+        self.pending.as_mut().expect("request is still executing")
+    }
+
     pub(crate) fn observe(&mut self, event: &Value) {
         self.observe_event(event, None);
     }
     pub(crate) fn image_credit(&mut self, cost_nanos: Option<i64>) {
-        self.event["image_credit_cost_nanos"] = json!(cost_nanos);
+        self.pending_mut().event["image_credit_cost_nanos"] = json!(cost_nanos);
     }
     pub(crate) fn observe_upstream(&mut self, event: &Value) {
         self.observe_event(event, Some("upstream"));
     }
     fn observe_event(&mut self, event: &Value, origin: Option<&str>) {
-        if self.finalized {
-            return;
+        if let Some(pending) = &mut self.pending
+            && pending.observe_event(self.services.activity, event, origin)
+        {
+            self.finish();
         }
+    }
+
+    pub(crate) fn started_at(mut self, started: Instant) -> Self {
+        self.pending_mut().started = started;
+        self
+    }
+
+    pub(crate) fn raw_event(&mut self, event: &Value) {
+        let Some(pending) = &mut self.pending else {
+            return;
+        };
+        pending.source_clock = true;
+        pending.models.observe(event, !pending.buffered);
+        pending.first_token = pending.models.first_output;
+        pending.update_model_facts();
+        pending.publish_active(self.services.activity);
+    }
+
+    pub(crate) fn upstream_observation(
+        &mut self,
+        observation: &emp_router::model_observation::ModelObservation,
+    ) {
+        let Some(pending) = &mut self.pending else {
+            return;
+        };
+        pending.source_clock = true;
+        pending.first_token = observation.first_output;
+        pending.models.last_content = observation.last_content;
+        if pending.models != *observation {
+            pending.models = observation.clone();
+            pending.update_model_facts();
+            pending.publish_active(self.services.activity);
+        }
+    }
+
+    pub(crate) fn transport(mut self, transport: &str) -> Self {
+        let activity = self.services.activity;
+        let pending = self.pending_mut();
+        pending.event["transport"] = json!(transport);
+        pending.publish_active(activity);
+        self
+    }
+
+    pub(crate) fn status(&mut self, status: u16, error: &str) {
+        if let Some(pending) = &mut self.pending {
+            pending.status(status, error);
+        }
+    }
+
+    pub(crate) fn http_status(&mut self, status: u16) {
+        self.status(
+            status,
+            if (200..300).contains(&status) {
+                "none"
+            } else {
+                emp_transport::status_error_class(Some(status)).as_str()
+            },
+        );
+    }
+
+    pub(crate) fn router_error(&mut self, error: &emp_router::RouterError) {
+        let journal = &self.services.diagnostics.journal;
+        let pending = self.pending_mut();
+        pending.event["error_origin"] = json!(crate::services::error_origin::router(error));
+        pending.status(error.status(), error.error_class().as_str());
+        pending.event["failure_reason"] = json!(error.failure_reason());
+        pending.event["retry_after_seconds"] = json!(error.retry_after_seconds());
+        if error.kind() == emp_router::RouterErrorKind::Upstream {
+            pending.upstream_error_detail(journal, &error.to_string());
+        }
+    }
+
+    pub(crate) fn native_error(&mut self, error: &emp_router::native_http::NativeHttpError) {
+        let journal = &self.services.diagnostics.journal;
+        let pending = self.pending_mut();
+        pending.event["error_origin"] = error.body["error"]["origin"].clone();
+        pending.status(
+            error.status,
+            error.body["error"]["type"]
+                .as_str()
+                .unwrap_or_else(|| emp_transport::status_error_class(Some(error.status)).as_str()),
+        );
+        pending.event["failure_reason"] = error.body["error"]["failure_reason"].clone();
+        pending.event["retry_after_seconds"] =
+            json!(error.body["error"]["retry_after_seconds"].as_u64());
+        pending.event["error_code"] = error.body["error"]
+            .get("upstream_code")
+            .unwrap_or(&error.body["error"]["code"])
+            .clone();
+        if pending.event["error_origin"] == "upstream" {
+            pending.upstream_error_detail(
+                journal,
+                error.body["error"]["message"].as_str().unwrap_or_default(),
+            );
+        }
+    }
+
+    pub(crate) fn disconnected(&mut self) {
+        if let Some(pending) = &mut self.pending {
+            pending.event["error_origin"] = json!("client");
+            pending.event["status"] = Value::Null;
+            pending.event["error_class"] = json!("client_disconnect");
+            pending.event["success"] = json!(false);
+        }
+    }
+
+    pub(crate) fn drained(&mut self) {
+        let pending = self.pending_mut();
+        pending.event["error_origin"] = json!("emp");
+        pending.event["status"] = Value::Null;
+        pending.event["error_class"] = json!("server_draining");
+        pending.event["success"] = json!(false);
+    }
+
+    pub(crate) fn interrupted(&mut self) {
+        if let Some(pending) = &mut self.pending {
+            pending.event["error_origin"] = json!("client");
+            pending.event["status"] = json!(200);
+            pending.event["error_class"] = json!("client_cancelled");
+            pending.event["failure_reason"] = json!("interrupted");
+            pending.event["response_status"] = json!("incomplete");
+            pending.event["success"] = json!(false);
+            self.finish();
+        }
+    }
+
+    pub(crate) fn finish(&mut self) {
+        if let Some(pending) = self.pending.take() {
+            tokio::task::block_in_place(|| finish_request(&self.services, pending.freeze()));
+        }
+    }
+}
+
+impl Drop for RequestGuard<'_> {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+impl PendingRequest {
+    fn observe_event(
+        &mut self,
+        activity: &ActivityService,
+        event: &Value,
+        origin: Option<&str>,
+    ) -> bool {
         let now = Instant::now();
         let response = event
             .get("response")
             .filter(|value| value.is_object())
             .unwrap_or(event);
         let kind = event["type"].as_str().unwrap_or("");
+        let terminal = crate::services::events::terminal_stream_event(event);
         if let Some(status) = response["status"]
             .as_str()
             .filter(|status| matches!(*status, "completed" | "failed" | "incomplete"))
@@ -227,8 +399,9 @@ impl<'a> RequestOutcome<'a> {
             self.models
                 .observe(event, !self.buffered && self.event["transport"] != "http");
             self.first_token = self.models.first_output;
-            if self.event["dialect"] == "codex_native" {
+            if self.event["dialect"] == "codex_native" && !terminal {
                 self.update_model_facts();
+                self.publish_active(activity);
             }
         }
         if !kind.is_empty() && self.event.get("upstream_first_event_ms").is_none() {
@@ -290,42 +463,11 @@ impl<'a> RequestOutcome<'a> {
                 .as_str(),
             );
         }
-        if matches!(
-            event["type"].as_str(),
-            Some("response.completed" | "response.incomplete" | "response.failed" | "error")
-        ) {
+        if terminal {
             self.event["terminal_event_observed"] = json!(true);
             self.event["phase"] = json!("terminal_validation");
-            self.finish();
         }
-    }
-    pub(crate) fn started_at(mut self, started: Instant) -> Self {
-        self.started = started;
-        self
-    }
-    pub(crate) fn raw_event(&mut self, event: &Value) {
-        if self.finalized {
-            return;
-        }
-        self.source_clock = true;
-        self.models.observe(event, !self.buffered);
-        self.first_token = self.models.first_output;
-        self.update_model_facts();
-    }
-    pub(crate) fn upstream_observation(
-        &mut self,
-        observation: &emp_router::model_observation::ModelObservation,
-    ) {
-        if self.finalized {
-            return;
-        }
-        self.source_clock = true;
-        self.first_token = observation.first_output;
-        self.models.last_content = observation.last_content;
-        if self.models != *observation {
-            self.models = observation.clone();
-            self.update_model_facts();
-        }
+        terminal
     }
     fn update_model_facts(&mut self) {
         let mut projected = self
@@ -342,151 +484,41 @@ impl<'a> RequestOutcome<'a> {
             .as_object_mut()
             .unwrap()
             .extend(projected.as_object().unwrap().clone());
-        self.publish(false);
     }
-    pub(crate) fn transport(mut self, transport: &str) -> Self {
-        self.event["transport"] = json!(transport);
-        self.publish(false);
-        self
-    }
-    pub(crate) fn status(&mut self, status: u16, error: &str) {
+    fn status(&mut self, status: u16, error: &str) {
         self.event["status"] = json!(status);
         self.event["error_class"] = json!(error);
         self.event["success"] = json!((200..300).contains(&status) && error == "none");
     }
-    pub(crate) fn http_status(&mut self, status: u16) {
-        self.status(
-            status,
-            if (200..300).contains(&status) {
-                "none"
-            } else {
-                emp_transport::status_error_class(Some(status)).as_str()
-            },
-        );
-    }
-    pub(crate) fn router_error(&mut self, error: &emp_router::RouterError) {
-        self.event["error_origin"] = json!(crate::services::error_origin::router(error));
-        self.status(error.status(), error.error_class().as_str());
-        self.event["failure_reason"] = json!(error.failure_reason());
-        self.event["retry_after_seconds"] = json!(error.retry_after_seconds());
-        if error.kind() == emp_router::RouterErrorKind::Upstream {
-            self.upstream_error_detail(&error.to_string());
-        }
-    }
-    fn upstream_error_detail(&self, message: &str) {
-        self.state.backend.diagnostics.journal.event("warn", "upstream_request_rejected", &json!({
+    fn upstream_error_detail(&self, journal: &emp_storage::diagnostics::Journal, message: &str) {
+        journal.event("warn", "upstream_request_rejected", &json!({
             "request_id": self.event["request_id"], "provider_id": self.event["provider_id"],
             "upstream_model": self.event["upstream_model"], "status": self.event["status"],
             "error_code": self.event["error_code"], "failure_reason": self.event["failure_reason"],
             "upstream_message": message,
         }));
     }
-    pub(crate) fn native_error(&mut self, error: &emp_router::native_http::NativeHttpError) {
-        self.event["error_origin"] = error.body["error"]["origin"].clone();
-        self.status(
-            error.status,
-            error.body["error"]["type"]
-                .as_str()
-                .unwrap_or_else(|| emp_transport::status_error_class(Some(error.status)).as_str()),
-        );
-        self.event["failure_reason"] = error.body["error"]["failure_reason"].clone();
-        self.event["retry_after_seconds"] =
-            json!(error.body["error"]["retry_after_seconds"].as_u64());
-        self.event["error_code"] = error.body["error"]
-            .get("upstream_code")
-            .unwrap_or(&error.body["error"]["code"])
-            .clone();
-        if self.event["error_origin"] == "upstream" {
-            self.upstream_error_detail(error.body["error"]["message"].as_str().unwrap_or_default());
-        }
-    }
-    pub(crate) fn disconnected(&mut self) {
-        self.event["error_origin"] = json!("client");
-        self.event["status"] = Value::Null;
-        self.event["error_class"] = json!("client_disconnect");
-        self.event["success"] = json!(false);
-    }
-    pub(crate) fn drained(&mut self) {
-        self.event["error_origin"] = json!("emp");
-        self.event["status"] = Value::Null;
-        self.event["error_class"] = json!("server_draining");
-        self.event["success"] = json!(false);
-    }
-    pub(crate) fn interrupted(&mut self) {
-        self.event["error_origin"] = json!("client");
-        self.event["status"] = json!(200);
-        self.event["error_class"] = json!("client_cancelled");
-        self.event["failure_reason"] = json!("interrupted");
-        self.event["response_status"] = json!("incomplete");
-        self.event["success"] = json!(false);
-        self.finish();
-    }
-    pub(crate) fn finish(&mut self) {
-        if !self.finalized {
-            tokio::task::block_in_place(|| self.record_completion());
-        }
-    }
-
-    fn record_completion(&mut self) {
+    fn freeze(mut self) -> RequestOutcome {
         let duration_ms = self.started.elapsed().as_millis() as u64;
         self.event["duration_ms"] = json!(duration_ms);
-        if self.event["route"] == "prewarm" {
-            self.state.backend.diagnostics.journal.event(
-                "info",
-                "model_prewarm_finished",
-                &json!({"request_id":self.event["request_id"],"model_id":self.event["model_id"],
-                        "duration_ms":duration_ms,"success":self.event["success"],
-                        "error_class":self.event["error_class"],"generate":false}),
-            );
-            self.finalized = true;
-            return;
+        if self.event["route"] != "prewarm" {
+            self.record_performance(duration_ms);
+            self.update_model_facts();
+            if let Some(identity) = &self.identity {
+                self.event["account_id"] = json!(identity.account_id);
+            }
         }
-        self.record_performance(duration_ms);
-        if let Some(owner) = &self.aggregate_owner {
-            self.state
-                .backend
-                .aggregate_availability
-                .record_source_result(
-                    owner,
-                    self.event["success"] == true,
-                    self.event["failure_reason"].as_str().unwrap_or_default(),
-                    self.event["error_class"].as_str().unwrap_or_default(),
-                );
+        RequestOutcome {
+            event: self.event,
+            identity: self.identity,
+            started: self.started,
+            aggregate_owner: self.aggregate_owner,
         }
-        if matches!(
-            emp_state::usage::call_state(&self.event),
-            "completed" | "failed"
-        ) {
-            self.state.backend.auto_review.record_result(
-                self.event["client_model"].as_str().unwrap_or_default(),
-                self.event["provider_id"].as_str().unwrap_or_default(),
-                self.event["success"] == true,
-                self.event["failure_reason"].as_str().unwrap_or_default(),
-                self.event["error_class"].as_str().unwrap_or_default(),
-            );
-        }
-        self.update_model_facts();
-        if let Some(identity) = &self.identity {
-            self.event["account_id"] = json!(identity.account_id);
-        }
-        crate::services::memory_routing::observe(self.state, &self.event);
-        self.persist_call();
-        self.publish(true);
-        self.finalized = true;
     }
 
-    fn publish(&self, finished: bool) {
-        if self.event["route"] == "prewarm" {
-            return;
+    fn publish_active(&self, activity: &ActivityService) {
+        if self.event["route"] != "prewarm" {
+            activity.observe_request(&self.event, self.identity.as_ref());
         }
-        self.state
-            .backend
-            .activity
-            .observe_request(&self.event, self.identity.as_ref(), finished);
-    }
-}
-impl Drop for RequestOutcome<'_> {
-    fn drop(&mut self) {
-        self.finish();
     }
 }

@@ -13,7 +13,7 @@ use crate::services::events::terminal_stream_event;
 use crate::services::native;
 use crate::services::observation::request::RequestObservation;
 use crate::services::providers::save_learned_protocol;
-use crate::services::request_outcome::RequestOutcome;
+use crate::services::request_outcome::RequestGuard;
 use crate::util::random_hex;
 use axum::body::Bytes;
 use emp_domain::ResolvedRoute;
@@ -306,7 +306,7 @@ struct RelayContext<'a> {
     state: &'a ServerState,
     route: &'a ResolvedRoute,
     response_headers: BTreeMap<String, String>,
-    usage: RequestOutcome<'a>,
+    usage: RequestGuard<'a>,
 }
 
 fn relay_stream(
@@ -314,7 +314,7 @@ fn relay_stream(
     context: RelayContext<'_>,
     mut source: impl RelaySource,
     monitor: Option<DisconnectMonitor>,
-    mut observe: impl FnMut(&mut RequestOutcome<'_>, &Value),
+    mut observe: impl FnMut(&mut RequestGuard<'_>, &Value),
 ) -> Result<(), HttpReply> {
     let RelayContext {
         state,

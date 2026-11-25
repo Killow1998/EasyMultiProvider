@@ -19,7 +19,7 @@ pub(super) async fn serve_native(
     websocket: &mut super::ObservedWebSocket<'_>,
     monitor: &mut crate::services::disconnect::DisconnectMonitor,
     mut native_turn_activity: Option<ActivityGuard<'_>>,
-    previous_usage: Option<crate::services::request_outcome::RequestOutcome<'_>>,
+    previous_usage: Option<crate::services::request_outcome::RequestGuard<'_>>,
 ) -> TurnResult {
     let Turn {
         route,

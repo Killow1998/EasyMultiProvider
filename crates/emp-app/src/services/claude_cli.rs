@@ -55,7 +55,7 @@ pub(crate) fn execute_complete(
     body: &Value,
     incoming: &BTreeMap<String, String>,
     monitor: Option<&mut DisconnectMonitor>,
-    usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
+    usage: &mut crate::services::request_outcome::RequestGuard<'_>,
     text: &mut dyn FnMut(&str, &str) -> std::io::Result<()>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let started = Instant::now();
@@ -79,9 +79,9 @@ pub(crate) fn execute_complete(
     })();
     if let Err(error) = &result {
         if matches!(error, ClaudeCliError::Failure("claude_cli_interrupted")) {
-            crate::services::observation::request_interrupted(state, route, incoming);
+            crate::services::observation::request_interrupted(state, incoming);
         } else if matches!(error, ClaudeCliError::Disconnected) {
-            crate::services::observation::request_cancelled(state, route, incoming);
+            crate::services::observation::request_cancelled(state, incoming);
         }
         let (status, code) = match error {
             ClaudeCliError::Failure(code) => (failure_details(code).0, *code),

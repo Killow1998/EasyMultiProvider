@@ -2,7 +2,7 @@ use crate::app::ServerState;
 use crate::services::catalog::response_catalog_etag;
 use crate::services::disconnect::DisconnectMonitor;
 use crate::services::disconnect::DisconnectRace;
-use crate::services::request_outcome::RequestOutcome;
+use crate::services::request_outcome::RequestGuard;
 use emp_domain::ResolvedRoute;
 use emp_router::ProjectionIds;
 use emp_router::native_http::NativeRouter;
@@ -35,7 +35,7 @@ pub(crate) fn open_stream_result<'a>(
     body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
-) -> Result<(NativeStream, RequestOutcome<'a>), NativeHttpError> {
+) -> Result<(NativeStream, RequestGuard<'a>), NativeHttpError> {
     match state
         .backend
         .transport
@@ -52,11 +52,11 @@ pub(crate) fn open_stream_result<'a>(
 
 pub(crate) struct NativeWebSocketFallback<'a> {
     pub(crate) execution_started: Instant,
-    pub(crate) previous_usage: Option<RequestOutcome<'a>>,
+    pub(crate) previous_usage: Option<RequestGuard<'a>>,
 }
 
 pub(crate) enum CancellableNativeStreamOpen<'a> {
-    Opened(Box<(NativeStream, RequestOutcome<'a>)>),
+    Opened(Box<(NativeStream, RequestGuard<'a>)>),
     Disconnected,
 }
 
@@ -102,7 +102,7 @@ pub(crate) async fn open_stream_result_with_monitor<'a>(
     let websocket_started = fallback.as_ref().map(|fallback| fallback.execution_started);
     let mut usage = fallback
         .and_then(|fallback| fallback.previous_usage)
-        .unwrap_or_else(|| RequestOutcome::new(state, route, body, incoming, None, "responses"));
+        .unwrap_or_else(|| RequestGuard::new(state, route, body, incoming, None, "responses"));
     let result = {
         let receipt = Mutex::new(&mut usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();
@@ -139,7 +139,7 @@ pub(crate) async fn open_stream_result_with_monitor<'a>(
                 Some(monitor) if monitor.is_draining() => usage.drained(),
                 Some(monitor) if monitor.is_interrupted() => usage.interrupted(),
                 _ => {
-                    crate::services::observation::request_cancelled(state, route, incoming);
+                    crate::services::observation::request_cancelled(state, incoming);
                     usage.disconnected();
                 }
             }
@@ -189,7 +189,7 @@ fn buffered(
     incoming: &BTreeMap<String, String>,
     operation: &str,
 ) -> Result<NativeCompleteResponse, NativeHttpError> {
-    let mut usage = RequestOutcome::new(state, route, body, incoming, None, operation);
+    let mut usage = RequestGuard::new(state, route, body, incoming, None, operation);
     let result = {
         let receipt = Mutex::new(&mut usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();

@@ -199,20 +199,19 @@ impl ActivityService {
         })
     }
 
-    pub(crate) fn observe_request(
-        &self,
-        event: &Value,
-        identity: Option<&ActivityIdentity>,
-        finished: bool,
-    ) {
-        self.update_requests(|requests| {
-            requests.observe(event, identity, finished, unix_seconds())
-        });
+    pub(crate) fn observe_request(&self, event: &Value, identity: Option<&ActivityIdentity>) {
+        self.update_request(event, identity, false);
     }
 
-    fn update_requests(&self, update: impl FnOnce(&mut requests::Requests) -> bool) {
+    pub(super) fn finish_request(&self, event: &Value, identity: Option<&ActivityIdentity>) {
+        self.update_request(event, identity, true);
+    }
+
+    fn update_request(&self, event: &Value, identity: Option<&ActivityIdentity>, finished: bool) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let changed = update(&mut state.requests);
+        let changed = state
+            .requests
+            .observe(event, identity, finished, unix_seconds());
         if changed {
             state.revision = state.revision.wrapping_add(1);
         }

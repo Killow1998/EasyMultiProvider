@@ -171,7 +171,7 @@ pub(crate) fn prepare_destination_context(
                     crate::services::activity::ActivityIdentity::from_route(&candidate),
                 ));
             }
-            let mut usage = crate::services::request_outcome::RequestOutcome::new(
+            let mut usage = crate::services::request_outcome::RequestGuard::new(
                 state,
                 &candidate,
                 summary_body,

@@ -1,6 +1,6 @@
 use super::auto_review_contract::{make_review_server, write_owned_subscription_catalog};
 use crate::services::{
-    request_outcome::RequestOutcome,
+    request_outcome::RequestGuard,
     request_preparation::{RequestOperation, prepare_request},
 };
 use serde_json::{Value, json};
@@ -144,7 +144,7 @@ fn subscription_balance_keeps_affinity_and_follows_actual_account_after_native_l
     );
 
     // A known upstream limit cools this actual account, without retrying its output.
-    let mut outcome = RequestOutcome::new(
+    let mut outcome = RequestGuard::new(
         &server.state,
         &moved,
         &json!({}),

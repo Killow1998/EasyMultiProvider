@@ -4,7 +4,7 @@ use crate::app::ServerState;
 use crate::util::system_now;
 use emp_codex::usage_history::UsageHistoryScanner;
 use emp_state::usage::{
-    ledger::UsageLedger,
+    ledger::{UsageError, UsageLedger},
     pricing::{PRICE_INTERVAL, PRICE_URL, PriceCatalog},
 };
 use serde_json::{Value, json};
@@ -49,6 +49,18 @@ impl UsageState {
             scan_wake: Condvar::new(),
             price_wake: Condvar::new(),
         }
+    }
+    pub(super) fn record_completion(
+        &self,
+        event: &Value,
+        now: f64,
+        started: f64,
+        finished: f64,
+    ) -> Result<(), UsageError> {
+        self.ledger
+            .record_completion(event, now, started, finished)?;
+        self.events.publish(super::management_events::Change::Usage);
+        Ok(())
     }
     pub(crate) fn queue_scan(&self, state: &ServerState) -> Option<u64> {
         let mut progress = self.progress.lock().expect("history refresh");

@@ -58,7 +58,7 @@ impl ObservedWebSocket<'_> {
         headers: &BTreeMap<String, String>,
         event: &Value,
     ) {
-        let mut outcome = crate::services::request_outcome::RequestOutcome::new(
+        let mut outcome = crate::services::request_outcome::RequestGuard::new(
             state,
             route,
             body,

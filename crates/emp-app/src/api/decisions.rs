@@ -116,7 +116,7 @@ pub(crate) fn execute(
     if let Some(id) = request.observation_id {
         incoming.insert("X-EMP-Request-ID".into(), id.into());
     }
-    let mut outcome = crate::services::request_outcome::RequestOutcome::new(
+    let mut outcome = crate::services::request_outcome::RequestGuard::new(
         state,
         &route,
         &body,

@@ -1,4 +1,4 @@
-use super::RequestOutcome;
+use super::PendingRequest;
 use serde_json::{Value, json};
 
 const MIN_GENERATION_MEASUREMENT_MS: u64 = 100;
@@ -35,7 +35,7 @@ fn generation_tokens_per_second(
     request_tokens_per_second(&json!(output.checked_sub(reasoning)?), duration_ms)
 }
 
-impl RequestOutcome<'_> {
+impl PendingRequest {
     pub(super) fn record_performance(&mut self, duration_ms: u64) {
         if self.event["route"] == "decisions" {
             return;

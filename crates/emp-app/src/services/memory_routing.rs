@@ -1,5 +1,6 @@
 //! Route existing Codex memory jobs; Codex still owns memory generation and files.
 use crate::app::ServerState;
+use crate::services::management_events::{Change, ManagementEvents};
 use crate::services::request_facts::memory_kind;
 use crate::services::request_preparation::{
     PreparedRequest, RequestOperation, RequestPreparationError, prepare_with_config,
@@ -203,7 +204,7 @@ pub(crate) fn error_message(reason: &str) -> &'static str {
     }
 }
 
-pub(crate) fn observe(state: &ServerState, event: &Value) {
+pub(super) fn observe(status: &MemoryStatus, events: &ManagementEvents, event: &Value) {
     if !matches!(
         event["route"].as_str(),
         Some("memory_extraction" | "memory_consolidation")
@@ -221,13 +222,10 @@ pub(crate) fn observe(state: &ServerState, event: &Value) {
     } else {
         Some("request_failed")
     };
-    if state.backend.memory_status.update(
+    if status.update(
         json!({"state":if reason.is_some() {"paused"} else {"ready"},"reason":reason,
             "model":event["upstream_model"],"account_id":event["account_id"],"kind":event["route"]}),
     ) {
-        state
-            .backend
-            .management_events
-            .publish(crate::services::management_events::Change::Quota);
+        events.publish(Change::Quota);
     }
 }

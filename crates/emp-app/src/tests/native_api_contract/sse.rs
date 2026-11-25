@@ -84,6 +84,105 @@ fn incomplete_sse_event(frames: &[String]) -> Value {
 }
 
 #[test]
+fn native_sse_activity_terminal_has_a_committed_call_and_usage() {
+    let terminal = json!({"type":"response.completed","response":{
+        "id":"resp_activity_settlement","status":"completed","model":"upstream","output":[],
+        "usage":{"input_tokens":17,"output_tokens":3}
+    }});
+    let upstream = NativeErrorSseUpstream::start(format!("data: {terminal}\n\n").into_bytes());
+    let (directory, server) = native_alias_server(&upstream.base_url());
+    let session = session_header(&server);
+    let mut events = open_quota_events(&server, &session);
+    let thread_id = "activity-settlement";
+    let account = "activity-account";
+    let socket = open_post_stream(
+        &server,
+        "/v1/responses",
+        br#"{"model":"native/alias","input":"hello","stream":true}"#,
+        &[
+            &session,
+            "Authorization: Bearer caller",
+            &format!("chatgpt-account-id: {account}"),
+            &format!("thread-id: {thread_id}"),
+        ],
+    );
+    let matches_request = |row: &Value| row["thread_id"] == thread_id && row["state"] != "active";
+    let snapshot = super::super::activity_contract::next_activity_snapshot(&mut events, |value| {
+        value["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(matches_request)
+    });
+    let activity = snapshot["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| matches_request(row))
+        .unwrap();
+    let request_id = activity["request_id"].as_str().unwrap();
+    let db = rusqlite::Connection::open_with_flags(
+        canonical_root(&directory).join("state/usage.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let (state, facts, usage_id, owner, input, output) = db
+        .query_row(
+            "SELECT c.state, c.facts, u.id, u.owner, u.input_tokens, u.output_tokens
+         FROM call_records c JOIN usage_events u ON u.id=json_extract(c.facts,'$.usage_event_id')
+         WHERE c.request_id=? AND c.operation='responses'",
+            [request_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )
+        .expect("activity terminal must follow the commit of the call and its usage");
+    let call: Value = serde_json::from_str(&facts).unwrap();
+    assert_eq!(activity["state"], "completed");
+    assert_eq!(activity["state"], state);
+    assert_eq!(activity["provider_id"], call["provider_id"]);
+    let expected_owner = emp_state::usage::account_owner(&BTreeMap::from([(
+        "chatgpt-account-id".to_owned(),
+        account.to_owned(),
+    )]));
+    let expected_usage_id = emp_state::usage::identity_hash(&json!([
+        "native",
+        expected_owner,
+        "upstream",
+        "responses",
+        terminal["response"]["id"]
+    ]));
+    assert_eq!(owner, expected_owner);
+    assert_eq!((input, output), (17, 3));
+    assert_eq!(call["input_tokens"], input);
+    assert_eq!(call["output_tokens"], output);
+    assert_eq!(activity["input_tokens"], input);
+    assert_eq!(activity["output_tokens"], output);
+    assert_eq!(call["usage_event_id"], usage_id);
+    assert_eq!(usage_id, expected_usage_id);
+    assert_eq!(call["usage_response_id"], terminal["response"]["id"]);
+
+    let deadline = Deadline::after(response_timeout());
+    let (_, frames) = read_native_sse(BufReader::new(deadline.io(socket)), &deadline);
+    let completed = frames
+        .iter()
+        .filter_map(|frame| data(frame))
+        .map(|data| serde_json::from_str::<Value>(&data).unwrap())
+        .find(|event| event["type"] == "response.completed")
+        .expect("downstream completed event");
+    assert_eq!(completed["response"]["id"], terminal["response"]["id"]);
+    upstream.finish();
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn native_sse_finds_terminal_json_split_across_http_chunks() {
     let terminal =
         br#"data: {"type":"response.incomplete","response":{"usage":{"input_tokens":17}}}"#;

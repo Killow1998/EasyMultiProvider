@@ -1,7 +1,7 @@
 //! Native image forwarding shares account authentication, never response projection.
 use super::resolve_headers;
 use crate::app::ServerState;
-use crate::services::request_outcome::RequestOutcome;
+use crate::services::request_outcome::RequestGuard;
 use emp_router::native_http::{NativeCompleteResponse, NativeHttpError};
 use emp_transport::{HttpMethod, HttpTransportErrorKind};
 use serde_json::{Value, json};
@@ -61,7 +61,7 @@ pub(crate) fn execute(
     };
     let encoded = serde_json::to_vec(routed_body)
         .map_err(|_| NativeHttpError::router(400, "image request is invalid"))?;
-    let mut usage = RequestOutcome::new(
+    let mut usage = RequestGuard::new(
         state,
         &route,
         body,

@@ -4,7 +4,7 @@ use super::super::ObservedWebSocket;
 use super::errors::native_stream_error_value_for_route;
 use super::{Message, next_message};
 use crate::services::observation::continuation::ContinuationReason;
-use crate::services::request_outcome::RequestOutcome;
+use crate::services::request_outcome::RequestGuard;
 use emp_domain::ResolvedRoute;
 use emp_transport::{AsyncClientWebSocket, FailureClass};
 use serde_json::Value;
@@ -127,7 +127,7 @@ impl PrefillError {
         self,
         route: &ResolvedRoute,
         websocket: &mut ObservedWebSocket<'_>,
-        usage: &mut RequestOutcome<'_>,
+        usage: &mut RequestGuard<'_>,
     ) {
         if let Self::Transport(error) = &self {
             websocket.observation.native_continuation().transport_error = Some(error.to_string());
