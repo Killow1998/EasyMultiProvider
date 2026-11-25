@@ -80,14 +80,24 @@ async fn exchange_before(
 
 #[cfg(unix)]
 async fn connect_submitted_write(fixture: &Fixture) -> (TcpStream, tokio::task::JoinHandle<()>) {
+    connect_wire_from(&fixture.server.state, None).await
+}
+
+#[cfg(unix)]
+pub(crate) async fn connect_wire_from(
+    state: &Arc<crate::app::ServerState>,
+    peer_ip: Option<std::net::IpAddr>,
+) -> (TcpStream, tokio::task::JoinHandle<()>) {
     use crate::server::{connection::drive_http, http_router, transport::ConnectionIo};
 
     let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
     let client = TcpStream::connect(listener.local_addr().unwrap())
         .await
         .unwrap();
-    let (stream, peer) = listener.accept().await.unwrap();
-    let state = &fixture.server.state;
+    let (stream, mut peer) = listener.accept().await.unwrap();
+    if let Some(ip) = peer_ip {
+        peer.set_ip(ip);
+    }
     let admission = &state.lifecycle.admission;
     let task = tokio::spawn(drive_http(
         ConnectionIo::new(stream),

@@ -231,6 +231,32 @@ fn assert_unavailable(emp: &Emp, module: &str, routes: &Routes) {
 }
 
 #[test]
+fn empty_module_runtime_keeps_legacy_module_gates() {
+    let workspace = Workspace::new();
+    workspace.write_config(json!({"auto_enable_on_start": false}));
+    let emp = workspace.start();
+    for path in [
+        "/api/module-runtime/team/",
+        "/api/module-runtime/gateway/clients",
+    ] {
+        assert_eq!(emp.anonymous("GET", path).status, 404);
+    }
+    for (method, path) in [
+        ("GET", "/api/team/status"),
+        ("GET", "/api/gateway/clients"),
+        ("GET", "/api/decisions/connection"),
+        ("POST", "/v1/decisions"),
+    ] {
+        let response = emp.anonymous(method, path);
+        assert_eq!(response.status, 404, "{path}: {}", response.text());
+        assert_eq!(response.json()["error"]["code"], "module_disabled");
+    }
+    for method in ["PUT", "PATCH"] {
+        assert_eq!(emp.api(method, "/api/gateway/clients", None).status, 400);
+    }
+}
+
+#[test]
 #[ignore = "needs current and next-version module binaries; see tests/support/modules.rs"]
 fn m01_real_modules_install_update_preserve_on_failure_and_uninstall() {
     let mut modules = built_modules();

@@ -3,6 +3,7 @@ mod packages;
 mod ui;
 mod worker;
 
+use crate::modules::registry::ModuleRegistry;
 use emp_modules::{Command, Module};
 use emp_updater::{manager::UpdateManager, release::module_version as module_version_rank};
 use packages::{Artifact, Install, Installs, Packages, release_channel};
@@ -21,6 +22,7 @@ use worker::Worker;
 const MODULE_UPDATE_ROLLED_BACK: &str = "module_update_rolled_back";
 
 pub(crate) struct Modules {
+    pub(crate) registry: ModuleRegistry,
     packages: Packages,
     saved: Mutex<Installs>,
     registry_error: Option<&'static str>,
@@ -132,6 +134,7 @@ impl Modules {
     ) -> Result<Self, String> {
         let update = startup != Startup::Normal;
         let mut modules = Self {
+            registry: ModuleRegistry::default(),
             packages: Packages::new(root),
             saved: Mutex::new(Installs::new()),
             registry_error: None,

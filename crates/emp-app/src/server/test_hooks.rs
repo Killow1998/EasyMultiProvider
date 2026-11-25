@@ -1,5 +1,6 @@
 use super::{ConnectionAdmission, ServerMode, transport::ConnectionIo};
 use crate::services::observation::http::HttpObservation;
+use crate::{modules::registry::ActiveModule, services::gateway_clients::Caller};
 use axum::body::Bytes;
 use emp_storage::diagnostics::Journal;
 use std::{
@@ -32,6 +33,9 @@ mod implementation {
 
         #[inline]
         pub(in crate::server) fn request(&self, _: &str, _: &HttpObservation, _: &ConnectionIo) {}
+
+        #[inline]
+        pub(in crate::server) fn module_route(&self, _: &str, _: &ActiveModule, _: &Caller) {}
 
         #[inline]
         pub(in crate::server) async fn health_handler(&self, _: bool) {}
@@ -162,6 +166,7 @@ mod implementation {
 
     #[derive(Default)]
     pub(crate) struct ServerHooks {
+        pub(crate) module_routes: Mutex<Vec<(String, u64, String)>>,
         pub(in crate::server) report_gate: Mutex<Option<ReportGate>>,
         pub(crate) upgrade_handoff: Mutex<Option<UpgradeHandoffGate>>,
         pub(in crate::server) request: Mutex<Option<RequestProbe>>,
@@ -246,6 +251,19 @@ mod implementation {
                 }
                 let _ = probe.id.send(observation.request_id().unwrap().to_owned());
             }
+        }
+
+        pub(in crate::server) fn module_route(
+            &self,
+            id: &str,
+            module: &ActiveModule,
+            caller: &Caller,
+        ) {
+            self.module_routes.lock().unwrap().push((
+                id.to_owned(),
+                module.generation,
+                caller.id.clone(),
+            ));
         }
 
         pub(in crate::server) async fn health_handler(&self, is_health: bool) {

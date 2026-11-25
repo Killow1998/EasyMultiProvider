@@ -10,6 +10,7 @@ pub(crate) mod local_writes;
 pub(crate) mod login;
 pub(crate) mod management;
 pub(crate) mod migration;
+pub(super) mod module_runtime;
 pub(crate) mod modules;
 pub(crate) mod pages;
 pub(crate) mod proxy;
@@ -22,6 +23,7 @@ pub(super) mod websocket;
 
 use super::head::RawRequestHead;
 use crate::app::ServerState;
+use crate::http::request::module_runtime_target;
 use axum::{
     Extension, Router,
     extract::{FromRequestParts, Request, State},
@@ -68,7 +70,9 @@ pub(super) async fn guard_route_method(
         Err(error) => return error.into_response(),
     };
     if path.starts_with('/')
-        && (request.method() != Method::HEAD || matches!(path, "/" | "/index.html" | "/healthz"))
+        && (request.method() != Method::HEAD
+            || module_runtime_target(path).is_some()
+            || matches!(path, "/" | "/index.html" | "/healthz"))
     {
         return next.run(request).await;
     }

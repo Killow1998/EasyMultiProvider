@@ -224,6 +224,7 @@ fn http_router(state: Arc<ServerState>) -> Router {
             .merge(http::catalog::routes())
             .merge(http::updates::routes())
             .merge(http::lifecycle::routes())
+            .merge(http::module_runtime::routes())
             .merge(http::modules::routes())
             .merge(http::gateway::routes())
             .merge(http::inspection::routes())

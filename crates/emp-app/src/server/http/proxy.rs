@@ -161,19 +161,14 @@ pub(crate) fn proxy_identity(
     }
     let local_decision = matches!(request.raw_path(), "/v1/decisions" | "/v1/systemone")
         && state.backend.modules.active(emp_modules::Module::Decision)
-        && token.is_some_and(|value| {
-            constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes())
-        });
+        && local_key_matches(token, state);
     let local_image = request.method == RequestMethod::Post
         && matches!(
             request.raw_path(),
             "/v1/images/generations" | "/v1/images/edits"
         )
-        && peer.is_some_and(|peer| peer.is_loopback())
-        && request.header("Origin").is_none()
-        && token.is_some_and(|value| {
-            constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes())
-        });
+        && local_proxy_origin(request, peer)
+        && local_key_matches(token, state);
     (local_decision
         || local_image
         || state.sessions.contains(supplied_session.as_deref(), now)
@@ -181,10 +176,45 @@ pub(crate) fn proxy_identity(
             request.header("Authorization"),
             &state.backend.codex.auth_path,
         ))
-    .then(|| Caller {
+    .then(local_caller)
+}
+
+fn local_proxy_origin(request: Request<'_>, peer: Option<IpAddr>) -> bool {
+    peer.is_some_and(|peer| peer.is_loopback()) && request.header("Origin").is_none()
+}
+
+fn local_key_matches(token: Option<&str>, state: &ServerState) -> bool {
+    token.is_some_and(|value| {
+        constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes())
+    })
+}
+
+pub(super) fn local_caller() -> Caller {
+    Caller {
         id: "local".into(),
         name: String::new(),
-    })
+    }
+}
+
+pub(super) fn require_local_proxy(
+    request: Request<'_>,
+    state: &ServerState,
+    peer: IpAddr,
+) -> Result<Caller, EntryError> {
+    if !local_proxy_origin(request, Some(peer)) || !same_origin(request, state.port) {
+        return Err(EntryError::CrossOrigin("local proxy origin is required"));
+    }
+    let token = request
+        .header("Authorization")
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if request.header_count("Authorization") != 1 || !local_key_matches(token, state) {
+        return Err(EntryError::Json(
+            401,
+            "local proxy authentication is required",
+            None,
+        ));
+    }
+    Ok(local_caller())
 }
 
 pub(crate) fn request_source(
@@ -303,7 +333,10 @@ impl RequestAccess {
             ));
         }
         if (request.method == RequestMethod::Post && !path.starts_with("/api/updates/"))
-            || request.method == RequestMethod::Delete
+            || matches!(
+                request.method,
+                RequestMethod::Delete | RequestMethod::Put | RequestMethod::Patch
+            )
         {
             if let Some(work) = work {
                 return Ok(Self {

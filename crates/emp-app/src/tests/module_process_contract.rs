@@ -15,6 +15,8 @@ use std::{
 };
 use tokio::{net::TcpListener, sync::oneshot, time::timeout};
 
+mod registry;
+
 const CHILD_MODE: &str = "EMP_TEST_API3_HANDSHAKE";
 const SIDEBAND: &str = "EMP_TEST_API3_SIDEBAND";
 const MANIFEST: &str = r#"{"id":"fixture-module","module_version":"1.0.0","host_api":{"major":3,"min_minor":0},"contributions":[]}"#;
@@ -92,6 +94,14 @@ fn module_fixture() {
             std::process::exit(0);
         }
         descendant.wait().unwrap();
+        return;
+    }
+    if mode == "registry" {
+        let mut input = BufReader::new(io::stdin());
+        let initialize = read_request(&mut input, "module.initialize");
+        let manifest = std::env::var("EMP_TEST_API3_REGISTRY_MANIFEST").unwrap();
+        write_response(&mut output, &initialize, &manifest);
+        read_request(&mut input, "module.exit");
         return;
     }
     if matches!(mode.as_str(), "exit" | "exit-tree" | "duplicate-manifest") {
