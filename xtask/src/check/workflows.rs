@@ -6,17 +6,6 @@ const ALLOWED: &[(&str, &str)] = &[(
     "M04 验收真实 Aero 包；Python 仅用于安装 PyInstaller 和打包，场景由 Rust 执行",
 )];
 
-pub(super) fn strip_comment(line: &str) -> &str {
-    line.match_indices('#')
-        .find(|(index, _)| {
-            *index == 0
-                || line[..*index].ends_with(|character: char| {
-                    character.is_whitespace() || ";&|()<>".contains(character)
-                })
-        })
-        .map_or(line, |(index, _)| &line[..index])
-}
-
 fn check_python(path: &str, contents: &str, errors: &mut Vec<String>) {
     if ALLOWED.iter().any(|(file, _reason)| *file == path) {
         return;
@@ -41,8 +30,7 @@ fn check_python(path: &str, contents: &str, errors: &mut Vec<String>) {
 pub(super) fn check(path: &str, contents: &str, errors: &mut Vec<String>) {
     check_python(path, contents, errors);
     for (index, line) in contents.lines().enumerate() {
-        let code = strip_comment(line);
-        let mut words = code.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
+        let mut words = line.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
         if words.any(|word| word == "cargo") && words.any(|word| matches!(word, "test" | "nextest"))
         {
             errors.push(format!(
@@ -66,6 +54,7 @@ mod tests {
             "run: cargo nextest run",
             "if ! cargo --color always --locked test; then",
             "run: cargo --config 'net.retry = 3' test --locked",
+            "# cargo test -p x",
         ] {
             let mut errors = Vec::new();
             check("workflow.yml", &format!("steps:\n{command}"), &mut errors);
@@ -75,11 +64,11 @@ mod tests {
     }
 
     #[test]
-    fn other_cargo_commands_and_comments_are_allowed() {
+    fn other_cargo_commands_are_allowed() {
         let mut errors = Vec::new();
         check(
             "workflow.yml",
-            "run: cargo xtask ci tray-actions\nrun: cargo build --bins\nrun: cargo clippy # cargo test",
+            "run: cargo xtask ci tray-actions\nrun: cargo build --bins\nrun: cargo clippy",
             &mut errors,
         );
         assert!(errors.is_empty(), "{errors:?}");

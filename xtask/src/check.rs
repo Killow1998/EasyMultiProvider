@@ -27,6 +27,7 @@ use syn::{Expr, Macro, Token, parse::Parser as _, punctuated::Punctuated};
 const RULES: &[&str] = &[
     "arch",
     "cfg-test",
+    "ci-profile-line",
     "ci-profiles",
     "comments",
     "conditional-module-path",

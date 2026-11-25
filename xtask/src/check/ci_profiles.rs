@@ -1,5 +1,4 @@
 use super::arch::TestTargets;
-use super::workflows::strip_comment;
 use crate::ci::{Packages, Profile, Targets};
 use regex::Regex;
 use std::collections::BTreeSet;
@@ -24,12 +23,18 @@ pub(super) fn check_references(
             .expect("CI profile workflow pattern")
     });
     for (index, line) in contents.lines().enumerate() {
-        for capture in CI_PROFILE.captures_iter(strip_comment(line)) {
+        let line_number = index + 1;
+        let mut captures = CI_PROFILE.captures_iter(line).peekable();
+        if line.contains('#') && captures.peek().is_some() {
+            errors.push(format!(
+                "[ci-profile-line] {path}:{line_number}: 调用 profile 的这一行不能写注释，注释请另起一行"
+            ));
+        }
+        for capture in captures {
             let name = capture.get(1).map_or("", |name| name.as_str());
             if !valid_profile_name(name) {
                 errors.push(format!(
-                    "[ci-profiles] {path}:{}: profile 名不加引号，使用 [a-z0-9-]+",
-                    index + 1
+                    "[ci-profiles] {path}:{line_number}: profile 名不加引号，使用 [a-z0-9-]+"
                 ));
                 continue;
             }
@@ -37,8 +42,7 @@ pub(super) fn check_references(
                 referenced.insert(profile.name);
             } else {
                 errors.push(format!(
-                    "[ci-profiles] {path}:{}: 未知 CI profile {name}",
-                    index + 1
+                    "[ci-profiles] {path}:{line_number}: 未知 CI profile {name}"
                 ));
             }
         }
@@ -171,12 +175,12 @@ mod tests {
         let mut referenced = BTreeSet::new();
         check_references(
             "workflow.yml",
-            "run: cargo xtask ci \"native-tls\"\nrun: cargo xtask ci native-tls",
+            "run: cargo xtask ci \"native-tls\"\nrun: cargo xtask ci native-memory",
             crate::ci::PROFILES,
             &mut referenced,
             &mut errors,
         );
-        assert_eq!(referenced, ["native-tls"].into());
+        assert_eq!(referenced, ["native-memory"].into());
         assert_eq!(
             errors,
             ["[ci-profiles] workflow.yml:1: profile 名不加引号，使用 [a-z0-9-]+"]
@@ -184,14 +188,11 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_workflow_comment_boundaries() {
-        for (command, expected_profile) in [
-            ("run: cargo xtask ci native-tls#验收", None),
-            ("run: cargo xtask ci native-tls # 验收", Some("native-tls")),
-            (
-                "cargo xtask ci native-memory;# cargo xtask ci native-tls",
-                Some("native-memory"),
-            ),
+    fn rejects_hash_on_profile_lines_without_losing_references() {
+        for (command, expect_error) in [
+            ("cargo xtask ci native-tls # x", true),
+            ("sed 's|#.*||' a && cargo xtask ci native-tls", true),
+            ("cargo xtask ci native-tls", false),
         ] {
             let mut errors = Vec::new();
             let mut referenced = BTreeSet::new();
@@ -202,19 +203,17 @@ mod tests {
                 &mut referenced,
                 &mut errors,
             );
-            assert_eq!(
-                referenced,
-                expected_profile.into_iter().collect(),
-                "{command}"
-            );
-            if expected_profile.is_some() {
-                assert!(errors.is_empty(), "{command}: {errors:?}");
-            } else {
+            assert_eq!(referenced, ["native-tls"].into(), "{command}");
+            if expect_error {
                 assert_eq!(
                     errors,
-                    ["[ci-profiles] workflow.yml:1: profile 名不加引号，使用 [a-z0-9-]+"],
+                    [
+                        "[ci-profile-line] workflow.yml:1: 调用 profile 的这一行不能写注释，注释请另起一行"
+                    ],
                     "{command}"
                 );
+            } else {
+                assert!(errors.is_empty(), "{command}: {errors:?}");
             }
         }
     }
