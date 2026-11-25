@@ -200,7 +200,8 @@ impl BackendState {
             &config,
             gateway_clients
                 .as_ref()
-                .is_ok_and(|clients| clients.has_devices()),
+                .map(|clients| clients.has_devices())
+                .ok(),
         )
         .map_err(std::io::Error::other)?;
         let gateway_clients = match gateway_clients {

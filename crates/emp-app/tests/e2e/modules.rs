@@ -1,10 +1,24 @@
-use crate::support::modules::{BuiltModule, Fault, IDS, ModuleEmp, ModuleRelease};
+use crate::support::modules::{BuiltModule, Fault, IDS, ModuleRelease};
+#[cfg(target_os = "linux")]
+use crate::support::modules::{ModuleEmp, eventually};
 use crate::support::{
     Emp, NATIVE_TOKEN, Response, Upstream, UpstreamRequest, Workspace, http, write_file,
 };
+#[cfg(target_os = "linux")]
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
+
+const OLD_DEVICE_KEY: &str = "old-device-key";
+
+fn old_gateway_client() -> Value {
+    json!({"id":"old-device", "name":"Existing device", "created_at":1.0,
+        "digest":format!("{:x}", Sha256::digest(OLD_DEVICE_KEY.as_bytes()))})
+}
 
 fn built_modules() -> Vec<BuiltModule> {
     IDS.into_iter().map(BuiltModule::current).collect()
@@ -66,12 +80,20 @@ impl Routes {
                     config["providers"][0]["decision_api"] =
                         json!({"protocol":"openai","model":"first-decision"});
                 }
-                "gateway" => write_file(
-                    &clients,
-                    &json!([{"id":"old-device", "name":"Existing device", "created_at":1.0,
-                        "digest":format!("{:x}", Sha256::digest(b"old-device-key"))}])
-                    .to_string(),
-                ),
+                "gateway" => write_file(&clients, &json!([old_gateway_client()]).to_string()),
+                #[cfg(target_os = "linux")]
+                "gateway_encrypted" => {
+                    let state = workspace.root.join("state");
+                    emp_state::filesystem::create_private_directory(&state).unwrap();
+                    let vault =
+                        emp_state::VaultStore::from_sources(None, &state.join("master.key"))
+                            .unwrap();
+                    let mut client = old_gateway_client();
+                    client["api_key"] = json!(OLD_DEVICE_KEY);
+                    vault
+                        .write_encrypted_json(&clients, &json!([client]))
+                        .unwrap();
+                }
                 "aggregate" => {
                     config["model_groups"] = json!([{"id":"auto/probe",
                         "sources":["first/model","second/model"], "policy":"priority"}]);
@@ -381,7 +403,7 @@ fn m01_k2_normal_start_requires_install_and_restores_installed_modules_with_or_w
                 "old-device"
             );
             assert_ok(
-                &routed(&emp, "old-device-key", "first/model", "old-device"),
+                &routed(&emp, OLD_DEVICE_KEY, "first/model", "old-device"),
                 "first",
             );
             routes.assert_forwarded("first", "/v1/responses", "upstream-model");
@@ -401,23 +423,14 @@ fn m01_k2_normal_start_requires_install_and_restores_installed_modules_with_or_w
         .expect("module release server worker panicked");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "needs Core with embedded transition payloads; run cargo xtask module-e2e"]
-fn m01_k2_bundled_update_installs_only_configured_modules() {
+fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
     let modules = built_modules();
     let routes = Routes::new();
     let installation = Workspace::new();
-    let (target, relative_binary) = if cfg!(target_os = "macos") {
-        (installation.root.join("EMP.app"), "Contents/MacOS/EMP")
-    } else {
-        (installation.root.join("EMP"), "")
-    };
-    let executable = if relative_binary.is_empty() {
-        target.clone()
-    } else {
-        target.join(relative_binary)
-    };
-    fs::create_dir_all(executable.parent().expect("installation directory")).unwrap();
+    let executable = installation.root.join("EMP");
     fs::copy(env!("CARGO_BIN_EXE_EMP"), &executable).expect("copy packaged Core");
 
     let cases: &[(&[&str], &[&str])] = &[
@@ -429,35 +442,82 @@ fn m01_k2_bundled_update_installs_only_configured_modules() {
         (&["aggregate"], &["aggregate"]),
         (&["decision_api", "aggregate"], &["decision", "aggregate"]),
         (
-            &["decision_provider", "decision_api", "gateway", "aggregate"],
+            &[
+                "decision_provider",
+                "decision_api",
+                "gateway_encrypted",
+                "aggregate",
+            ],
             &["decision", "gateway", "aggregate"],
         ),
     ];
-    for (index, &(settings, expected)) in cases.iter().enumerate() {
+    let legacy_install = |enabled| {
+        json!({"enabled":enabled, "versions":{"0.14.2":"0".repeat(64)},
+            "previous":{"version":"0.14.1", "digest":"1".repeat(64)}})
+    };
+    let cases = cases
+        .iter()
+        .map(|&(settings, expected)| (settings, expected, json!({}), false))
+        .chain([
+            (
+                &["aggregate"][..],
+                &["decision", "gateway", "aggregate"][..],
+                json!({"decision":legacy_install(true), "gateway":legacy_install(true),
+                    "aggregate":legacy_install(true), "team":legacy_install(true)}),
+                false,
+            ),
+            (
+                &[][..],
+                &[][..],
+                json!({"decision":legacy_install(false)}),
+                false,
+            ),
+            (
+                &["gateway_encrypted"][..],
+                &["gateway"][..],
+                json!({}),
+                true,
+            ),
+        ]);
+    for (index, (settings, expected, mut expected_registry, damage_gateway)) in cases.enumerate() {
         let workspace = routes.k2_workspace(settings);
+        let directory = workspace.root.join("state/modules");
+        let registry_path = directory.join("modules.json");
+        if expected_registry != json!({}) {
+            write_file(&registry_path, &expected_registry.to_string());
+        }
+        let clients = workspace.root.join("state/gateway-clients.json");
+        let saved_clients = damage_gateway.then(|| {
+            let saved = fs::read(&clients).unwrap();
+            write_file(&clients, "{");
+            saved
+        });
         let job = installation.root.join(format!(".emp-update-m01-{index}"));
         let args = workspace.serve_arguments();
         let version = env!("CARGO_PKG_VERSION");
         let nonce = format!("m01-{index}");
         write_file(
             &job.join("plan.json"),
-            &json!({"target":target,"candidate":job.join("candidate"),"relative_binary":relative_binary,
+            &json!({"target":executable,"candidate":job.join("candidate"),"relative_binary":"",
                 "parents":[],"args":args,"version":version,"nonce":nonce})
             .to_string(),
         );
         let ready = job.join("ready.json");
         let mut command = workspace.command_for(&executable);
         command.args(&args).env("EMP_UPDATE_READY", &ready);
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(60)));
         let emp = ModuleEmp::spawn(&workspace, command);
-
-        let directory = workspace.root.join("state/modules");
-        let registry: Value =
-            serde_json::from_slice(&fs::read(directory.join("modules.json")).unwrap()).unwrap();
-        assert_eq!(
-            registry.as_object().expect("module registry").len(),
-            expected.len(),
-            "settings={settings:?}: {registry}"
+        let expected_receipt = json!({"version":version,"nonce":nonce});
+        eventually(
+            &deadline,
+            "candidate Core did not acknowledge the update",
+            || {
+                let receipt: Value = serde_json::from_slice(&fs::read(&ready).ok()?).ok()?;
+                (receipt == expected_receipt).then_some(())
+            },
         );
+
+        let registry: Value = serde_json::from_slice(&fs::read(registry_path).unwrap()).unwrap();
         let artifacts: Vec<_> = fs::read_dir(directory)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
@@ -470,19 +530,39 @@ fn m01_k2_bundled_update_installs_only_configured_modules() {
         );
         for module in &modules {
             if expected.contains(&module.id.as_str()) {
-                emp.active(module);
-                assert_eq!(registry[&module.id]["artifact"]["digest"], module.digest);
+                if damage_gateway && module.id == "gateway" {
+                    let row = emp.status("gateway");
+                    assert_eq!(row["enabled"], true, "{row}");
+                    assert_eq!(row["active"], false, "{row}");
+                    assert_eq!(row["installed_version"], module.version, "{row}");
+                    assert_eq!(row["error"], "invalid_gateway_clients", "{row}");
+                } else {
+                    emp.active(module);
+                }
+                let install = expected_registry
+                    .as_object_mut()
+                    .unwrap()
+                    .entry(module.id.clone())
+                    .or_insert_with(|| json!({"versions":{}}));
+                install["enabled"] = json!(true);
+                install["versions"][version] = json!(module.digest);
+                install["artifact"] = json!({"digest":module.digest,"version":module.version});
             } else {
-                assert!(registry.get(&module.id).is_none(), "{registry}");
                 let row = emp.status(&module.id);
                 assert_eq!(row["active"], false, "{row}");
                 assert_eq!(row["enabled"], false, "{row}");
-                assert!(row["installed_version"].is_null(), "{row}");
+                if expected_registry.get(&module.id).is_none() {
+                    assert!(row["installed_version"].is_null(), "{row}");
+                }
             }
         }
-        if expected.contains(&"gateway") {
+        assert_eq!(registry, expected_registry, "settings={settings:?}");
+        for id in ["team", "aero"] {
+            assert_eq!(emp.status(id)["active"], false);
+        }
+        if expected.is_empty() {
             assert_ok(
-                &routed(&emp, "old-device-key", "first/model", "old-device"),
+                &routed(&emp, NATIVE_TOKEN, "first/model", "core-only"),
                 "first",
             );
             routes.assert_forwarded("first", "/v1/responses", "upstream-model");
@@ -493,9 +573,31 @@ fn m01_k2_bundled_update_installs_only_configured_modules() {
         if settings.contains(&"decision_provider") && settings.contains(&"decision_api") {
             exercise(&emp, "decision", &routes);
         }
+        let emp = if let Some(saved) = saved_clients {
+            assert_eq!(fs::read(&clients).unwrap(), b"{");
+            emp.stop();
+            fs::write(clients, saved).unwrap();
+            let mut command = workspace.command_for(&executable);
+            command.args(workspace.serve_arguments());
+            let restarted = ModuleEmp::spawn(&workspace, command);
+            restarted.active(
+                modules
+                    .iter()
+                    .find(|module| module.id == "gateway")
+                    .unwrap(),
+            );
+            restarted
+        } else {
+            emp
+        };
+        if settings.contains(&"gateway") || settings.contains(&"gateway_encrypted") {
+            assert_ok(
+                &routed(&emp, OLD_DEVICE_KEY, "first/model", "old-device"),
+                "first",
+            );
+            routes.assert_forwarded("first", "/v1/responses", "upstream-model");
+        }
         emp.stop();
-        let receipt: Value = serde_json::from_slice(&fs::read(ready).unwrap()).unwrap();
-        assert_eq!(receipt, json!({"version":version,"nonce":nonce}));
     }
 }
 

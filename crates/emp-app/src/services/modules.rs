@@ -125,7 +125,7 @@ impl Modules {
         root: PathBuf,
         startup: Startup,
         config: &Value,
-        has_gateway_devices: bool,
+        has_gateway_devices: Option<bool>,
     ) -> Result<Self, String> {
         let update = startup != Startup::Normal;
         let mut modules = Self {
@@ -147,45 +147,39 @@ impl Modules {
         };
         let bundled_transition = startup == Startup::BundledUpdate;
         let mut changed = saved.is_none() || bundled_transition;
-        let mut saved = match saved {
-            saved if bundled_transition => {
-                let mut saved = saved.unwrap_or_default();
-                saved.extend(
-                    modules
-                        .packages
-                        .bundled_transition(config, has_gateway_devices)?,
-                );
-                saved
-            }
-            Some(saved) => saved,
-            None => Installs::new(),
-        };
+        let mut saved = saved.unwrap_or_default();
+        if bundled_transition {
+            modules
+                .packages
+                .bundled_transition(config, has_gateway_devices, &mut saved)?;
+        }
         for (&module, install) in saved.iter_mut().filter(|(_, install)| install.enabled) {
             let start = |digest| modules.start(module, digest);
-            let attempt = install
-                .selected_digest()
-                .ok_or("incompatible_module")
-                .and_then(start);
+            let selected = install.selected_digest();
+            let attempt = selected.ok_or("incompatible_module").and_then(start);
             let (worker, error) = match attempt {
                 Ok(active) => (active, None),
-                Err(error) if update => return Err(error.into()),
-                Err(error) => match install
-                    .previous
-                    .as_ref()
-                    .and_then(|artifact| start(&artifact.digest).ok())
-                {
-                    Some(active) => (active, Some("module_update_rolled_back")),
-                    None => {
-                        modules.runtime[&module]
-                            .lock()
-                            .expect("module runtime")
-                            .error = Some(error);
+                Err(error) => {
+                    if update && (!bundled_transition || selected.is_some()) {
+                        return Err(error.into());
+                    }
+                    if !update
+                        && let Some(active) = install
+                            .previous
+                            .as_ref()
+                            .and_then(|artifact| start(&artifact.digest).ok())
+                    {
+                        (active, Some("module_update_rolled_back"))
+                    } else {
+                        modules.mark_unavailable(module, error);
                         continue;
                     }
-                },
+                }
             };
             let artifact = &worker.artifact;
-            if install.artifact.as_ref().map(|old| &old.digest) != Some(&artifact.digest) {
+            if !bundled_transition
+                && install.artifact.as_ref().map(|old| &old.digest) != Some(&artifact.digest)
+            {
                 install.artifact = Some(artifact.clone());
                 install.previous = None;
                 changed = true;

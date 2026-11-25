@@ -113,8 +113,9 @@ impl Packages {
     pub(super) fn bundled_transition(
         &self,
         config: &serde_json::Value,
-        has_gateway_devices: bool,
-    ) -> Result<Installs, String> {
+        has_gateway_devices: Option<bool>,
+        saved: &mut Installs,
+    ) -> Result<(), String> {
         let payload: &[(Module, &[u8], &str)] =
             include!(concat!(env!("OUT_DIR"), "/module-transition.rs"));
         if payload.len() != 3
@@ -126,9 +127,8 @@ impl Packages {
         }
         emp_state::filesystem::create_private_directory(&self.root)
             .map_err(|_| "module_directory_unavailable")?;
-        payload
-            .iter()
-            .filter(|(module, _, _)| match module {
+        for &(module, bytes, digest) in payload {
+            let configured = match module {
                 Module::Decision => {
                     config["decision_provider"]
                         .as_str()
@@ -139,36 +139,37 @@ impl Packages {
                             .flatten()
                             .any(|provider| provider.get("decision_api").is_some())
                 }
-                Module::Gateway => has_gateway_devices,
+                Module::Gateway => has_gateway_devices.unwrap_or(true),
                 Module::Aggregate => config["model_groups"]
                     .as_array()
                     .is_some_and(|groups| !groups.is_empty()),
                 Module::Team | Module::Aero => false,
-            })
-            .map(|&(module, bytes, digest)| {
-                let path = self.root.join(Self::filename(module, digest));
-                if self.verified_path(module, digest).is_err() {
-                    emp_state::filesystem::atomic_write_private_state(&path, bytes)
+            };
+            if !configured && !saved.get(&module).is_some_and(|install| install.enabled) {
+                continue;
+            }
+            let path = self.root.join(Self::filename(module, digest));
+            if self.verified_path(module, digest).is_err() {
+                emp_state::filesystem::atomic_write_private_state(&path, bytes)
+                    .map_err(|_| "module_directory_unavailable")?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
                         .map_err(|_| "module_directory_unavailable")?;
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-                            .map_err(|_| "module_directory_unavailable")?;
-                    }
                 }
-                Ok((
-                    module,
-                    Install {
-                        artifact: Some(Artifact {
-                            digest: digest.into(),
-                            version: module.version().into(),
-                        }),
-                        ..Install::enabled()
-                    },
-                ))
-            })
-            .collect()
+            }
+            let install = saved.entry(module).or_default();
+            install.enabled = true;
+            install
+                .versions
+                .insert(crate::VERSION.into(), digest.into());
+            install.artifact = Some(Artifact {
+                digest: digest.into(),
+                version: module.version().into(),
+            });
+        }
+        Ok(())
     }
 
     pub(super) fn remove_unused(
