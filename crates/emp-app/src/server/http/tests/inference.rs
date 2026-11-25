@@ -3,7 +3,7 @@ use crate::{
     server::raw_tcp::{RawClient, wire_timeout},
     tests::{OneShotUpstream, flushed_journal, live_journal, wait_for},
 };
-use emp_test_support::{Deadline, sse, test_timeout};
+use emp_test_support::{Deadline, http::ChunkDecoder, sse, test_timeout};
 use std::{collections::BTreeMap, io::Read, sync::mpsc};
 
 const RESPONSE: &[u8] = br#"{ "id":"resp_fixture","object":"response","status":"completed","model":"upstream","output":[], "z":1.2300e+2, "a":null }"#;
@@ -652,8 +652,9 @@ fn inference_projects_upstream_4xx_5xx_and_connection_failure() {
     });
 }
 
-pub(super) struct SseClient {
-    io: tokio::io::BufReader<TcpStream>,
+pub(super) struct SseClient<R = TcpStream> {
+    io: tokio::io::BufReader<R>,
+    chunked: ChunkDecoder,
     pending: Vec<u8>,
 }
 
@@ -670,10 +671,13 @@ impl SseClient {
         head.assert_security();
         Self {
             io: tokio::io::BufReader::new(io),
+            chunked: ChunkDecoder::default(),
             pending: Vec::new(),
         }
     }
+}
 
+impl<R: tokio::io::AsyncRead + Unpin> SseClient<R> {
     pub(super) async fn next(&mut self) -> Option<Value> {
         let frame = self.next_frame().await?;
         let event_type = frame.event().expect("SSE event name");
@@ -685,8 +689,8 @@ impl SseClient {
 
     pub(super) async fn next_frame(&mut self) -> Option<sse::Frame> {
         use tokio::io::AsyncBufReadExt as _;
-        let mut ended = false;
         loop {
+            let ended = self.chunked.is_finished();
             let mut available = self.pending.as_slice();
             if !ended {
                 available = available.strip_suffix(b"\r").unwrap_or(available);
@@ -705,24 +709,15 @@ impl SseClient {
                 Err(error) => panic!("read SSE frame: {error}"),
             }
 
-            let mut line = String::new();
-            assert_ne!(
-                self.io.read_line(&mut line).await.unwrap(),
-                0,
-                "missing terminal HTTP chunk"
-            );
-            let len = usize::from_str_radix(line.strip_suffix("\r\n").unwrap(), 16).unwrap();
-            let start = self.pending.len();
-            self.pending.resize(start + len, 0);
-            self.io
-                .read_exact(&mut self.pending[start..])
-                .await
-                .unwrap();
-            assert_eq!(
-                self.io.read_u16().await.unwrap(),
-                u16::from_be_bytes(*b"\r\n")
-            );
-            ended = len == 0;
+            let mut input = self.io.fill_buf().await.expect("read chunked HTTP body");
+            if input.is_empty() {
+                self.chunked.finish().expect("finish chunked HTTP body");
+            }
+            let length = input.len();
+            let body = self.chunked.decode(&mut input).expect("decode HTTP chunk");
+            self.pending.extend_from_slice(body);
+            let consumed = length - input.len();
+            self.io.consume(consumed);
         }
     }
 
@@ -745,6 +740,32 @@ impl SseClient {
         .expect("first SSE output arrived while the upstream tail was gated");
         deadline.accept(events, "first visible SSE output").unwrap()
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn sse_client_delivers_delta_before_chunk_ending_arrives() {
+    let payload = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\"}\n\n";
+    let (mut sender, receiver) = tokio::io::duplex(1024);
+    let mut client = SseClient {
+        io: tokio::io::BufReader::new(receiver),
+        chunked: ChunkDecoder::default(),
+        pending: Vec::new(),
+    };
+    let deadline = Deadline::after(wire_timeout());
+    let first_chunk = format!("{:x}\r\n{payload}", payload.len());
+    sender.write_all(first_chunk.as_bytes()).await.unwrap();
+
+    let events = client.first_output(&deadline).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["delta"], "answer");
+
+    sender.write_all(b"\r\n0\r\n\r\n").await.unwrap();
+    assert!(
+        timeout(deadline.remaining(), client.next_frame())
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 fn assert_upstream_cancelled(socket: &std::net::TcpStream, deadline: &Deadline) {

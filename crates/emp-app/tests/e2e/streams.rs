@@ -196,22 +196,28 @@ fn truncated_sse_never_fabricates_a_successful_completion() {
         );
         gate.finish();
         let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-        let ending = loop {
+        loop {
             match client.next_event(&deadline) {
                 Ok(Some(event)) => {
                     assert_ne!(event["type"], "response.completed", "{model}: {event}");
                 }
-                ending => break ending,
+                Ok(None) => {
+                    client
+                        .expect_eof(&deadline)
+                        .unwrap_or_else(|error| panic!("{model}: truncated stream EOF: {error}"));
+                    break;
+                }
+                Err(error) => {
+                    assert!(
+                        matches!(
+                            error.kind(),
+                            io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset
+                        ),
+                        "{model}: truncated stream must fail or close promptly: {error}"
+                    );
+                    break;
+                }
             }
-        };
-        if let Err(error) = ending {
-            assert!(
-                matches!(
-                    error.kind(),
-                    io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset
-                ),
-                "{model}: truncated stream must fail or close promptly: {error}"
-            );
         }
         upstream.assert_idle();
     }
