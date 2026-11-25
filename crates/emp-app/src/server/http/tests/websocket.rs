@@ -411,7 +411,7 @@ fn responses_upgrade_cannot_start_after_restore_reopens_admission() {
         let admission = &state.lifecycle.admission;
         let (reached, handoff) = tokio::sync::oneshot::channel();
         let (resume, paused) = tokio::sync::oneshot::channel();
-        *state.test_upgrade_handoff.lock().unwrap() = Some((reached, paused));
+        *state.lifecycle.test_hooks.upgrade_handoff.lock().unwrap() = Some((reached, paused));
         let session = fixture.session();
         let wire = upgrade(
             fixture.port(),

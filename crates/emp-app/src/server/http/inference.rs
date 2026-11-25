@@ -235,8 +235,7 @@ async fn submit(
                 delivery,
                 sender,
                 business,
-                #[cfg(test)]
-                state.lifecycle.test_hooks.clone(),
+                state.lifecycle.test_hooks.shared(),
             );
             let reply = route.execute(&mut sink, request, body, &state, observation.as_mut());
             let flushed = sink.finish(|| match reply {
@@ -256,7 +255,6 @@ async fn submit(
         }
     });
     *inference.stream.worker.lock().expect("stream worker") = Some(worker);
-    #[cfg(test)]
     state.lifecycle.test_hooks.before_response_receive().await;
     response.await.map_err(|_| EntryError::internal().reply())
 }

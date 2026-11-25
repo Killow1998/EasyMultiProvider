@@ -79,12 +79,6 @@ impl Report {
     }
 }
 
-#[cfg(test)]
-pub(crate) struct ReportGate {
-    pub(crate) first_frame: oneshot::Sender<Arc<AtomicBool>>,
-    pub(crate) release: oneshot::Receiver<()>,
-}
-
 enum ReportQuery {
     Calls(Box<CallFilter>),
     Lifetime(String, f64),
@@ -137,11 +131,9 @@ async fn read_report(
     let stream = request.extensions().get::<Arc<StreamConnection>>();
     let delivery = stream.map(|stream| stream.delivery.clone());
     let (sender, response) = oneshot::channel();
-    #[cfg(test)]
-    let hooks = state.lifecycle.test_hooks.clone();
+    let hooks = state.lifecycle.test_hooks.shared();
     let worker = spawn_response_work({
-        #[cfg(test)]
-        let hooks = hooks.clone();
+        let hooks = hooks.shared();
         move |business| {
             let Some(delivery) = delivery else {
                 let response = report
@@ -152,24 +144,14 @@ async fn read_report(
                     )
                     .into_response();
                 handoff_response(Some(business), || {
-                    let publish = || {
+                    hooks.publish_output(None, || {
                         let _ = sender.send(response);
-                    };
-                    #[cfg(test)]
-                    let publish = || hooks.publish_output(None, publish);
-                    publish();
+                    });
                 });
                 return;
             };
             let socket = socket.expect("report stream socket").0;
-            let mut output = BodyOutput::new(
-                socket,
-                delivery,
-                sender,
-                business,
-                #[cfg(test)]
-                hooks,
-            );
+            let mut output = BodyOutput::new(socket, delivery, sender, business, hooks.shared());
             let query = match report.prepare_stream(raw.request(), &state, system_now()) {
                 Ok(query) => query,
                 Err(reply) => {
@@ -188,24 +170,13 @@ async fn read_report(
                 let output = Arc::new(Mutex::new(output));
                 let progress_output = output.clone();
                 let cancelled = monitor.cancellation();
-                #[cfg(test)]
-                let (gate, cancellation) =
-                    (state.backend.usage.report_gate.clone(), cancelled.clone());
+                let after_progress = hooks.after_report_progress(&cancelled);
                 let terminal = query.stream(&state, cancelled, move |completed, total| {
                     let mut output = progress_output.lock().expect("report output");
                     let frame =
                         sse_frame("progress", &json!({"completed":completed,"total":total}))?;
                     output.write_frame(Bytes::from(frame))?;
-                    #[cfg(test)]
-                    if completed == 0 {
-                        let gate = gate.lock().unwrap().take();
-                        if let Some(gate) = gate {
-                            output.flush_frame()?;
-                            let _ = gate.first_frame.send(cancellation.clone());
-                            let _ = gate.release.blocking_recv();
-                        }
-                    }
-                    Ok(())
+                    after_progress(completed, &mut output)
                 });
                 let mut output = output.lock().expect("report output");
                 if let Ok(terminal) = terminal {
@@ -220,7 +191,6 @@ async fn read_report(
     if let Some(stream) = stream {
         *stream.worker.lock().expect("stream worker") = Some(worker);
     }
-    #[cfg(test)]
     hooks.before_response_receive().await;
     response.await.map_err(|_| EntryError::internal())
 }

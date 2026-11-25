@@ -30,7 +30,7 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
         root.path(),
         test_timeout(Duration::from_secs(1)),
         None,
-        None,
+        |_| {},
     )
     .expect("valid candidate version probe should succeed");
 
@@ -42,7 +42,7 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
             root.path(),
             test_timeout(Duration::from_secs(1)),
             None,
-            None,
+            |_| {},
         )
         .unwrap_err(),
         crate::UpdateError("version_mismatch")
@@ -54,7 +54,7 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
             root.path(),
             test_timeout(Duration::from_secs(1)),
             None,
-            None,
+            |_| {},
         )
         .unwrap_err(),
         crate::UpdateError("version_mismatch")
@@ -72,7 +72,7 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
             root.path(),
             test_timeout(Duration::from_secs(1)),
             None,
-            None,
+            |_| {},
         )
         .unwrap_err(),
         crate::UpdateError("update_failed")
@@ -86,7 +86,7 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
             root.path(),
             test_timeout(Duration::from_secs(1)),
             None,
-            None,
+            |_| {},
         )
         .unwrap_err(),
         crate::UpdateError("directory_not_writable")
@@ -115,7 +115,7 @@ fn candidate_version_probe_times_out_and_reaps_the_child() {
         root.path(),
         test_timeout(Duration::from_millis(100)),
         Some(&manager),
-        Some(&mut spawned_pid),
+        |child| spawned_pid = Some(child.id()),
     )
     .unwrap_err();
     assert!(started.elapsed() < test_timeout(Duration::from_secs(2)));
@@ -150,7 +150,7 @@ fn candidate_version_probe_restores_error_mode_after_bad_image() {
             root.path(),
             test_timeout(Duration::from_secs(1)),
             None,
-            None,
+            |_| {},
         )
         .unwrap_err(),
         crate::UpdateError("update_failed")
@@ -366,7 +366,7 @@ fn failed_candidate_launch_preserves_the_original_system_error_code() {
         root.path(),
         test_timeout(Duration::from_secs(1)),
         Some(&manager),
-        None,
+        |_| {},
     )
     .unwrap_err();
     manager.failed(error);

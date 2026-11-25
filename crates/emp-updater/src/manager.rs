@@ -325,7 +325,7 @@ fn probe_candidate_version(
     job: &Path,
     timeout: Duration,
     manager: Option<&UpdateManager>,
-    #[cfg(test)] spawned_pid: Option<&mut Option<u32>>,
+    on_spawn: impl FnOnce(&std::process::Child),
 ) -> Result<()> {
     let report = |error| match manager {
         Some(manager) => manager.io_error("verify_version", error),
@@ -358,10 +358,7 @@ fn probe_candidate_version(
     })?;
     #[cfg(not(windows))]
     let child = command.spawn().map_err(report)?;
-    #[cfg(test)]
-    if let Some(pid) = spawned_pid {
-        *pid = Some(child.id());
-    }
+    on_spawn(&child);
     let status = wait_for_candidate_version(child, timeout, manager, report)?;
     if !status.success() {
         if let Some(manager) = manager

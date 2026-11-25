@@ -75,14 +75,39 @@ struct ReportReceipt {
     budget: BudgetStatuses,
 }
 
+#[cfg(all(test, unix))]
+#[derive(Default)]
+struct TeamFixtureFlag(std::sync::atomic::AtomicBool);
+
+#[cfg(all(test, unix))]
+impl TeamFixtureFlag {
+    fn enable(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn enabled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(not(all(test, unix)))]
+#[derive(Default)]
+struct TeamFixtureFlag {}
+
+#[cfg(not(all(test, unix)))]
+impl TeamFixtureFlag {
+    fn enabled(&self) -> bool {
+        false
+    }
+}
+
 pub(crate) struct TeamState {
     path: PathBuf,
     store: Mutex<Option<Store>>,
     configured_shares: std::collections::BTreeSet<String>,
     operations: Mutex<()>,
     background: Mutex<()>,
-    #[cfg(all(test, unix))]
-    background_paused: std::sync::atomic::AtomicBool,
+    background_paused: TeamFixtureFlag,
     events: tokio::sync::Notify,
     discovery: discovery::Discovery,
     budget_notices: budget_notices::Notices,
@@ -174,7 +199,6 @@ impl TeamState {
             configured_shares,
             operations: Mutex::new(()),
             background: Mutex::new(()),
-            #[cfg(all(test, unix))]
             background_paused: Default::default(),
             events: Default::default(),
             discovery: Default::default(),
@@ -184,8 +208,7 @@ impl TeamState {
 
     #[cfg(all(test, unix))]
     pub(crate) fn pause_background_for_test(&self) {
-        self.background_paused
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.background_paused.enable();
     }
 
     fn snapshot(&self) -> Result<Store> {
@@ -341,11 +364,7 @@ impl TeamState {
             if stopped {
                 break;
             }
-            #[cfg(all(test, unix))]
-            if team
-                .background_paused
-                .load(std::sync::atomic::Ordering::Relaxed)
-            {
+            if team.background_paused.enabled() {
                 continue;
             }
             let Ok(_background) = team.background.lock() else {

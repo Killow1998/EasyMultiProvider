@@ -45,13 +45,46 @@ type IdentifyGate = (
     std::sync::mpsc::Receiver<()>,
 );
 
+#[cfg(all(test, unix))]
+#[derive(Default)]
+struct GatewayClientHooks {
+    save_gate: Mutex<Option<SaveGate>>,
+    identify_gate: Mutex<Option<IdentifyGate>>,
+}
+
+#[cfg(all(test, unix))]
+impl GatewayClientHooks {
+    fn before_identify(&self) {
+        let gate = self.identify_gate.lock().unwrap().take();
+        if let Some((reached, released)) = gate {
+            let _ = reached.send(());
+            let _ = released.recv();
+        }
+    }
+
+    fn before_save(&self) {
+        if let Some((reached, released)) = self.save_gate.lock().unwrap().take() {
+            let _ = reached.send(());
+            let _ = released.blocking_recv();
+        }
+    }
+}
+
+#[cfg(not(all(test, unix)))]
+#[derive(Default)]
+struct GatewayClientHooks {}
+
+#[cfg(not(all(test, unix)))]
+impl GatewayClientHooks {
+    fn before_identify(&self) {}
+
+    fn before_save(&self) {}
+}
+
 pub(crate) struct GatewayClients {
     path: PathBuf,
     clients: Mutex<Vec<Client>>,
-    #[cfg(all(test, unix))]
-    save_gate: Mutex<Option<SaveGate>>,
-    #[cfg(all(test, unix))]
-    identify_gate: Mutex<Option<IdentifyGate>>,
+    hooks: GatewayClientHooks,
 }
 
 impl GatewayClients {
@@ -59,10 +92,7 @@ impl GatewayClients {
         Self {
             path,
             clients: Mutex::new(Vec::new()),
-            #[cfg(all(test, unix))]
-            save_gate: Mutex::default(),
-            #[cfg(all(test, unix))]
-            identify_gate: Mutex::default(),
+            hooks: GatewayClientHooks::default(),
         }
     }
 
@@ -87,22 +117,12 @@ impl GatewayClients {
         Ok(Self {
             path,
             clients: Mutex::new(clients),
-            #[cfg(all(test, unix))]
-            save_gate: Mutex::default(),
-            #[cfg(all(test, unix))]
-            identify_gate: Mutex::default(),
+            hooks: GatewayClientHooks::default(),
         })
     }
 
     pub(crate) fn identify(&self, key: &str, modules: &Modules) -> Option<Caller> {
-        #[cfg(all(test, unix))]
-        {
-            let gate = self.identify_gate.lock().unwrap().take();
-            if let Some((reached, released)) = gate {
-                let _ = reached.send(());
-                let _ = released.recv();
-            }
-        }
+        self.hooks.before_identify();
         let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
         let clients = self.clients.lock().ok()?;
         let candidates = clients
@@ -233,7 +253,7 @@ impl GatewayClients {
     ) {
         let (reached, ready) = tokio::sync::oneshot::channel();
         let (release, released) = std::sync::mpsc::channel();
-        *self.identify_gate.lock().unwrap() = Some((reached, released));
+        *self.hooks.identify_gate.lock().unwrap() = Some((reached, released));
         (ready, release)
     }
 
@@ -246,7 +266,7 @@ impl GatewayClients {
     ) {
         let (reached, ready) = tokio::sync::oneshot::channel();
         let (release, released) = tokio::sync::oneshot::channel();
-        *self.save_gate.lock().unwrap() = Some((reached, released));
+        *self.hooks.save_gate.lock().unwrap() = Some((reached, released));
         (ready, release)
     }
 
@@ -256,11 +276,7 @@ impl GatewayClients {
         clients: &mut Vec<Client>,
         updated: Vec<Client>,
     ) -> io::Result<()> {
-        #[cfg(all(test, unix))]
-        if let Some((reached, released)) = self.save_gate.lock().unwrap().take() {
-            let _ = reached.send(());
-            let _ = released.blocking_recv();
-        }
+        self.hooks.before_save();
         vault
             .write_encrypted_json(&self.path, &serde_json::to_value(&updated)?)
             .map_err(io::Error::other)?;

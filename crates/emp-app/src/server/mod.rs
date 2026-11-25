@@ -7,9 +7,9 @@ pub(crate) mod http;
 pub(crate) mod lan;
 pub(crate) mod recovery;
 pub(crate) mod team_discovery;
-#[cfg(test)]
 mod test_hooks;
 #[cfg(test)]
+pub(crate) use test_hooks::RECOVERY_ACCEPT_FAILURE;
 pub(crate) use test_hooks::ServerHooks;
 pub(crate) mod transport;
 
@@ -74,15 +74,30 @@ impl ShutdownSignal {
     }
 }
 
+#[cfg(not(test))]
+#[derive(Default)]
+struct DrainClock {}
+
+#[cfg(not(test))]
+impl DrainClock {
+    fn now(&self) -> DrainInstant {
+        DrainInstant::now()
+    }
+
+    async fn wait_until(&self, deadline: DrainInstant) {
+        sleep_until(deadline.into()).await;
+    }
+}
+
+#[cfg(test)]
 #[derive(Default)]
 struct DrainClock {
-    #[cfg(test)]
     controlled: std::sync::OnceLock<Arc<tests::TestDrainClock>>,
 }
 
+#[cfg(test)]
 impl DrainClock {
     fn now(&self) -> DrainInstant {
-        #[cfg(test)]
         if let Some(clock) = self.controlled.get() {
             return clock.now();
         }
@@ -90,7 +105,6 @@ impl DrainClock {
     }
 
     async fn wait_until(&self, deadline: DrainInstant) {
-        #[cfg(test)]
         if let Some(clock) = self.controlled.get() {
             clock.cutoff.notified().await;
             return;
@@ -111,8 +125,7 @@ pub(crate) struct ServerControl {
     pub(crate) shutdown: Arc<AtomicBool>,
     stopped: watch::Sender<Option<(ShutdownReason, DrainInstant)>>,
     drain_clock: DrainClock,
-    #[cfg(test)]
-    test_hooks: Arc<test_hooks::ServerHooks>,
+    pub(crate) test_hooks: test_hooks::ServerHooksHandle,
     updates: Option<UpdateState>,
     management_events: Option<Arc<ManagementEvents>>,
 }
@@ -125,8 +138,7 @@ impl ServerControl {
             shutdown: Arc::default(),
             stopped: watch::Sender::new(None),
             drain_clock: DrainClock::default(),
-            #[cfg(test)]
-            test_hooks: Arc::default(),
+            test_hooks: Default::default(),
             updates: None,
             management_events: None,
         }
@@ -228,12 +240,6 @@ fn http_router(state: Arc<ServerState>) -> Router {
     .with_state(state)
 }
 
-#[cfg(test)]
-thread_local! {
-    pub(crate) static RECOVERY_ACCEPT_FAILURE: std::cell::Cell<Option<io::ErrorKind>> =
-        const { std::cell::Cell::new(None) };
-}
-
 async fn serve(
     listener: TcpListener,
     router: Router,
@@ -247,12 +253,7 @@ async fn serve(
     let shutdown = control.signal();
     let mut accept_log = AcceptLog::default();
     let accept = || async {
-        #[cfg(test)]
-        if matches!(control.mode, ServerMode::Recovery)
-            && let Some(error) = RECOVERY_ACCEPT_FAILURE.get()
-        {
-            return Err(error.into());
-        }
+        control.test_hooks.before_accept(control.mode)?;
         listener.accept().await
     };
     let deadline = 'accepting: loop {

@@ -17,19 +17,36 @@ pub(crate) fn load_server_configuration(
     path: &Path,
     registry: RegistrySource,
 ) -> Result<Value, ConfigError> {
-    let config = load_configuration_with_registry(Some(path), registry)?;
-    #[cfg(test)]
-    let config = {
-        let mut config = config;
-        let defaults = emp_state::config::normalize_configuration_with_registry(None, registry)?;
-        if config["native_catalog_path"] == defaults["native_catalog_path"]
-            || config["native_catalog_path"] == ""
-        {
-            config["native_catalog_path"] = serde_json::json!(fixture_native_catalog_path(path));
-        }
-        config
-    };
+    fixture_configuration(
+        load_configuration_with_registry(Some(path), registry),
+        path,
+        registry,
+    )
+}
+
+#[cfg(test)]
+fn fixture_configuration(
+    config: Result<Value, ConfigError>,
+    path: &Path,
+    registry: RegistrySource,
+) -> Result<Value, ConfigError> {
+    let mut config = config?;
+    let defaults = emp_state::config::normalize_configuration_with_registry(None, registry)?;
+    if config["native_catalog_path"] == defaults["native_catalog_path"]
+        || config["native_catalog_path"] == ""
+    {
+        config["native_catalog_path"] = serde_json::json!(fixture_native_catalog_path(path));
+    }
     Ok(config)
+}
+
+#[cfg(not(test))]
+fn fixture_configuration(
+    config: Result<Value, ConfigError>,
+    _: &Path,
+    _: RegistrySource,
+) -> Result<Value, ConfigError> {
+    config
 }
 
 #[cfg(test)]

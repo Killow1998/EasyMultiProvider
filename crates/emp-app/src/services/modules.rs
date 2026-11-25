@@ -103,6 +103,23 @@ pub(crate) enum Action {
     Uninstall,
 }
 
+type TestModuleHandler = fn(Command) -> Result<Value, &'static str>;
+
+#[cfg(test)]
+fn test_module_handler(module: Module) -> Option<TestModuleHandler> {
+    match module {
+        Module::Decision => Some(emp_mod_decision::handle),
+        Module::Gateway => Some(emp_mod_gateway::handle),
+        Module::Aggregate => Some(emp_mod_aggregate::handle),
+        Module::Team | Module::Aero => None,
+    }
+}
+
+#[cfg(not(test))]
+fn test_module_handler(_: Module) -> Option<TestModuleHandler> {
+    None
+}
+
 impl Modules {
     pub(crate) fn open(root: PathBuf, startup: Startup) -> Result<Self, String> {
         let update = startup != Startup::Normal;
@@ -210,9 +227,7 @@ impl Modules {
     }
 
     pub(crate) fn active(&self, module: Module) -> bool {
-        #[cfg(test)]
-        if Module::STANDARD.contains(&module)
-            && module != Module::Team
+        if test_module_handler(module).is_some()
             && self.runtime[&module]
                 .lock()
                 .expect("module runtime")
@@ -234,14 +249,7 @@ impl Modules {
     }
 
     pub(crate) fn call(&self, module: Module, command: Command) -> Result<Value, String> {
-        #[cfg(test)]
-        if Module::STANDARD.contains(&module) && module != Module::Team {
-            let run = match module {
-                Module::Decision => emp_mod_decision::handle,
-                Module::Gateway => emp_mod_gateway::handle,
-                Module::Aggregate => emp_mod_aggregate::handle,
-                Module::Team | Module::Aero => unreachable!(),
-            };
+        if let Some(run) = test_module_handler(module) {
             return run(command).map_err(str::to_owned);
         }
         let worker = self.worker(module).ok_or("module_disabled")?;

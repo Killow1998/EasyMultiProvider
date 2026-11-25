@@ -1,5 +1,5 @@
 use super::*;
-use crate::server::http::usage::ReportGate;
+use crate::server::test_hooks::ReportGate;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::oneshot;
 
@@ -11,8 +11,8 @@ pub(super) fn report_gate(
     *fixture
         .server
         .state
-        .backend
-        .usage
+        .lifecycle
+        .test_hooks
         .report_gate
         .lock()
         .unwrap() = Some(ReportGate {

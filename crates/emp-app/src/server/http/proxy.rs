@@ -91,11 +91,10 @@ impl ConnectionIntake {
             .filter(|request| request.method == RequestMethod::Post)
             .and_then(|request| aero_delegation_key(request, state, peer))
             .and_then(|key| {
-                state.backend.aero_callers.identify_callback(
-                    key,
-                    #[cfg(test)]
-                    &state.lifecycle.test_hooks,
-                )
+                state
+                    .backend
+                    .aero_callers
+                    .identify_callback(key, &state.lifecycle.test_hooks)
             });
         if let Some((identity, Some(lease))) = callback {
             drop(self);
@@ -355,10 +354,30 @@ fn peer(parts: &Parts) -> Option<IpAddr> {
         .map(|ConnectInfo(peer)| peer.ip())
 }
 
+#[cfg(not(test))]
 pub(crate) struct ProxyCaller {
-    #[cfg(test)]
+    pub(crate) incoming: BTreeMap<String, String>,
+}
+
+#[cfg(test)]
+pub(crate) struct ProxyCaller {
     pub(crate) caller: Caller,
     pub(crate) incoming: BTreeMap<String, String>,
+}
+
+impl ProxyCaller {
+    #[cfg(not(test))]
+    fn new(incoming: BTreeMap<String, String>, _: RequestSource) -> Self {
+        Self { incoming }
+    }
+
+    #[cfg(test)]
+    fn new(incoming: BTreeMap<String, String>, source: RequestSource) -> Self {
+        Self {
+            caller: source.caller.expect("authorized proxy caller"),
+            incoming,
+        }
+    }
 }
 
 impl FromRequestParts<Arc<ServerState>> for ProxyCaller {
@@ -382,11 +401,7 @@ impl FromRequestParts<Arc<ServerState>> for ProxyCaller {
             request.source = Some(&source);
             require_proxy(request, &state, now)?;
             let incoming = request.incoming();
-            Ok(Self {
-                #[cfg(test)]
-                caller: source.caller.expect("authorized proxy caller"),
-                incoming,
-            })
+            Ok(Self::new(incoming, source))
         })
         .await
         .map_err(|_| EntryError::internal())?

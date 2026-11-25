@@ -211,8 +211,24 @@ struct AdaptiveSlotPool {
     drained: Condvar,
     closing: Notify,
     work_finished: Arc<Notify>,
-    #[cfg(test)]
-    test_clock: std::sync::OnceLock<TestClock>,
+    test_clock: AdmissionClock,
+}
+
+#[cfg(not(test))]
+#[derive(Default)]
+struct AdmissionClock {}
+
+#[cfg(test)]
+type AdmissionClock = std::sync::OnceLock<TestClock>;
+
+#[cfg(test)]
+fn admission_time(clock: &AdmissionClock) -> Instant {
+    clock.get().map_or_else(Instant::now, |now| now())
+}
+
+#[cfg(not(test))]
+fn admission_time(_: &AdmissionClock) -> Instant {
+    Instant::now()
 }
 
 impl AdaptiveSlotPool {
@@ -228,8 +244,7 @@ impl AdaptiveSlotPool {
             drained: Condvar::new(),
             closing: Notify::new(),
             work_finished,
-            #[cfg(test)]
-            test_clock: std::sync::OnceLock::new(),
+            test_clock: AdmissionClock::default(),
         }
     }
 
@@ -351,15 +366,7 @@ impl BusinessToken {
                 .unwrap_or_else(|error| error.into_inner());
             state.working -= 1;
             if state.working == 0 {
-                #[cfg(test)]
-                let now = slot
-                    .pool
-                    .test_clock
-                    .get()
-                    .map_or_else(Instant::now, |now| now());
-                #[cfg(not(test))]
-                let now = Instant::now();
-                state.idle_at = Some(now);
+                state.idle_at = Some(admission_time(&slot.pool.test_clock));
                 slot.pool.work_finished.notify_waiters();
             }
             slot.pool.drained.notify_all();

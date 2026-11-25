@@ -71,13 +71,7 @@ pub(crate) fn prepare_sideband(
                 "Native realtime sideband connection failed",
             )
         })?;
-    #[cfg(test)]
-    let (url, proxy) = if let Some(address) = state.test_sideband_address.get() {
-        let path = url.strip_prefix(NATIVE_SIDEBAND_ORIGIN).unwrap();
-        (format!("ws://{address}{path}"), None)
-    } else {
-        (url, proxy)
-    };
+    let (url, proxy) = sideband_endpoint(&state.test_sideband_address, url, proxy);
     Ok(PreparedSideband {
         accept,
         url,
@@ -86,6 +80,36 @@ pub(crate) fn prepare_sideband(
         max_message_bytes: MAX_REALTIME_SIDEBAND_MESSAGE_BYTES,
         permit,
     })
+}
+
+#[cfg(test)]
+pub(crate) type SidebandProbeAddress = std::sync::OnceLock<std::net::SocketAddr>;
+
+#[cfg(not(test))]
+#[derive(Default)]
+pub(crate) struct SidebandProbeAddress {}
+
+#[cfg(test)]
+fn sideband_endpoint(
+    fixture: &SidebandProbeAddress,
+    url: String,
+    proxy: Option<String>,
+) -> (String, Option<String>) {
+    if let Some(address) = fixture.get() {
+        let path = url.strip_prefix(NATIVE_SIDEBAND_ORIGIN).unwrap();
+        (format!("ws://{address}{path}"), None)
+    } else {
+        (url, proxy)
+    }
+}
+
+#[cfg(not(test))]
+fn sideband_endpoint(
+    _: &SidebandProbeAddress,
+    url: String,
+    proxy: Option<String>,
+) -> (String, Option<String>) {
+    (url, proxy)
 }
 
 impl PreparedSideband {

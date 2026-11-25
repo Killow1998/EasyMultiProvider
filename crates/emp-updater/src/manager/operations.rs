@@ -261,8 +261,7 @@ impl UpdateManager {
             job,
             Duration::from_secs(30),
             Some(self),
-            #[cfg(test)]
-            None,
+            |_| {},
         )?;
 
         (self.0.prepare_modules)(self, &asset.version)?;

@@ -1,4 +1,4 @@
-use super::{Failure, Result, policy};
+use super::{Failure, Result, TeamFixtureFlag, policy};
 use crate::app::ServerState;
 use crate::server::team_discovery::{AnnouncementSocket, find_announcements, local_networks};
 use emp_modules::team::{DiscoveredWorkspace, Request};
@@ -9,16 +9,13 @@ use tokio::task::AbortHandle;
 #[derive(Default)]
 pub(super) struct Discovery {
     announcement: Mutex<Option<AbortHandle>>,
-    #[cfg(all(test, unix))]
-    no_broadcast_interfaces: std::sync::atomic::AtomicBool,
+    no_broadcast_interfaces: TeamFixtureFlag,
 }
 
 #[cfg(all(test, unix))]
 impl super::TeamState {
     pub(crate) fn isolate_discovery_for_test(&self) {
-        self.discovery
-            .no_broadcast_interfaces
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.discovery.no_broadcast_interfaces.enable();
     }
 }
 
@@ -48,11 +45,7 @@ impl Discovery {
 
     pub(super) fn find(&self, state: &ServerState) -> Result<Value> {
         let networks = local_networks().map_err(network_error)?;
-        #[cfg(all(test, unix))]
-        let networks = if self
-            .no_broadcast_interfaces
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        let networks = if self.no_broadcast_interfaces.enabled() {
             Vec::new()
         } else {
             networks

@@ -100,15 +100,24 @@ fn save_rotated_credential(
     auth_path: &Path,
     auth: &Value,
 ) -> Result<(), ()> {
-    #[cfg(test)]
-    if FAIL_ROTATION_SAVES_TO.lock().is_ok_and(|failing| {
-        auth_path
-            .to_str()
-            .is_some_and(|path| failing.contains(path))
-    }) {
+    if rotation_save_fails_for(auth_path) {
         return Err(());
     }
     vault.write_encrypted_json(auth_path, auth).map_err(|_| ())
+}
+
+#[cfg(test)]
+fn rotation_save_fails_for(auth_path: &Path) -> bool {
+    FAIL_ROTATION_SAVES_TO.lock().is_ok_and(|failing| {
+        auth_path
+            .to_str()
+            .is_some_and(|path| failing.contains(path))
+    })
+}
+
+#[cfg(not(test))]
+fn rotation_save_fails_for(_: &Path) -> bool {
+    false
 }
 
 struct AccountCredentials<'a> {

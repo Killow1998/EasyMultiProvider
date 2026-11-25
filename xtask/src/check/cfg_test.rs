@@ -1,16 +1,19 @@
 use super::{Path, Result, comments, read};
 use std::collections::BTreeMap;
+use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
+use syn::{AttrStyle, Attribute, Meta, Token};
 
 const BASELINE: &[(&str, usize)] = &[
-    ("emp-app", 135),
+    ("emp-app", 70),
     ("emp-codex", 15),
     ("emp-config", 3),
     ("emp-context", 1),
     ("emp-protocol", 2),
     ("emp-router", 1),
     ("emp-storage", 3),
-    ("emp-updater", 4),
+    ("emp-updater", 1),
 ];
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
@@ -26,8 +29,13 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
         } else {
             top
         };
-        *counts.entry(group).or_default() +=
-            count(&read(root, path)?).map_err(|error| format!("{path}: {error}"))?;
+        let cfg = inspect(&read(root, path)?).map_err(|error| format!("{path}: {error}"))?;
+        *counts.entry(group).or_default() += cfg.count;
+        for line in cfg.non_item_lines {
+            errors.push(format!(
+                "[cfg-test] {path}:{line}: 生产代码中涉及 test 的条件编译只能用于条目；请移到模块边界，或把探针移进钩子方法内部"
+            ));
+        }
     }
     for (group, actual) in counts {
         let baseline = BASELINE
@@ -45,28 +53,99 @@ fn mismatch(group: &str, actual: usize, baseline: usize) -> Option<String> {
     ))
 }
 
-fn count(source: &str) -> syn::Result<usize> {
+#[derive(Default)]
+struct Findings {
+    count: usize,
+    non_item_lines: Vec<usize>,
+}
+
+fn inspect(source: &str) -> syn::Result<Findings> {
     if !source.contains("cfg") || !source.contains("test") {
-        return Ok(0);
+        return Ok(Findings::default());
     }
+    let file = syn::parse_file(source)?;
     let mut cfg = TestCfg::default();
-    cfg.visit_file(&syn::parse_file(source)?);
-    Ok(cfg.0)
+    cfg.visit_file(&file);
+    Ok(cfg.findings)
 }
 
 #[derive(Default)]
-struct TestCfg(usize);
+struct TestCfg<'ast> {
+    findings: Findings,
+    item_attributes: &'ast [Attribute],
+    allows_inner_attributes: bool,
+    test_scope: bool,
+}
 
-impl<'ast> Visit<'ast> for TestCfg {
-    fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
-        if attribute.path().is_ident("cfg")
-            && attribute
-                .parse_args::<syn::Meta>()
-                .is_ok_and(|meta| comments::requires_test(&meta))
-        {
-            self.0 += 1;
-        }
+impl<'ast> TestCfg<'ast> {
+    fn visit_declaration<T>(
+        &mut self,
+        item: &'ast T,
+        attributes: &'ast [Attribute],
+        allows_inner_attributes: bool,
+        visit: impl FnOnce(&mut Self, &'ast T),
+    ) {
+        let previous_attributes = std::mem::replace(&mut self.item_attributes, attributes);
+        let previous_inner =
+            std::mem::replace(&mut self.allows_inner_attributes, allows_inner_attributes);
+        let previous_scope = self.test_scope;
+        self.test_scope |= attributes.iter().any(|attr| {
+            (allows_inner_attributes || matches!(attr.style, AttrStyle::Outer))
+                && comments::test_only_attribute(attr)
+        });
+        visit(self, item);
+        self.test_scope = previous_scope;
+        self.allows_inner_attributes = previous_inner;
+        self.item_attributes = previous_attributes;
     }
+}
+
+macro_rules! visit_declarations {
+    ($method:ident, $kind:ident; $($variant:ident),+) => {
+        fn $method(&mut self, item: &'ast syn::$kind) {
+            let attrs = match item {
+                $(syn::$kind::$variant(item) => &item.attrs,)+
+                _ => return,
+            };
+            self.visit_declaration(item, attrs, false, visit::$method);
+        }
+    };
+}
+
+impl<'ast> Visit<'ast> for TestCfg<'ast> {
+    fn visit_file(&mut self, file: &'ast syn::File) {
+        self.visit_declaration(file, &file.attrs, true, visit::visit_file);
+    }
+
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        use syn::Item::*;
+        let attrs = match item {
+            Const(item) => &item.attrs,
+            Enum(item) => &item.attrs,
+            ExternCrate(item) => &item.attrs,
+            Fn(item) => &item.attrs,
+            ForeignMod(item) => &item.attrs,
+            Impl(item) => &item.attrs,
+            Macro(item) => &item.attrs,
+            Mod(module) => {
+                self.visit_declaration(module, &module.attrs, true, Self::visit_item_mod);
+                return;
+            }
+            Static(item) => &item.attrs,
+            Struct(item) => &item.attrs,
+            Trait(item) => &item.attrs,
+            TraitAlias(item) => &item.attrs,
+            Type(item) => &item.attrs,
+            Union(item) => &item.attrs,
+            Use(item) => &item.attrs,
+            _ => return,
+        };
+        self.visit_declaration(item, attrs, false, visit::visit_item);
+    }
+
+    visit_declarations!(visit_impl_item, ImplItem; Const, Fn, Macro, Type);
+    visit_declarations!(visit_trait_item, TraitItem; Const, Fn, Macro, Type);
+    visit_declarations!(visit_foreign_item, ForeignItem; Fn, Macro, Static, Type);
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
         if module.ident == "tests" {
@@ -79,6 +158,64 @@ impl<'ast> Visit<'ast> for TestCfg {
             visit::visit_item_mod(self, module);
         }
     }
+
+    fn visit_attribute(&mut self, attribute: &'ast Attribute) {
+        if attribute.path().is_ident("cfg")
+            && attribute
+                .parse_args::<Meta>()
+                .is_ok_and(|meta| comments::requires_test(&meta))
+        {
+            self.findings.count += 1;
+        }
+
+        if self.test_scope || !condition_mentions_test(&attribute.meta) {
+            return;
+        }
+        let on_item = (self.allows_inner_attributes || matches!(attribute.style, AttrStyle::Outer))
+            && self
+                .item_attributes
+                .iter()
+                .any(|item_attr| std::ptr::eq(item_attr, attribute));
+        if !on_item {
+            self.findings
+                .non_item_lines
+                .push(attribute.span().start().line);
+        }
+    }
+}
+
+fn condition_mentions_test(meta: &Meta) -> bool {
+    let Meta::List(list) = meta else {
+        return false;
+    };
+    if list.path.is_ident("cfg") {
+        return list
+            .parse_args::<Meta>()
+            .is_ok_and(|meta| predicate_mentions_test(&meta));
+    }
+    if list.path.is_ident("cfg_attr")
+        && let Ok(parts) = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+    {
+        let mut parts = parts.iter();
+        return parts.next().is_some_and(predicate_mentions_test)
+            || parts.any(condition_mentions_test);
+    }
+    false
+}
+
+fn predicate_mentions_test(meta: &Meta) -> bool {
+    match meta {
+        Meta::Path(path) => path.is_ident("test"),
+        Meta::List(list)
+            if ["all", "any", "not"]
+                .iter()
+                .any(|name| list.path.is_ident(name)) =>
+        {
+            list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                .is_ok_and(|parts| parts.iter().any(predicate_mentions_test))
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -86,33 +223,68 @@ mod tests {
     use super::*;
 
     #[test]
-    fn counts_test_only_fields_and_hooks_but_exempts_test_module_declarations() {
+    fn rejects_test_cfg_on_non_items() {
+        let cases = [
+            "struct State { #[cfg(test)] hook: () }",
+            "enum State { #[cfg(any(test, unix))] Hook }",
+            "fn drive(#[cfg_attr(test, allow(unused))] hook: ()) {}",
+            "fn drive() { #[cfg(all(unix, test))] let hook = (); }",
+            "fn drive() { #[cfg(not(test))] hook(); }",
+            "fn drive() { match () { #[cfg(test)] () => () } }",
+            "fn drive() { State { #[cfg_attr(unix, cfg(test))] hook: () }; }",
+            "fn drive() { #[cfg(test)] hook!(); }",
+        ];
+        for source in cases {
+            assert_eq!(inspect(source).unwrap().non_item_lines, [1], "{source}");
+        }
+    }
+
+    #[test]
+    fn allows_items_and_ignores_test_subtrees() {
         let source = r##"
 #[cfg(test)]
 mod tests;
 #[cfg(all(test, unix))]
-mod probes {}
+mod probes {
+    struct State { #[cfg(test)] hook: () }
+    fn probe() { #[cfg(test)] let hook = (); }
+}
 #[cfg(not(test))]
 mod probes {}
-struct State {
-    #[cfg(test)]
-    hook: (),
+#[cfg(any(test, unix))]
+impl State {
+    #[cfg(not(test))]
+    fn drive() {}
 }
-fn drive() {
+#[cfg_attr(test, allow(unused))]
+use std::io;
+#[cfg(test)]
+macro_rules! hook { () => {} }
+fn nested() {
     #[cfg(test)]
-    hook();
-    #[cfg(any(test, unix))]
-    close();
+    fn fixture() {}
 }
 const FIXTURE: &str = "#[cfg(test)]";
 "##;
-        assert_eq!(count(source).unwrap(), 3);
+        let cfg = inspect(source).unwrap();
+        assert!(cfg.non_item_lines.is_empty());
+        assert_eq!(cfg.count, 5);
+    }
+
+    #[test]
+    fn checks_production_siblings_and_modules_that_can_build_without_test() {
+        let source = r##"
+#[cfg(test)] mod fixtures { fn probe() { #[cfg(test)] hook(); } } fn drive() { #[cfg(test)] hook(); }
+#[cfg(any(test, unix))] mod either { fn drive() { #[cfg(test)] hook(); } }
+#[cfg(not(test))] mod production { fn drive() { #[cfg(not(test))] hook(); } }
+"##;
+        assert_eq!(inspect(source).unwrap().non_item_lines, [2, 3, 4]);
     }
 
     #[test]
     fn reports_increases_and_decreases_until_the_count_matches() {
         assert!(mismatch("example", 2, 1).is_some());
-        assert!(mismatch("example", 0, 1).is_some());
+        assert!(mismatch("example", 1, 0).is_some());
         assert!(mismatch("example", 1, 1).is_none());
     }
 }

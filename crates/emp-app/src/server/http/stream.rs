@@ -1,8 +1,9 @@
-#[cfg(test)]
-use crate::server::test_hooks::{ServerHooks, WriteHook};
 use crate::{
     http::response::status_text,
-    server::http::error::response_head,
+    server::{
+        http::error::response_head,
+        test_hooks::{ServerHooksHandle, WriteHook},
+    },
     services::{
         connection_admission::BusinessToken,
         gateway_clients::Caller,
@@ -37,10 +38,9 @@ pub(in crate::server) struct StreamConnection {
 }
 
 impl StreamConnection {
-    pub(in crate::server) fn new(#[cfg(test)] write_hook: WriteHook) -> Self {
+    pub(in crate::server) fn new(write_hook: WriteHook) -> Self {
         Self {
             delivery: Arc::new(Delivery {
-                #[cfg(test)]
                 write_hook,
                 ..Delivery::default()
             }),
@@ -53,7 +53,6 @@ impl StreamConnection {
 pub(in crate::server) struct Delivery {
     pending: Mutex<PendingFlush>,
     bytes: AtomicUsize,
-    #[cfg(test)]
     write_hook: WriteHook,
 }
 
@@ -118,8 +117,7 @@ pub(crate) struct BodyOutput {
     stream: Option<StreamFrames>,
     work: Option<ResponseWork>,
     frame_pending: bool,
-    #[cfg(test)]
-    hooks: Arc<ServerHooks>,
+    hooks: ServerHooksHandle,
 }
 
 enum ResponseWork {
@@ -143,7 +141,7 @@ impl BodyOutput {
         delivery: Arc<Delivery>,
         response: oneshot::Sender<Response>,
         business: BusinessToken,
-        #[cfg(test)] hooks: Arc<ServerHooks>,
+        hooks: ServerHooksHandle,
     ) -> Self {
         Self {
             socket,
@@ -152,7 +150,6 @@ impl BodyOutput {
             stream: None,
             work: Some(ResponseWork::Request(business)),
             frame_pending: false,
-            #[cfg(test)]
             hooks,
         }
     }
@@ -209,20 +206,14 @@ impl BodyOutput {
     pub(crate) fn write_frame(&mut self, bytes: Bytes) -> io::Result<()> {
         self.flush_frame()?;
         let stream = self.stream.as_mut().expect("response stream");
-        #[cfg(test)]
-        let queued = self.delivery.write_hook.pause_for_frame(&bytes);
-        #[cfg(test)]
-        let observed = queued.as_ref().map(|_| bytes.to_vec());
-        stream
-            .send
-            .blocking_send(bytes)
-            .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        self.frame_pending = true;
-        #[cfg(test)]
-        if let Some(queued) = queued {
-            let _ = queued.send(observed);
-        }
-        Ok(())
+        self.delivery.write_hook.publish_frame(bytes, |bytes| {
+            stream
+                .send
+                .blocking_send(bytes)
+                .map_err(|_| io::ErrorKind::BrokenPipe)?;
+            self.frame_pending = true;
+            Ok(())
+        })
     }
 
     pub(crate) fn flush_frame(&mut self) -> io::Result<()> {
@@ -245,8 +236,7 @@ impl BodyOutput {
             return self.finish_output(None);
         }
         ResponseWork::handoff(self.work.take(), || {
-            #[cfg(test)]
-            self.hooks.stream_handoff();
+            self.hooks.stream_handoff(true);
         });
         self.flush_frame()
     }
@@ -270,24 +260,15 @@ impl BodyOutput {
             .unzip();
         let sender = self.response.take();
         let work = self.work.take();
-        #[cfg(test)]
         let stream_handoff = send.is_some() && work.is_some();
         ResponseWork::handoff(work, || {
             if let (Some(sender), Some(response)) = (sender, reply) {
-                let publish = || {
-                    let _ = sender.send(response);
-                };
-                #[cfg(test)]
-                let publish = || {
-                    self.hooks
-                        .publish_output(Some(&self.delivery.write_hook), publish)
-                };
-                publish();
+                self.hooks
+                    .publish_output(Some(&self.delivery.write_hook), || {
+                        let _ = sender.send(response);
+                    });
             }
-            #[cfg(test)]
-            if stream_handoff {
-                self.hooks.stream_handoff();
-            }
+            self.hooks.stream_handoff(stream_handoff);
             drop(send);
         });
         confirmation

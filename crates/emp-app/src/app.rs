@@ -28,12 +28,6 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use tokio::runtime::Runtime;
 
-#[cfg(all(test, unix))]
-type UpgradeHandoffGate = (
-    tokio::sync::oneshot::Sender<(usize, usize)>,
-    tokio::sync::oneshot::Receiver<()>,
-);
-
 pub(crate) struct ServerState {
     pub(crate) lifecycle: Arc<crate::server::ServerControl>,
     pub(crate) catalog_refresh: crate::services::account_catalog::CatalogRefreshState,
@@ -43,10 +37,7 @@ pub(crate) struct ServerState {
     pub(crate) backend: BackendState,
     pub(crate) port: u16,
     pub(crate) base_url: String,
-    #[cfg(test)]
-    pub(crate) test_sideband_address: std::sync::OnceLock<std::net::SocketAddr>,
-    #[cfg(all(test, unix))]
-    pub(crate) test_upgrade_handoff: Mutex<Option<UpgradeHandoffGate>>,
+    pub(crate) test_sideband_address: crate::api::realtime::sideband::SidebandProbeAddress,
 }
 
 impl ServerState {

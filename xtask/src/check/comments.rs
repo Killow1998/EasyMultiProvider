@@ -239,25 +239,27 @@ impl TestScopes {
     }
 
     fn add(&mut self, item: &impl Spanned, attrs: &[syn::Attribute]) -> bool {
-        let test_only = attrs.iter().any(|attr| {
-            let path = attr.path();
-            path.is_ident("test")
-                || (path.is_ident("cfg")
-                    && attr
-                        .parse_args::<syn::Meta>()
-                        .is_ok_and(|meta| requires_test(&meta)))
-                || path
-                    .segments
-                    .iter()
-                    .map(|segment| &segment.ident)
-                    .eq(["tokio", "test"])
-        });
+        let test_only = attrs.iter().any(test_only_attribute);
         if test_only {
             let span = item.span();
             self.0.push(span.start().line..=span.end().line);
         }
         test_only
     }
+}
+
+pub(super) fn test_only_attribute(attr: &syn::Attribute) -> bool {
+    let path = attr.path();
+    path.is_ident("test")
+        || (path.is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .is_ok_and(|meta| requires_test(&meta)))
+        || path
+            .segments
+            .iter()
+            .map(|segment| &segment.ident)
+            .eq(["tokio", "test"])
 }
 
 pub(super) fn requires_test(meta: &syn::Meta) -> bool {

@@ -1,5 +1,3 @@
-#[cfg(test)]
-use super::test_hooks::WriteHook;
 use super::{
     BUSINESS_TOKEN, ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
     disconnect::WebSocketDisconnect,
@@ -13,6 +11,7 @@ use super::{
         usage, websocket,
     },
     run_blocking, take_business,
+    test_hooks::WriteHook,
     transport::ConnectionIo,
 };
 use crate::{
@@ -48,10 +47,7 @@ use tokio::{
 use tower::ServiceExt;
 
 struct HttpRequestContext {
-    #[cfg(all(test, unix))]
-    state: Arc<ServerState>,
     observation: HttpObservation,
-    #[cfg(test)]
     write_hook: WriteHook,
     delegation: Option<AdmittedCallback>,
     report_socket: Option<Arc<TcpStream>>,
@@ -198,7 +194,6 @@ pub(super) async fn drive_http(
         inference || head.account_events || report.is_some_and(|report| report.is_stream(request));
     let watch_report = report.is_some();
     observation.received(request);
-    #[cfg(test)]
     state
         .lifecycle
         .test_hooks
@@ -216,12 +211,7 @@ pub(super) async fn drive_http(
     } else {
         None
     };
-    let stream = streaming.then(|| {
-        Arc::new(StreamConnection::new(
-            #[cfg(test)]
-            io.write_hook.clone(),
-        ))
-    });
+    let stream = streaming.then(|| Arc::new(StreamConnection::new(io.write_hook.clone())));
     let (inference, report_socket, websocket_probe) = if inference {
         (
             Some(Arc::new(InferenceConnection {
@@ -239,10 +229,7 @@ pub(super) async fn drive_http(
         (None, socket.map(Arc::new), None)
     };
     let http_context = HttpRequestContext {
-        #[cfg(all(test, unix))]
-        state: state.clone(),
         observation,
-        #[cfg(test)]
         write_hook: io.write_hook.clone(),
         delegation,
         report_socket,
@@ -270,24 +257,30 @@ pub(super) async fn drive(
     control: Arc<ServerControl>,
     permit: BusinessToken,
 ) {
-    #[cfg(not(test))]
-    let mode = ServerMode::Recovery;
-    #[cfg(test)]
-    let mode = control.mode;
+    let mode = recovery_driver_mode(control.mode);
     let head = match GuardedHead::read(&mut io, accepted + mode.head_timeout()).await {
         Ok(head) => head,
-        Err(_error) => {
+        Err(error) => {
             let _slot = permit.slot().clone();
             drop(permit);
-            #[cfg(test)]
             if matches!(mode, ServerMode::Http) {
-                let _ = io.write_all(&_error.reply().encode()).await;
+                let _ = io.write_all(&error.reply().encode()).await;
             }
             let _ = io.shutdown().await;
             return;
         }
     };
     drive_connection(io, peer, router, control, permit, head, None).await;
+}
+
+#[cfg(test)]
+fn recovery_driver_mode(mode: ServerMode) -> ServerMode {
+    mode
+}
+
+#[cfg(not(test))]
+fn recovery_driver_mode(_: ServerMode) -> ServerMode {
+    ServerMode::Recovery
 }
 
 impl ServerMode {
@@ -334,7 +327,6 @@ async fn drive_connection(
         Some(permit)
     };
     let raw = head.raw.clone();
-    #[cfg(test)]
     let write_hook = http_context.as_ref().map(|request| &request.write_hook);
     let request_id = http_context
         .as_ref()
@@ -428,16 +420,11 @@ async fn drive_connection(
             }
             if response.extensions().get::<BufferedResponse>().is_some() {
                 Ok::<_, std::convert::Infallible>(handoff_response(token, || {
-                    let publish = || response;
-                    #[cfg(test)]
-                    let publish = || {
-                        context
-                            .0
-                            .control
-                            .test_hooks
-                            .publish_output(write_hook, publish)
-                    };
-                    publish()
+                    context
+                        .0
+                        .control
+                        .test_hooks
+                        .publish_output(write_hook, || response)
                 }))
             } else {
                 *business.lock().expect("request work") = token;
@@ -491,16 +478,11 @@ async fn drive_connection(
                     .expect("request admission")
                     .take(),
             );
-            #[cfg(all(test, unix))]
-            if let Some(request) = &http_context {
-                let gate = request.state.test_upgrade_handoff.lock().unwrap().take();
-                if let Some((reached, resume)) = gate {
-                    let admission = &context.0.control.admission;
-                    let _ =
-                        reached.send((admission.active_requests(), admission.active_websockets()));
-                    let _ = resume.await;
-                }
-            }
+            let control = &context.0.control;
+            control
+                .test_hooks
+                .after_upgrade_handoff(&control.admission, http_context.is_some())
+                .await;
         };
         let websocket_permit = reserved.or_else(|| {
             io.as_ref()

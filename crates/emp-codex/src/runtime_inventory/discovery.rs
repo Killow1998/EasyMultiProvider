@@ -281,14 +281,12 @@ fn discover_with_platform(
     result
 }
 
+#[cfg(any(windows, test))]
 pub(super) fn verified_fallback(candidate: &Candidate, path: &Path) -> bool {
-    #[cfg(any(windows, test))]
-    {
-        cache::matches_resource(&candidate.path, path)
-    }
-    #[cfg(not(any(windows, test)))]
-    {
-        let _ = (candidate, path);
-        false
-    }
+    cache::matches_resource(&candidate.path, path)
+}
+
+#[cfg(not(any(windows, test)))]
+pub(super) fn verified_fallback(_: &Candidate, _: &Path) -> bool {
+    false
 }

@@ -351,10 +351,7 @@ impl ServerHandle {
                     )
             });
         let state = Arc::new(ServerState {
-            #[cfg(test)]
             test_sideband_address: Default::default(),
-            #[cfg(all(test, unix))]
-            test_upgrade_handoff: Default::default(),
             lifecycle,
             catalog_refresh: crate::services::account_catalog::CatalogRefreshState::default(),
             sessions,
