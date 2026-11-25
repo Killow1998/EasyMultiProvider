@@ -117,6 +117,16 @@ fn receive(name: &syn::Ident) -> bool {
     )
 }
 
+fn binding_ident(pattern: &syn::Pat) -> Option<&syn::Ident> {
+    match pattern {
+        syn::Pat::Ident(binding) => Some(&binding.ident),
+        syn::Pat::Type(typed) => binding_ident(&typed.pat),
+        syn::Pat::Reference(reference) => binding_ident(&reference.pat),
+        syn::Pat::Paren(paren) => binding_ident(&paren.pat),
+        _ => None,
+    }
+}
+
 impl<'ast> Visit<'ast> for ThreadBody {
     fn visit_item(&mut self, _: &'ast syn::Item) {}
 
@@ -132,9 +142,9 @@ impl<'ast> Visit<'ast> for ThreadBody {
             }
             if thread_member("scope")
                 && let Some(syn::Expr::Closure(closure)) = call.args.first()
-                && let Some(syn::Pat::Ident(binding)) = closure.inputs.first()
+                && let Some(binding) = closure.inputs.first().and_then(binding_ident)
             {
-                self.scope_bindings.push(binding.ident.clone());
+                self.scope_bindings.push(binding.clone());
                 self.visit_expr(&closure.body);
                 self.scope_bindings.pop();
                 return;
@@ -243,6 +253,22 @@ fn manual() {
         assert_eq!(
             inspect_source("crates/sample/tests/wire.rs", source).unwrap(),
             [4, 7]
+        );
+    }
+
+    #[test]
+    fn counts_scoped_spawn_with_a_typed_scope_parameter() {
+        let source = r#"
+fn manual() {
+    std::thread::scope(|s: &std::thread::Scope<'_, '_>| {
+        s.spawn(|| gate.recv_timeout(deadline.remaining()));
+        other.spawn(job);
+    });
+}
+"#;
+        assert_eq!(
+            inspect_source("crates/sample/tests/wire.rs", source).unwrap(),
+            [4]
         );
     }
 }

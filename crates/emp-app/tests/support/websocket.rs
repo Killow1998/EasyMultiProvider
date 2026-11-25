@@ -22,7 +22,7 @@ impl WebSocket {
         write!(io,
             "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: Bearer {NATIVE_TOKEN}\r\noriginator: codex_cli_rs\r\nthread-id: fixture-ws-thread\r\n\r\n"
         ).expect("WS handshake request");
-        let (status, headers, _) = read_message(&mut io, false);
+        let (status, headers, _) = read_message(&mut io, false).expect("read WS handshake");
         assert!(status.starts_with("HTTP/1.1 101 "), "{status}: {headers:?}");
         assert_eq!(
             headers["sec-websocket-accept"],

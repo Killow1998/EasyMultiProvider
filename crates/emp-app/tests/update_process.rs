@@ -140,7 +140,7 @@ fn accepted_update_does_not_wait_for_the_connection_to_close() {
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             let mut stream = Deadline::after(test_timeout(Duration::from_secs(10))).io(stream);
-            let _ = support::http::read_message(&mut stream, false);
+            support::http::read_message(&mut stream, false).expect("read update request");
             stream.write_all(b"HTTP/1.1 202 Accepted\r\n").unwrap();
             stream.write_all(framing).unwrap();
             finish.recv().unwrap();

@@ -52,6 +52,17 @@ fn deadline_terminates_a_descendant_and_joins_both_output_readers() {
 
 #[test]
 fn capture_timeout_joins_readers_and_closes_pipes_held_by_an_escaped_child() {
+    let output = fixture("capture-escaped-child").output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+pub(in crate::process) fn check_escaped_child_capture() {
     use super::super::tests::assert_payload;
     use std::{io::Write, process::Child};
 
@@ -64,9 +75,12 @@ fn capture_timeout_joins_readers_and_closes_pipes_held_by_an_escaped_child() {
         }
     }
 
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
     let mut command = fixture("escaped");
     command
-        .stdin(Stdio::piped())
+        .env(ADDRESS, listener.local_addr().unwrap().to_string())
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
@@ -93,6 +107,7 @@ fn capture_timeout_joins_readers_and_closes_pipes_held_by_an_escaped_child() {
     for (capture, payload) in [(&stdout, "escaped stdout"), (&stderr, "escaped stderr")] {
         while !capture.line(ready).unwrap().unwrap().ends_with(payload) {}
     }
+    let (socket, _) = crate::accept_blocking(&listener).unwrap();
 
     let expired = Deadline::after(test_timeout(Duration::ZERO));
     for (capture, payload) in [
@@ -106,9 +121,10 @@ fn capture_timeout_joins_readers_and_closes_pipes_held_by_an_escaped_child() {
         assert_payload(&bytes, payload);
     }
 
-    child.0.stdin.take().unwrap().write_all(b"x").unwrap();
+    ready.io(socket).write_all(b"x").unwrap();
+    let status = child.0.wait().unwrap();
     assert!(
-        child.0.wait().unwrap().success(),
-        "pipe read end still open"
+        status.success(),
+        "escaped child pipe probe failed: {status} (24: pipe open, 25: probe not received)"
     );
 }

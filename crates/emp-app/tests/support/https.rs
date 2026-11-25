@@ -95,7 +95,7 @@ impl HttpsProxy {
                 thread::spawn(move || {
                     let mut stream =
                         Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
-                    let (connect, _, _) = read_message(&mut stream, false);
+                    let (connect, _, _) = read_message(&mut stream, false).expect("read CONNECT");
                     let authority = connect
                         .strip_prefix("CONNECT ")
                         .and_then(|line| line.strip_suffix(" HTTP/1.1"))
@@ -119,7 +119,8 @@ impl HttpsProxy {
                     stream.set_deadline(&Deadline::after(test_timeout(Duration::from_secs(5))));
                     let connection = ServerConnection::new(tls).expect("TLS connection");
                     let mut stream = StreamOwned::new(connection, stream);
-                    let (request, headers, body) = read_message(&mut stream, false);
+                    let (request, headers, body) =
+                        read_message(&mut stream, false).expect("read HTTPS request");
                     let mut parts = request.split_whitespace();
                     let method = parts.next().expect("HTTPS method");
                     let path = parts.next().expect("HTTPS path");

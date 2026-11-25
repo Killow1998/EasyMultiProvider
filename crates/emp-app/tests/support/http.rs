@@ -16,27 +16,34 @@ pub struct Response {
 
 impl Response {
     #[cfg(target_os = "linux")]
-    pub fn read_from(stream: TcpStream) -> Self {
+    pub fn read_from(stream: TcpStream) -> io::Result<Self> {
         Self::read_before(stream, &Deadline::after(io_timeout()))
     }
 
-    fn read_before(stream: TcpStream, deadline: &Deadline) -> Self {
-        let (status_line, headers, body) = read_message(&mut deadline.io(stream), true);
-        let status = status_line
-            .split_whitespace()
-            .nth(1)
+    pub(super) fn read_before(stream: TcpStream, deadline: &Deadline) -> io::Result<Self> {
+        let (status_line, headers, body) = read_message(&mut deadline.io(stream), true)?;
+        let mut parts = status_line.split_whitespace();
+        let status = parts
+            .next()
+            .filter(|version| matches!(*version, "HTTP/1.0" | "HTTP/1.1"))
+            .and_then(|_| parts.next())
+            .filter(|code| code.len() == 3)
             .and_then(|code| code.parse().ok())
-            .unwrap_or_else(|| panic!("status line: {status_line:?}"));
-        deadline
-            .accept(
-                Self {
-                    status,
-                    headers,
-                    body,
-                },
-                "HTTP response",
-            )
-            .unwrap()
+            .filter(|status| (100..=599).contains(status))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("status line: {status_line:?}"),
+                )
+            })?;
+        deadline.accept(
+            Self {
+                status,
+                headers,
+                body,
+            },
+            "HTTP response",
+        )
     }
 
     pub fn json(&self) -> Value {
@@ -112,9 +119,13 @@ fn dechunk(mut raw: &[u8]) -> io::Result<Option<Vec<u8>>> {
         let Some(line_end) = find(raw, b"\r\n") else {
             return Ok(None);
         };
-        let size_text = std::str::from_utf8(&raw[..line_end]).expect("chunk size");
-        let size = usize::from_str_radix(size_text.split(';').next().unwrap().trim(), 16)
-            .expect("hex chunk size");
+        let size_text = std::str::from_utf8(&raw[..line_end])
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let size_text = size_text
+            .split_once(';')
+            .map_or(size_text, |(size, _)| size);
+        let size = usize::from_str_radix(size_text.trim(), 16)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let start = line_end + 2;
         if size == 0 {
             let mut trailers = &raw[start..];
@@ -126,7 +137,7 @@ fn dechunk(mut raw: &[u8]) -> io::Result<Option<Vec<u8>>> {
             }
             return Ok(None);
         }
-        if raw.len() < start + size + 2 {
+        if raw[start..].len().saturating_sub(2) < size {
             return Ok(None);
         }
         let end = start + size;
@@ -159,57 +170,61 @@ fn sse_finished(body: &[u8]) -> bool {
 pub(crate) fn read_message(
     stream: &mut impl Read,
     until_eof: bool,
-) -> (String, BTreeMap<String, String>, Vec<u8>) {
+) -> io::Result<(String, BTreeMap<String, String>, Vec<u8>)> {
     let mut raw = Vec::new();
     let mut buffer = [0_u8; 8192];
-    loop {
+    let separator = loop {
         if let Some(separator) = find(&raw, b"\r\n\r\n") {
-            let head = std::str::from_utf8(&raw[..separator]).expect("ASCII head");
-            let (first, headers) = parse_head(head);
-            let rest = &raw[separator + 4..];
-            if let Some(length) = headers.get("content-length") {
-                let length: usize = length.parse().expect("Content-Length");
-                if rest.len() >= length {
-                    return (first, headers, rest[..length].to_vec());
-                }
-            } else if headers
-                .get("transfer-encoding")
-                .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
-            {
-                if let Some(body) = dechunk(rest).expect("valid HTTP chunk trailers") {
-                    return (first, headers, body);
-                }
-            } else if !until_eof {
-                return (first, headers, Vec::new());
-            } else if headers
-                .get("content-type")
-                .is_some_and(|value| value.contains("text/event-stream"))
-                && sse_finished(rest)
-            {
-                return (first, headers, rest.to_vec());
-            }
+            break separator;
         }
-        let count = stream.read(&mut buffer).expect("read HTTP message");
+        let count = stream.read(&mut buffer)?;
         if count == 0 {
-            let separator = find(&raw, b"\r\n\r\n").expect("complete HTTP head before EOF");
-            let head = std::str::from_utf8(&raw[..separator]).expect("ASCII head");
-            let (first, headers) = parse_head(head);
-            let rest = raw[separator + 4..].to_vec();
-            assert!(
-                !headers.contains_key("content-length"),
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "incomplete HTTP head",
+            ));
+        }
+        raw.extend_from_slice(&buffer[..count]);
+    };
+    let head = std::str::from_utf8(&raw[..separator])
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let (first, headers) = parse_head(head);
+    let length = headers
+        .get("content-length")
+        .map(|length| length.parse::<usize>())
+        .transpose()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let chunked = headers
+        .get("transfer-encoding")
+        .is_some_and(|value| value.eq_ignore_ascii_case("chunked"));
+    let sse = headers
+        .get("content-type")
+        .is_some_and(|value| value.contains("text/event-stream"));
+    loop {
+        let rest = &raw[separator + 4..];
+        if let Some(length) = length {
+            if let Some(body) = rest.get(..length) {
+                return Ok((first, headers, body.to_vec()));
+            }
+        } else if chunked {
+            if let Some(body) = dechunk(rest)? {
+                return Ok((first, headers, body));
+            }
+        } else if !until_eof {
+            return Ok((first, headers, Vec::new()));
+        } else if sse && sse_finished(rest) {
+            return Ok((first, headers, rest.to_vec()));
+        }
+        let count = stream.read(&mut buffer)?;
+        if count == 0 {
+            let incomplete = if length.is_some() {
                 "HTTP body ended before Content-Length bytes"
-            );
-            let body = if headers
-                .get("transfer-encoding")
-                .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
-            {
-                dechunk(&rest)
-                    .expect("valid HTTP chunk trailers")
-                    .expect("complete chunked body")
+            } else if chunked {
+                "incomplete chunked body"
             } else {
-                rest
+                return Ok((first, headers, rest.to_vec()));
             };
-            return (first, headers, body);
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, incomplete));
         }
         raw.extend_from_slice(&buffer[..count]);
     }
@@ -242,7 +257,7 @@ pub(crate) fn http_before(
 ) -> Response {
     let stream =
         send_request(port, method, path, headers, body, deadline).expect("send EMP request");
-    Response::read_before(stream, deadline)
+    Response::read_before(stream, deadline).expect("read EMP response")
 }
 
 pub(super) fn send_request(
@@ -429,6 +444,46 @@ impl SseClient {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn empty_and_truncated_responses_return_errors() {
+        for response in [
+            b"".as_slice(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nx",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n",
+        ] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (mut server, _) = listener.accept().unwrap();
+            server.write_all(response).unwrap();
+            drop(server);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            assert!(
+                matches!(
+                    Response::read_before(client, &deadline),
+                    Err(error) if error.kind() == io::ErrorKind::UnexpectedEof
+                ),
+                "{response:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_length_response_finishes_while_peer_is_open() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+            .unwrap();
+
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let response = Response::read_before(client, &deadline).unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"{}");
+        drop(server);
+    }
 
     #[test]
     fn both_chunk_readers_reject_invalid_trailer_fields() {

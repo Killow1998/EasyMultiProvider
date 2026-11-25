@@ -420,7 +420,8 @@ impl Emp {
                 b"{}",
                 &deadline,
             )
-            .and_then(|stream| io::copy(&mut deadline.io(stream), &mut io::sink()).map(|_| ()))
+            .and_then(|stream| Response::read_before(stream, &deadline))
+            .map(|_| ())
         };
         for _ in 0..500 {
             if self.child.try_wait().ok().flatten().is_some() {

@@ -33,12 +33,19 @@ pub fn fixture_dir() -> std::io::Result<tempfile::TempDir> {
     tempfile::tempdir_in(fixture_root())
 }
 
+/// A test duration capped at one day so it can be added to the current instant.
 #[derive(Clone, Copy, Debug)]
 pub struct TestBudget(Duration);
 
 impl TestBudget {
+    const MAX: Duration = Duration::from_secs(24 * 60 * 60);
+
+    fn capped(duration: Duration) -> Self {
+        Self(duration.min(Self::MAX))
+    }
+
     pub fn with_product_wait(self, wait: FixedWait) -> Self {
-        Self(self.0 + wait.get())
+        Self::capped(self.0.saturating_add(wait.get()))
     }
 
     pub fn duration(self) -> Duration {
@@ -50,7 +57,7 @@ impl Add for TestBudget {
     type Output = Self;
 
     fn add(self, other: Self) -> Self {
-        Self(self.0 + other.0)
+        Self::capped(self.0.saturating_add(other.0))
     }
 }
 
@@ -63,7 +70,11 @@ impl Deadline {
     }
 
     pub fn starting_at(started_at: Instant, budget: TestBudget) -> Self {
-        Self(started_at + budget.duration())
+        Self(
+            started_at
+                .checked_add(budget.duration())
+                .unwrap_or(started_at),
+        )
     }
 
     pub fn capped(&self, budget: TestBudget) -> Self {
@@ -175,17 +186,20 @@ fn socket_timeout(error: io::Error) -> io::Error {
 }
 
 pub fn test_timeout(duration: Duration) -> TestBudget {
+    const MIN_SCALE: f64 = 1.0 / 16.0;
+    const MAX_SCALE: f64 = 64.0;
     static SCALE: OnceLock<f64> = OnceLock::new();
     let scale = SCALE.get_or_init(|| match std::env::var("EMP_TEST_TIME_SCALE") {
         Ok(value) => value
             .parse::<f64>()
             .ok()
-            .filter(|scale| scale.is_finite() && *scale > 0.0)
-            .expect("EMP_TEST_TIME_SCALE must be a positive finite number"),
+            .filter(|scale| (MIN_SCALE..=MAX_SCALE).contains(scale))
+            .expect("EMP_TEST_TIME_SCALE must be a number between 0.0625 and 64 inclusive"),
         Err(std::env::VarError::NotPresent) => 1.0,
         Err(error) => panic!("EMP_TEST_TIME_SCALE: {error}"),
     });
-    TestBudget(duration.mul_f64(*scale))
+    let scaled_seconds = (duration.as_secs_f64() * scale).min(TestBudget::MAX.as_secs_f64());
+    TestBudget::capped(Duration::from_secs_f64(scaled_seconds))
 }
 
 #[cfg(unix)]
@@ -210,6 +224,19 @@ pub fn write_executable(path: &std::path::Path, script: &str) {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn test_budget_construction_and_composition_saturate() {
+        let maximum = test_timeout(Duration::MAX);
+        assert_eq!(maximum.duration(), TestBudget::MAX);
+        assert_eq!((maximum + maximum).duration(), TestBudget::MAX);
+        assert_eq!(
+            maximum
+                .with_product_wait(FixedWait::new(Duration::MAX))
+                .duration(),
+            TestBudget::MAX
+        );
+    }
 
     #[test]
     fn read_returns_partial_frame_even_if_the_deadline_expires_after_consuming_it() {

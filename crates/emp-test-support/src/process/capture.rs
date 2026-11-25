@@ -221,4 +221,4 @@ impl NonblockingPipe for std::process::ChildStdout {}
 impl NonblockingPipe for std::process::ChildStderr {}
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

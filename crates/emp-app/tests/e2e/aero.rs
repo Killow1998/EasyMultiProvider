@@ -433,7 +433,7 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     assert_eq!(callback.body.unwrap()["model"], "callback-upstream");
     assert_public_pool_full();
     gate.finish();
-    let reply = Response::read_from(parent);
+    let reply = Response::read_from(parent).expect("read parent response");
     assert_eq!(reply.status, 200, "{}", reply.text());
     assert!(reply.sse_events().iter().any(|event| {
         event["type"] == "response.completed"

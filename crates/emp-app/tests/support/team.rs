@@ -172,7 +172,8 @@ impl TeamRelay {
                     scope.spawn(move || {
                         let deadline = Deadline::after(io_timeout());
                         let mut stream = deadline.io(stream);
-                        let (line, headers, body) = super::http::read_message(&mut stream, false);
+                        let (line, headers, body) =
+                            super::http::read_message(&mut stream, false).expect("read Team request");
                         let method = line.split_whitespace().next().expect("Team HTTP method");
                         let path = line.split_whitespace().nth(1).expect("Team HTTP path");
                         if method == "GET" && path.split('?').next() == Some("/v1/models") {
@@ -225,7 +226,8 @@ impl TeamRelay {
                             let _ = std::io::copy(&mut backend, &mut stream);
                             return;
                         }
-                        let (status, headers, reply) = super::http::read_message(&mut backend, true);
+                        let (status, headers, reply) = super::http::read_message(&mut backend, true)
+                            .expect("read Team response");
                         if path == "/workspace/v1/report"
                             && status.split_whitespace().nth(1) == Some("200")
                         {

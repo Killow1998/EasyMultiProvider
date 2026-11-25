@@ -259,7 +259,8 @@ impl Upstream {
 }
 
 pub(super) fn read_request(stream: &mut impl Read) -> UpstreamRequest {
-    let (request_line, headers, mut body) = read_message(stream, false);
+    let (request_line, headers, mut body) =
+        read_message(stream, false).expect("read upstream request");
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_owned();
     let path = parts.next().unwrap_or_default().to_owned();

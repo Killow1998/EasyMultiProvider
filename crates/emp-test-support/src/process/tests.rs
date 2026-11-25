@@ -47,11 +47,17 @@ fn child_fixture() {
             let lifetime = Deadline::after(test_timeout(Duration::from_secs(10)));
             let _ = lifetime.io(&socket).read(&mut [0]);
         }
+        "capture-escaped-child" => super::capture::tests::check_escaped_child_capture(),
         "escaped" => {
             #[cfg(unix)]
             rustix::process::setsid().unwrap();
+            let lifetime = Deadline::after(test_timeout(Duration::from_secs(10)));
+            let address = std::env::var(ADDRESS).unwrap().parse().unwrap();
+            let socket = lifetime.connect(address).unwrap();
             write_fixture_output(b"escaped stdout\n", b"escaped stderr\n");
-            io::stdin().read_exact(&mut [0]).unwrap();
+            if lifetime.io(socket).read_exact(&mut [0]).is_err() {
+                std::process::exit(25);
+            }
             let stdout = io::stdout().lock().write_all(b"probe\n");
             let stderr = io::stderr().lock().write_all(b"probe\n");
             let pipes_closed = [stdout, stderr].into_iter().all(
@@ -70,7 +76,7 @@ fn child_fixture() {
                     .downcast_ref::<&str>()
                     .copied()
                     .or_else(|| panic.downcast_ref::<String>().map(String::as_str)),
-                Some("EMP_TEST_TIME_SCALE must be a positive finite number")
+                Some("EMP_TEST_TIME_SCALE must be a number between 0.0625 and 64 inclusive")
             );
         }
         _ => panic!("unknown child fixture"),
@@ -112,20 +118,22 @@ fn captures_exit_status_and_both_streams() {
 
 #[test]
 fn invalid_time_scale_panics_during_construction_without_aborting() {
-    let mut command = fixture("invalid-time-scale");
-    command.env("EMP_TEST_TIME_SCALE", "bad");
-    let output = OwnedChild::output(
-        command,
-        Deadline::after(test_timeout(Duration::from_secs(5))),
-    )
-    .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    for scale in ["bad", "2e18"] {
+        let mut command = fixture("invalid-time-scale");
+        command.env("EMP_TEST_TIME_SCALE", scale);
+        let output = OwnedChild::output(
+            command,
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+        )
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "scale {scale}: {}\n{}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
