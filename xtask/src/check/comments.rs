@@ -8,7 +8,7 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 const ALLOWED: &[(&str, usize)] = &[
-    ("emp-app", 4),
+    ("emp-app", 3),
     ("emp-codex", 0),
     ("emp-config", 0),
     ("emp-domain", 0),
