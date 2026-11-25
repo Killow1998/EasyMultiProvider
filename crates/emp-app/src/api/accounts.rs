@@ -1,7 +1,6 @@
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::request::{percent_decode, query_values};
-use crate::http::response::json_error_body;
 use crate::server::http::error::{EntryError, JsonReply};
 use crate::services::account_catalog::{self, CatalogRefreshError};
 use crate::services::accounts::{
@@ -10,103 +9,77 @@ use crate::services::accounts::{
 use crate::services::configuration::{ChangeError, settings};
 use crate::services::quota::commands::{self, CommandError, QuotaCommand};
 use crate::services::quota::{QuotaHistoryResponseError, quota_history_response};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
-pub(crate) enum AccountRead<'a> {
-    List,
-    Models(&'a str),
-    QuotaHistory(&'a str),
-}
-
-impl<'a> AccountRead<'a> {
-    pub(crate) fn for_path(path: &'a str) -> Option<Self> {
-        if path == "/api/accounts" {
-            return Some(Self::List);
-        }
-        let suffix = path.strip_prefix("/api/accounts/")?;
-        if suffix == "models" {
-            return Some(Self::Models(""));
-        }
-        suffix
-            .strip_suffix("/models")
-            .map(Self::Models)
-            .or_else(|| {
-                suffix
-                    .strip_suffix("/quota-history")
-                    .map(Self::QuotaHistory)
-            })
+pub(crate) fn read(
+    request: Request<'_>,
+    state: &ServerState,
+    now: f64,
+) -> Result<JsonReply, EntryError> {
+    let path = request.raw_path();
+    if path == "/api/accounts" {
+        let payload = accounts_snapshot(state).ok_or_else(EntryError::internal)?;
+        return Ok(JsonReply::ok_json(&payload));
     }
-
-    pub(crate) fn read(
-        self,
-        request: Request<'_>,
-        state: &ServerState,
-        now: f64,
-    ) -> Result<JsonReply, EntryError> {
-        let payload = match self {
-            Self::List => accounts_snapshot(state).ok_or_else(EntryError::internal)?,
-            Self::Models(id) => {
-                let config = state
-                    .backend
-                    .configuration
-                    .read()
-                    .map_err(|_| EntryError::internal())?
-                    .clone();
-                let models = crate::services::catalog::subscription_options(
-                    state,
-                    &config,
-                    &percent_decode(id, false),
-                )
-                .map_err(|message| EntryError::Json(400, message, None))?;
-                serde_json::json!({"models":models})
-            }
-            Self::QuotaHistory("") => return Err(EntryError::NotFound),
-            Self::QuotaHistory(id) => {
-                let range = query_values(request.target, "range")
-                    .into_iter()
-                    .find(|value| !value.is_empty())
-                    .unwrap_or_else(|| "1d".to_owned());
-                let bound = |name| {
-                    query_values(request.target, name)
-                        .into_iter()
-                        .find_map(|value| value.parse::<f64>().ok())
-                        .filter(|value| value.is_finite())
-                        .map(|value| value.trunc() as i64)
-                };
-                match quota_history_response(
-                    state,
-                    &percent_decode(id, false),
-                    &range,
-                    bound("start").zip(bound("end")),
-                    now.trunc() as i64,
-                ) {
-                    Ok(payload) => payload,
-                    Err(QuotaHistoryResponseError::History(error)) => {
-                        return Ok(JsonReply::new(
-                            400,
-                            json_error_body(&error.to_string(), None),
-                        ));
-                    }
-                    Err(QuotaHistoryResponseError::Account(error)) => {
-                        return Ok(JsonReply::new(
-                            404,
-                            json_error_body(&error.to_string(), None),
-                        ));
-                    }
-                }
-            }
-        };
-        Ok(JsonReply::new(
-            200,
-            serde_json::to_vec(&payload).expect("account read reply is JSON serializable"),
-        ))
+    let path = path
+        .strip_prefix("/api/accounts/")
+        .ok_or(EntryError::NotFound)?;
+    if let Some(id) = path
+        .strip_suffix("/models")
+        .or_else(|| (path == "models").then_some(""))
+    {
+        let config = state
+            .backend
+            .configuration
+            .read()
+            .map_err(|_| EntryError::internal())?
+            .clone();
+        let models = crate::services::catalog::subscription_options(
+            state,
+            &config,
+            &percent_decode(id, false),
+        )
+        .map_err(|message| EntryError::Json(400, message, None))?;
+        return Ok(JsonReply::ok_json(&json!({"models":models})));
     }
+    let id = path
+        .strip_suffix("/quota-history")
+        .filter(|id| !id.is_empty())
+        .ok_or(EntryError::NotFound)?;
+    let range = query_values(request.target, "range")
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .unwrap_or_else(|| "1d".to_owned());
+    let bound = |name| {
+        query_values(request.target, name)
+            .into_iter()
+            .find_map(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite())
+            .map(|value| value.trunc() as i64)
+    };
+    Ok(
+        match quota_history_response(
+            state,
+            &percent_decode(id, false),
+            &range,
+            bound("start").zip(bound("end")),
+            now.trunc() as i64,
+        ) {
+            Ok(payload) => JsonReply::ok_json(&payload),
+            Err(QuotaHistoryResponseError::History(error)) => {
+                JsonReply::error(400, &error.to_string(), None)
+            }
+            Err(QuotaHistoryResponseError::Account(error)) => {
+                JsonReply::error(404, &error.to_string(), None)
+            }
+        },
+    )
 }
 
 pub(crate) enum AccountWrite {
     Import(Result<AccountImport, String>),
     Delete(String),
-    EditConfiguration(Map<String, Value>),
+    EditConfiguration(Value),
     RefreshModels(String),
     Quota(String, QuotaCommand),
 }
@@ -121,7 +94,7 @@ impl AccountWrite {
                 .map(|()| json!({"status":"ok"}))
                 .map_err(|error| JsonReply::error(400, &error, None)),
             Self::EditConfiguration(body) => {
-                return match settings::update(id, state, &Value::Object(body)) {
+                return match settings::update(id, state, &body) {
                     Ok(()) => super::catalog::read_configuration(state),
                     Err(ChangeError::Invalid(message)) => JsonReply::error(400, &message, None),
                     Err(ChangeError::Unavailable) => EntryError::internal().reply(),
@@ -141,7 +114,7 @@ impl AccountWrite {
             }
         };
         match payload {
-            Ok(payload) => JsonReply::new(200, payload.to_string()),
+            Ok(payload) => JsonReply::ok_json(&payload),
             Err(reply) => reply,
         }
     }

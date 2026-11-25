@@ -1,19 +1,16 @@
 use super::{
     body::JsonBody,
     error::{EntryError, JsonReply},
-    management::ManagementSession,
-    proxy::RequestAccess,
-    raw_head,
+    management, raw_head,
 };
 use crate::{
     app::ServerState,
-    server::{connection::ConnectionContext, run_blocking},
     services::native_login::{self, LoginOperation},
 };
 use axum::{
-    Extension, Router,
-    extract::{FromRequest, State},
-    routing::post,
+    Router,
+    extract::FromRequest,
+    routing::{MethodFilter, MethodRouter},
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -22,9 +19,16 @@ const NATIVE_PREFIX: &str = "/api/native/login/";
 pub(super) const ACCOUNTS_PREFIX: &str = "/api/accounts/login/";
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
+    let write = write_route();
     Router::new()
-        .route(NATIVE_PREFIX, post(write))
-        .route("/api/native/login/{*path}", post(write))
+        .route(NATIVE_PREFIX, write.clone())
+        .route("/api/native/login/{*path}", write)
+}
+
+pub(super) fn write_route() -> MethodRouter<Arc<ServerState>> {
+    management::write_route(MethodFilter::POST, |operation, state, _| {
+        execute(operation, state)
+    })
 }
 
 fn operation(path: &str, body: &Value) -> LoginOperation {
@@ -43,22 +47,6 @@ impl FromRequest<Arc<ServerState>> for JsonBody<LoginOperation> {
         let JsonBody(body) = JsonBody::<Value>::from_request(request, state).await?;
         Ok(Self(operation(raw.request().raw_path(), &body)))
     }
-}
-
-pub(super) async fn write(
-    access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-    Extension(connection): Extension<ConnectionContext>,
-    JsonBody(operation): JsonBody<LoginOperation>,
-) -> Result<JsonReply, EntryError> {
-    connection.retain_request_access(access);
-    run_blocking(move || {
-        let _connection = connection;
-        execute(operation, &state)
-    })
-    .await
-    .map_err(|_| EntryError::internal())
 }
 
 fn execute(operation: LoginOperation, state: &ServerState) -> JsonReply {

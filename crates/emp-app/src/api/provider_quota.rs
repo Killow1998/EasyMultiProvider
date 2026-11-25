@@ -32,11 +32,6 @@ pub(crate) fn refresh(state: &ServerState, id: &str, force: bool) -> JsonReply {
     }
 }
 
-pub(crate) fn history_id(path: &str) -> Option<&str> {
-    path.strip_prefix("/api/providers/")?
-        .strip_suffix("/quota-history")
-}
-
 pub(crate) fn history(
     request: Request<'_>,
     state: &ServerState,

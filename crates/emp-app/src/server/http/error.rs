@@ -89,6 +89,10 @@ impl HttpReply {
         }
     }
 
+    pub(crate) fn ok_json(value: &serde_json::Value) -> Self {
+        Self::new(200, serde_json::to_vec(value).expect("JSON response"))
+    }
+
     pub(crate) fn error(status: u16, message: &str, code: Option<&str>) -> Self {
         Self::new(status, json_error_body(message, code))
     }

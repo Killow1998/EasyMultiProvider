@@ -1,19 +1,19 @@
 use super::{
     body::JsonBody,
     error::{EntryError, JsonReply},
-    management::ManagementSession,
+    management::{ManagementSession, write_route},
     proxy::RequestAccess,
     raw_head,
 };
 use crate::{
     api::gateway::{GatewayRead, json_reply},
     app::ServerState,
-    server::{connection::ConnectionContext, run_blocking},
+    server::run_blocking,
 };
 use axum::{
-    Extension, Router,
+    Router,
     extract::{FromRequest, State},
-    routing::get,
+    routing::{MethodFilter, get},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -21,9 +21,13 @@ use std::sync::Arc;
 pub(crate) const CLIENTS_PATH: &str = "/api/gateway/clients";
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
+    let write = write_route(
+        MethodFilter::POST.or(MethodFilter::DELETE),
+        |operation: GatewayClientWrite, state, _| operation.execute(state),
+    );
     Router::new()
         .route("/api/gateway", get(read))
-        .route(CLIENTS_PATH, get(read).post(write).delete(write))
+        .route(CLIENTS_PATH, get(read).merge(write))
         .route("/api/gateway/usage", get(read))
         .route("/api/decisions/connection", get(read))
 }
@@ -103,20 +107,4 @@ impl FromRequest<Arc<ServerState>> for JsonBody<GatewayClientWrite> {
         let JsonBody(body) = JsonBody::<Value>::from_request(request, state).await?;
         Ok(Self(GatewayClientWrite::parse(body, remove)?))
     }
-}
-
-async fn write(
-    access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-    Extension(connection): Extension<ConnectionContext>,
-    JsonBody(operation): JsonBody<GatewayClientWrite>,
-) -> Result<JsonReply, EntryError> {
-    connection.retain_request_access(access);
-    run_blocking(move || {
-        let _connection = connection;
-        operation.execute(&state)
-    })
-    .await
-    .map_err(|_| EntryError::internal())
 }

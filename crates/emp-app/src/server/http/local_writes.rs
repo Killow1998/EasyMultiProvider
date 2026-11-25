@@ -1,13 +1,10 @@
 use super::{
     body::JsonBody,
     error::{EntryError, JsonReply},
-    management::ManagementSession,
-    proxy::RequestAccess,
+    management::write_route,
 };
 use crate::{
     app::ServerState,
-    http::request::{Request, RequestMethod},
-    server::{connection::ConnectionContext, run_blocking},
     services::{
         app_icon::Selection,
         configuration::{Language, update_language},
@@ -15,16 +12,12 @@ use crate::{
         runtime::compatibility_snapshot,
     },
 };
-use axum::{
-    Extension, Router,
-    extract::{FromRequest, State},
-    routing::post,
-};
+use axum::{Extension, Router, extract::FromRequest, routing::MethodFilter};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
-pub(crate) enum LocalWriteRoute {
+enum LocalWriteRoute {
     Language,
     AppIcon,
     UsageScan,
@@ -41,22 +34,17 @@ const ROUTES: [(&str, LocalWriteRoute); 5] = [
 ];
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
-    ROUTES.into_iter().fold(Router::new(), |router, (path, _)| {
-        router.route(path, post(write))
-    })
+    let write = write_route(MethodFilter::POST, |operation: LocalWrite, state, _| {
+        operation.execute(state)
+    });
+    ROUTES
+        .into_iter()
+        .fold(Router::new(), |router, (path, route)| {
+            router.route(path, write.clone().layer(Extension(route)))
+        })
 }
 
 impl LocalWriteRoute {
-    pub(crate) fn for_request(request: Request<'_>) -> Option<Self> {
-        if request.method != RequestMethod::Post {
-            return None;
-        }
-        let path = request.raw_path();
-        ROUTES
-            .into_iter()
-            .find_map(|(route, operation)| (route == path).then_some(operation))
-    }
-
     fn with_body(self, body: Value) -> Result<LocalWrite, EntryError> {
         Ok(match self {
             Self::Language => {
@@ -184,30 +172,14 @@ impl FromRequest<Arc<ServerState>> for JsonBody<LocalWrite> {
     type Rejection = EntryError;
 
     async fn from_request(
-        mut request: axum::extract::Request,
+        request: axum::extract::Request,
         state: &Arc<ServerState>,
     ) -> Result<Self, EntryError> {
-        let route = request
-            .extensions_mut()
-            .remove::<LocalWriteRoute>()
-            .ok_or(EntryError::NotFound)?;
+        let route = *request
+            .extensions()
+            .get::<LocalWriteRoute>()
+            .expect("local write route");
         let JsonBody(body) = JsonBody::<Value>::from_request(request, state).await?;
         Ok(Self(route.with_body(body)?))
     }
-}
-
-async fn write(
-    access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-    Extension(connection): Extension<ConnectionContext>,
-    JsonBody(operation): JsonBody<LocalWrite>,
-) -> Result<JsonReply, EntryError> {
-    connection.retain_request_access(access);
-    run_blocking(move || {
-        let _connection = connection;
-        operation.execute(&state)
-    })
-    .await
-    .map_err(|_| EntryError::internal())
 }

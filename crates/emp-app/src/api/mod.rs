@@ -7,7 +7,6 @@ pub(crate) mod gateway;
 pub(crate) mod images;
 pub(crate) mod inspection;
 pub(crate) mod integration;
-pub(crate) mod modules;
 pub(crate) mod provider_quota;
 pub(crate) mod quota;
 pub(crate) mod realtime;

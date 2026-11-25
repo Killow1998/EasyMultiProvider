@@ -1,7 +1,7 @@
 use super::{
     body::JsonBody,
     error::{EntryError, JsonReply},
-    management::{ManagementRead, ManagementSession, read_route},
+    management::{ManagementRead, ManagementSession, read_route, write_route},
     proxy::RequestAccess,
     raw_head,
 };
@@ -14,7 +14,7 @@ use crate::{
 use axum::{
     Extension, Router,
     extract::{FromRequest, State},
-    routing::post,
+    routing::{MethodFilter, post},
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -27,12 +27,15 @@ const WRITE_PREFIX: &str = "/api/team/";
 const PUBLISH_SOURCE: &str = "/api/team/publish_source";
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
+    let write = write_route(MethodFilter::POST, |command, state, _| {
+        team::command(state, command)
+    });
     READS.into_iter().fold(
         Router::new()
             .route(PUBLISH_SOURCE, post(publish_source))
-            .route(WRITE_PREFIX, post(write))
-            .route("/api/team/{*operation}", post(write)),
-        |router, (path, read)| router.route(path, read_route(read).post(write)),
+            .route(WRITE_PREFIX, write.clone())
+            .route("/api/team/{*operation}", write.clone()),
+        |router, (path, read)| router.route(path, read_route(read).merge(write.clone())),
     )
 }
 
@@ -67,20 +70,4 @@ impl FromRequest<Arc<ServerState>> for JsonBody<Command> {
         let JsonBody(body) = JsonBody::<Value>::from_request(request, state).await?;
         Ok(Self(parse(raw.request().raw_path(), body)))
     }
-}
-
-async fn write(
-    access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-    Extension(connection): Extension<ConnectionContext>,
-    JsonBody(command): JsonBody<Command>,
-) -> Result<JsonReply, EntryError> {
-    connection.retain_request_access(access);
-    run_blocking(move || {
-        let _connection = connection;
-        team::command(&state, command)
-    })
-    .await
-    .map_err(|_| EntryError::internal())
 }

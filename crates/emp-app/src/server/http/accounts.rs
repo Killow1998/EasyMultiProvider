@@ -2,19 +2,19 @@ use super::{
     body::JsonBody,
     error::{EntryError, JsonReply, response_head},
     login,
-    management::ManagementSession,
+    management::{ManagementSession, write_route},
     proxy::RequestAccess,
     raw_head,
     stream::{StreamConnection, StreamFrames},
 };
 use crate::{
     api::{
-        accounts::{AccountRead, AccountWrite},
+        accounts::{self, AccountWrite},
         quota,
     },
     app::ServerState,
     http::request::{Request, RequestMethod, percent_decode},
-    server::{connection::ConnectionContext, run_blocking},
+    server::run_blocking,
     services::{accounts::AccountImport, quota::commands::QuotaCommand},
     util::system_now,
 };
@@ -22,23 +22,33 @@ use axum::{
     Extension, Router,
     extract::{FromRequest, State},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{MethodFilter, get},
 };
 use serde_json::Value;
 use std::sync::Arc;
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
+    let delete = write_route(MethodFilter::DELETE, AccountWrite::execute);
+    let write = write_route(
+        MethodFilter::POST.or(MethodFilter::DELETE),
+        AccountWrite::execute,
+    );
+    let login = login::write_route();
     Router::new()
         .route("/api/accounts", get(read))
-        .route("/api/accounts/events", get(events).delete(write))
-        .route("/api/accounts/{*path}", get(read).post(write).delete(write))
-        .route("/api/accounts/", delete(write))
-        .route(login::ACCOUNTS_PREFIX, post(login::write).delete(write))
+        .route("/api/accounts/events", get(events).merge(delete.clone()))
+        .route("/api/accounts/{*path}", get(read).merge(write))
+        .route("/api/accounts/", delete.clone())
+        .route(login::ACCOUNTS_PREFIX, login.clone().merge(delete.clone()))
         .route(
             "/api/accounts/login/{*path}",
-            get(read).post(login::write).delete(write),
+            get(read).merge(login).merge(delete),
         )
-        .route("/api/config", post(write))
+        .route(
+            "/api/config",
+            write_route(MethodFilter::POST, AccountWrite::execute)
+                .layer(Extension(AccountWriteRoute::EditConfiguration)),
+        )
 }
 
 async fn events(
@@ -87,18 +97,13 @@ async fn read(
 ) -> Result<JsonReply, EntryError> {
     let now = system_now();
     let raw = raw_head(request.extensions())?.clone();
-    run_blocking(move || {
-        let request = raw.request();
-        AccountRead::for_path(request.raw_path())
-            .ok_or(EntryError::NotFound)?
-            .read(request, &state, now)
-    })
-    .await
-    .map_err(|_| EntryError::internal())?
+    run_blocking(move || accounts::read(raw.request(), &state, now))
+        .await
+        .map_err(|_| EntryError::internal())?
 }
 
 #[derive(Clone)]
-pub(crate) enum AccountWriteRoute {
+enum AccountWriteRoute {
     Import,
     Delete(String),
     EditConfiguration,
@@ -109,14 +114,9 @@ pub(crate) enum AccountWriteRoute {
 }
 
 impl AccountWriteRoute {
-    pub(crate) fn for_request(request: Request<'_>) -> Option<Self> {
-        let path = request.raw_path();
-        if request.method == RequestMethod::Post && path == "/api/config" {
-            return Some(Self::EditConfiguration);
-        }
-        let path = path.strip_prefix("/api/accounts/")?;
+    fn for_account(request: Request<'_>) -> Option<Self> {
+        let path = request.raw_path().strip_prefix("/api/accounts/")?;
         match request.method {
-            RequestMethod::Post if path.starts_with("login/") => None,
             RequestMethod::Post if path == "import" || path == "models/refresh" => {
                 Some(Self::Import)
             }
@@ -140,26 +140,13 @@ impl AccountWriteRoute {
         }
     }
 
-    fn without_body(&self) -> Result<Option<AccountWrite>, EntryError> {
-        match self {
-            Self::MissingAccount => Err(EntryError::NotFound),
-            Self::Delete(account) => Ok(Some(AccountWrite::Delete(account.clone()))),
-            _ => Ok(None),
-        }
-    }
-
     fn with_body(self, body: Value) -> AccountWrite {
         match self {
             Self::Import => AccountWrite::Import(AccountImport::parse(&body)),
             Self::RefreshModels(account) => AccountWrite::RefreshModels(account),
             Self::RefreshQuota(account) => AccountWrite::Quota(account, QuotaCommand::Refresh),
             Self::ResetQuota(account) => AccountWrite::Quota(account, QuotaCommand::reset(&body)),
-            Self::EditConfiguration => {
-                let Value::Object(body) = body else {
-                    unreachable!("JSON body reader requires an object")
-                };
-                AccountWrite::EditConfiguration(body)
-            }
+            Self::EditConfiguration => AccountWrite::EditConfiguration(body),
             Self::Delete(_) | Self::MissingAccount => unreachable!("route does not read a body"),
         }
     }
@@ -177,27 +164,17 @@ impl FromRequest<Arc<ServerState>> for JsonBody<AccountWrite> {
         mut request: axum::extract::Request,
         state: &Arc<ServerState>,
     ) -> Result<Self, EntryError> {
-        let route = request
-            .extensions_mut()
-            .remove::<AccountWriteRoute>()
-            .ok_or(EntryError::NotFound)?;
-        if let Some(command) = route.without_body()? {
-            return Ok(Self(command));
+        let route = match request.extensions_mut().remove::<AccountWriteRoute>() {
+            Some(route) => route,
+            None => AccountWriteRoute::for_account(raw_head(request.extensions())?.request())
+                .ok_or(EntryError::NotFound)?,
+        };
+        match route {
+            AccountWriteRoute::MissingAccount => return Err(EntryError::NotFound),
+            AccountWriteRoute::Delete(account) => return Ok(Self(AccountWrite::Delete(account))),
+            _ => {}
         }
         let JsonBody(body) = JsonBody::<Value>::from_request(request, state).await?;
         Ok(Self(route.with_body(body)))
     }
-}
-
-async fn write(
-    access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-    Extension(connection): Extension<ConnectionContext>,
-    JsonBody(command): JsonBody<AccountWrite>,
-) -> Result<JsonReply, EntryError> {
-    connection.retain_request_access(access);
-    run_blocking(move || command.execute(&state, connection.request_id()))
-        .await
-        .map_err(|_| EntryError::internal())
 }

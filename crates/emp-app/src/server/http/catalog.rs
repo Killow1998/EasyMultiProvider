@@ -1,19 +1,19 @@
 use super::{
     body::JsonBody,
     error::{EntryError, JsonReply, no_response},
-    management::ManagementSession,
+    management::{ManagementSession, write_route},
     proxy::{ModelCatalog, RequestAccess},
     raw_head,
 };
 use crate::{
     api::{
-        catalog::{self, catalog_json, discovery_reply},
+        catalog::{self, discovery_reply},
         decisions::{self, DecisionDiscovery},
         provider_quota, router_error_reply,
     },
     app::ServerState,
-    http::request::{Request, RequestMethod, percent_decode},
-    server::{connection::ConnectionContext, run_blocking},
+    http::request::percent_decode,
+    server::run_blocking,
     services::{
         catalog::{
             discovery::{self, DiscoveryError, ProviderDiscovery},
@@ -27,12 +27,15 @@ use axum::{
     Extension, Router,
     extract::{FromRequest, State},
     response::Response,
-    routing::{get, post},
+    routing::{MethodFilter, get, post},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
+    use CatalogWriteRoute::*;
+
+    let write = write_route(MethodFilter::POST, CatalogWrite::execute);
     Router::new()
         .route("/v1/models", get(models))
         .route("/v1/models/", get(models))
@@ -41,12 +44,32 @@ pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
             "/api/providers",
             Router::new()
                 .route("/balance", post(missing_balance))
-                .fallback(get(provider_read).post(write).fallback(super::unmatched)),
+                .route("/discover", write.clone().layer(Extension(Discover)))
+                .route("/{id}/quota-history", get(provider_read))
+                .fallback(
+                    get(provider_read)
+                        .merge(write.clone())
+                        .fallback(super::unmatched),
+                ),
         )
-        .route("/api/decisions/models", post(write))
-        .route("/api/catalog/refresh", post(write))
-        .route("/api/catalog/context-preference", post(write))
-        .route("/api/models/metadata", post(metadata))
+        .route(
+            "/api/decisions/models",
+            write.clone().layer(Extension(DecisionModels)),
+        )
+        .route(
+            "/api/catalog/refresh",
+            write.clone().layer(Extension(Refresh)),
+        )
+        .route(
+            "/api/catalog/context-preference",
+            write.clone().layer(Extension(ContextPreference)),
+        )
+        .route(
+            "/api/models/metadata",
+            write_route(MethodFilter::POST, |body, state, id| {
+                catalog::metadata_request(id, state, &body)
+            }),
+        )
 }
 
 async fn models(
@@ -70,16 +93,21 @@ async fn provider_read(
     let raw = raw_head(request.extensions())?.clone();
     run_blocking(move || {
         let request = raw.request();
-        let path = request.raw_path();
-        if let Some(id) = provider_quota::history_id(path) {
+        let path = request
+            .raw_path()
+            .strip_prefix("/api/providers/")
+            .ok_or(EntryError::NotFound)?;
+        if let Some(id) = path.strip_suffix("/quota-history") {
             Ok(provider_quota::history(
                 request,
                 &state,
                 id,
                 crate::util::system_now(),
             ))
-        } else if catalog::provider_models_path(path) {
-            Ok(catalog::provider_models_request(path, &state))
+        } else if let Some(id) = path.strip_suffix("/models") {
+            Ok(catalog::provider_models_request(Some(id), &state))
+        } else if path == "models" {
+            Ok(catalog::provider_models_request(None, &state))
         } else {
             Err(EntryError::NotFound)
         }
@@ -97,58 +125,28 @@ async fn missing_balance(
     Ok(no_response())
 }
 
-async fn metadata(
-    access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-    Extension(connection): Extension<ConnectionContext>,
-    JsonBody(body): JsonBody,
-) -> Result<JsonReply, EntryError> {
-    connection.retain_request_access(access);
-    run_blocking(move || catalog::metadata_request(connection.request_id(), &state, &body))
-        .await
-        .map_err(|_| EntryError::internal())
-}
-
 #[derive(Clone)]
-pub(crate) enum CatalogWriteRoute {
+enum CatalogWriteRoute {
     Discover,
     DecisionModels,
     Refresh,
     ContextPreference,
     Quota(String),
-    Balance(Option<String>),
+    Balance(String),
 }
 
 impl CatalogWriteRoute {
-    pub(crate) fn for_request(request: Request<'_>) -> Option<Self> {
-        if request.method != RequestMethod::Post {
-            return None;
+    fn for_provider(path: &str) -> Option<Self> {
+        let provider = path.strip_prefix("/api/providers/")?;
+        if let Some(id) = provider.strip_suffix("/quota") {
+            Some(Self::Quota(percent_decode(id, false)))
+        } else if provider == "quota" {
+            Some(Self::Quota(String::new()))
+        } else {
+            provider
+                .strip_suffix("/balance")
+                .map(|id| Self::Balance(percent_decode(id, false)))
         }
-        let path = request.raw_path();
-        Some(match path {
-            "/api/providers/discover" => Self::Discover,
-            "/api/decisions/models" => Self::DecisionModels,
-            "/api/catalog/refresh" => Self::Refresh,
-            "/api/catalog/context-preference" => Self::ContextPreference,
-            _ => {
-                let provider = path.strip_prefix("/api/providers/")?;
-                if path.ends_with("/quota") {
-                    Self::Quota(percent_decode(
-                        provider.strip_suffix("/quota").unwrap_or_default(),
-                        false,
-                    ))
-                } else if path.ends_with("/balance") {
-                    Self::Balance(
-                        provider
-                            .strip_suffix("/balance")
-                            .map(|id| percent_decode(id, false)),
-                    )
-                } else {
-                    return None;
-                }
-            }
-        })
     }
 
     fn with_body(self, body: &Value) -> Result<CatalogWrite, EntryError> {
@@ -161,13 +159,10 @@ impl CatalogWriteRoute {
                 id,
                 force: force(body)?,
             },
-            Self::Balance(id) => {
-                let force = force(body)?;
-                CatalogWrite::Balance {
-                    id: id.expect("balance route"),
-                    force,
-                }
-            }
+            Self::Balance(id) => CatalogWrite::Balance {
+                id,
+                force: force(body)?,
+            },
         })
     }
 }
@@ -184,30 +179,32 @@ enum CatalogWrite {
 impl CatalogWrite {
     fn execute(self, state: &ServerState, request_id: Option<&str>) -> JsonReply {
         match self {
-            Self::Discover(operation) => {
-                discovery_reply(discovery::discover(request_id, state, operation))
-                    .unwrap_or_else(router_error_reply)
-            }
+            Self::Discover(operation) => discovery_reply(
+                discovery::discover(request_id, state, operation),
+                router_error_reply,
+            ),
             Self::DecisionModels(operation) => discovery_reply(
                 operation.and_then(|operation| decisions::discover(state, operation)),
-            )
-            .unwrap_or_else(router_error_reply),
+                router_error_reply,
+            ),
             Self::Refresh => match refresh_for_management(request_id, state) {
-                Ok((path, count)) => {
-                    catalog_json(&json!({"status":"ok","catalog_path":path,"model_count":count}))
-                }
+                Ok((path, count)) => JsonReply::ok_json(
+                    &json!({"status":"ok","catalog_path":path,"model_count":count}),
+                ),
                 Err(()) => EntryError::internal().reply(),
             },
             Self::ContextPreference(show_context) => {
                 match settings::context_preference(request_id, state, show_context) {
-                    Ok(show_context) => catalog_json(&json!({"catalog_show_context":show_context})),
+                    Ok(show_context) => {
+                        JsonReply::ok_json(&json!({"catalog_show_context":show_context}))
+                    }
                     Err(ChangeError::Invalid(message)) => JsonReply::error(400, &message, None),
                     Err(ChangeError::Unavailable) => EntryError::internal().reply(),
                 }
             }
             Self::Quota { id, force } => provider_quota::refresh(state, &id, force),
             Self::Balance { id, force } => match provider_balance::refresh(state, &id, force) {
-                Some(value) => catalog_json(&value),
+                Some(value) => JsonReply::ok_json(&value),
                 None => EntryError::NotFound.reply(),
             },
         }
@@ -240,24 +237,14 @@ impl FromRequest<Arc<ServerState>> for JsonBody<CatalogWrite> {
         mut request: axum::extract::Request,
         state: &Arc<ServerState>,
     ) -> Result<Self, EntryError> {
-        let route = request
-            .extensions_mut()
-            .remove::<CatalogWriteRoute>()
-            .ok_or(EntryError::NotFound)?;
+        let route = match request.extensions_mut().remove::<CatalogWriteRoute>() {
+            Some(route) => route,
+            None => CatalogWriteRoute::for_provider(
+                raw_head(request.extensions())?.request().raw_path(),
+            )
+            .ok_or(EntryError::NotFound)?,
+        };
         let JsonBody(body) = JsonBody::<Value>::from_request(request, state).await?;
         Ok(Self(route.with_body(&body)?))
     }
-}
-
-async fn write(
-    access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-    Extension(connection): Extension<ConnectionContext>,
-    JsonBody(operation): JsonBody<CatalogWrite>,
-) -> Result<JsonReply, EntryError> {
-    connection.retain_request_access(access);
-    run_blocking(move || operation.execute(&state, connection.request_id()))
-        .await
-        .map_err(|_| EntryError::internal())
 }

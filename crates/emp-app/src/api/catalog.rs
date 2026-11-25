@@ -11,18 +11,17 @@ use serde_json::Value;
 use serde_json::json;
 pub(crate) fn discovery_reply(
     result: Result<Value, DiscoveryError>,
-) -> Result<JsonReply, emp_router::RouterError> {
+    upstream_error: impl FnOnce(emp_router::RouterError) -> JsonReply,
+) -> JsonReply {
     match result {
-        Ok(value) => Ok(catalog_json(&value)),
-        Err(DiscoveryError::Invalid(message)) => {
-            Ok(JsonReply::new(400, json_error_body(&message, None)))
-        }
-        Err(DiscoveryError::Unavailable) => Ok(EntryError::internal().reply()),
+        Ok(value) => JsonReply::ok_json(&value),
+        Err(DiscoveryError::Invalid(message)) => JsonReply::error(400, &message, None),
+        Err(DiscoveryError::Unavailable) => EntryError::internal().reply(),
         Err(DiscoveryError::LocalCli(code)) => {
             let (status, code, message) = crate::services::claude_cli::failure_details(code);
-            Ok(JsonReply::new(status, json_error_body(message, Some(code))))
+            JsonReply::error(status, message, Some(code))
         }
-        Err(DiscoveryError::Upstream(error)) => Err(error),
+        Err(DiscoveryError::Upstream(error)) => upstream_error(error),
     }
 }
 
@@ -31,7 +30,7 @@ pub(crate) fn metadata_request(
     state: &ServerState,
     body: &Value,
 ) -> JsonReply {
-    discovery_reply(discovery::metadata(request_id, state, body)).unwrap_or_else(|error| {
+    discovery_reply(discovery::metadata(request_id, state, body), |error| {
         if error.status() == 500 && error.to_string() == "internal server error" {
             EntryError::internal().reply()
         } else {
@@ -70,7 +69,9 @@ pub(crate) fn models_request(
                 .iter()
                 .any(|model| model.get("slug").and_then(Value::as_str) == Some(canonical.as_str()))
         }) {
-            return Ok(catalog_json(&json!({"id":id,"object":"model","created":0})));
+            return Ok(JsonReply::ok_json(
+                &json!({"id":id,"object":"model","created":0}),
+            ));
         }
         return Ok(JsonReply::new(
             404,
@@ -81,14 +82,13 @@ pub(crate) fn models_request(
     if rich {
         let etag = emp_state::catalog_etag(&catalog);
         let catalog = emp_codex::merged_catalog::for_client_version(catalog, client_version);
-        return Ok(
-            catalog_json(&catalog).with_header("ETag", etag.map_err(|_| EntryError::internal())?)
-        );
+        return Ok(JsonReply::ok_json(&catalog)
+            .with_header("ETag", etag.map_err(|_| EntryError::internal())?));
     }
     let models = catalog["models"].as_array().expect("catalog models").iter()
         .filter(|model|model.get("visibility").and_then(Value::as_str).unwrap_or("list")=="list")
         .map(|model|json!({"id":model.get("slug"),"object":"model","created":0,"owned_by":"easy-multi-provider"})).collect::<Vec<_>>();
-    Ok(catalog_json(&json!({"object":"list","data":models})))
+    Ok(JsonReply::ok_json(&json!({"object":"list","data":models})))
 }
 
 pub(crate) fn read_configuration(state: &ServerState) -> JsonReply {
@@ -100,29 +100,18 @@ pub(crate) fn read_configuration(state: &ServerState) -> JsonReply {
     public["provider_balances"] = crate::services::provider_balance::snapshot(state, &config);
     public["provider_quotas"] = crate::services::cpa_quota::snapshot(state, &config);
     public["app_icon"] = state.backend.app_icon.snapshot().metadata();
-    catalog_json(&public)
+    JsonReply::ok_json(&public)
 }
 
-pub(crate) fn provider_models_path(path: &str) -> bool {
-    path.starts_with("/api/providers/") && path.ends_with("/models")
-}
-
-pub(crate) fn provider_models_request(path: &str, state: &ServerState) -> JsonReply {
-    let result = match path
-        .strip_prefix("/api/providers/")
-        .and_then(|path| path.strip_suffix("/models"))
-    {
+pub(crate) fn provider_models_request(id: Option<&str>, state: &ServerState) -> JsonReply {
+    let result = match id {
         Some(id) => discovery::saved_models(state, &percent_decode(id, false)),
         None if state.backend.configuration.read().is_err() => Err(DiscoveryError::Unavailable),
         None => Err(DiscoveryError::Invalid(
             "Subscription account is unavailable".into(),
         )),
     };
-    discovery_reply(result).unwrap_or_else(|_| EntryError::internal().reply())
-}
-
-pub(crate) fn catalog_json(value: &Value) -> JsonReply {
-    JsonReply::new(200, serde_json::to_vec(value).expect("JSON response"))
+    discovery_reply(result, |_| EntryError::internal().reply())
 }
 
 fn metadata_error_response(error: emp_router::RouterError) -> JsonReply {

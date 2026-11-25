@@ -6,10 +6,10 @@ use super::{
     stream::{BodyOutput, StreamConnection},
 };
 use crate::{
-    api::{calls, provider_quota, usage},
+    api::{calls, usage},
     app::ServerState,
     http::request::{Request, query_values},
-    server::{handoff_response, run_blocking, spawn_response_work},
+    server::{handoff_response, spawn_response_work},
     services::{disconnect::DisconnectMonitor, events::sse_frame},
     util::system_now,
 };
@@ -141,10 +141,6 @@ pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/api/usage", get(read_report))
         .route("/api/calls", get(read_report))
-        .route(
-            "/api/providers/{id}/quota-history",
-            get(read_provider_quota),
-        )
 }
 
 async fn read_report(
@@ -218,20 +214,4 @@ async fn read_report(
     }
     hooks.before_response_receive().await;
     response.await.map_err(|_| EntryError::internal())
-}
-
-async fn read_provider_quota(
-    _access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-    request: axum::extract::Request,
-) -> Result<JsonReply, EntryError> {
-    let raw = raw_head(request.extensions())?.clone();
-    run_blocking(move || {
-        let request = raw.request();
-        let id = provider_quota::history_id(request.raw_path()).ok_or(EntryError::NotFound)?;
-        Ok(provider_quota::history(request, &state, id, system_now()))
-    })
-    .await
-    .map_err(|_| EntryError::internal())?
 }

@@ -4,11 +4,8 @@ use super::{
     handoff_response,
     head::GuardedHead,
     http::{
-        accounts::AccountWriteRoute,
-        catalog::CatalogWriteRoute,
         error::{BufferedResponse, EntryWire},
         inference::{BufferedReceipt, InferenceConnection, InferenceRoute},
-        local_writes::LocalWriteRoute,
         proxy::{AdmittedCallback, ConnectionIntake, RequestAccess},
         stream::{Flushed, StreamConnection},
         usage, websocket,
@@ -59,9 +56,6 @@ struct HttpRequestContext {
     websocket_probe: Option<WebSocketDisconnect>,
     inference: Option<Arc<InferenceConnection>>,
     stream: Option<Arc<StreamConnection>>,
-    account_write: Option<AccountWriteRoute>,
-    catalog_write: Option<CatalogWriteRoute>,
-    local_write: Option<LocalWriteRoute>,
 }
 
 type UpgradeSession = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -194,9 +188,6 @@ pub(super) async fn drive_http(
     };
     let request = head.raw.request();
     let responses_upgrade = websocket::is_responses_upgrade(request);
-    let account_write = AccountWriteRoute::for_request(request);
-    let catalog_write = CatalogWriteRoute::for_request(request);
-    let local_write = LocalWriteRoute::for_request(request);
     let inference = InferenceRoute::for_request(request).is_some();
     let report = (request.method == RequestMethod::Get)
         .then(|| usage::Report::for_path(request.raw_path()))
@@ -259,9 +250,6 @@ pub(super) async fn drive_http(
         websocket_probe,
         inference,
         stream,
-        account_write,
-        catalog_write,
-        local_write,
     };
     drive_connection(
         io,
@@ -320,15 +308,6 @@ async fn drive_connection(
     let mode = control.mode;
     let half_close =
         matches!(mode, ServerMode::Recovery) || (http_context.is_some() && !head.account_events);
-    let account_write = http_context
-        .as_ref()
-        .and_then(|request| request.account_write.as_ref());
-    let catalog_write = http_context
-        .as_ref()
-        .and_then(|request| request.catalog_write.as_ref());
-    let local_write = http_context
-        .as_ref()
-        .and_then(|request| request.local_write);
     let report_socket = http_context
         .as_ref()
         .and_then(|request| request.report_socket.as_ref());
@@ -394,15 +373,6 @@ async fn drive_connection(
             request.extensions_mut().insert(context.clone());
             if let Some(delegation) = delegation {
                 request.extensions_mut().insert(delegation.clone());
-            }
-            if let Some(route) = account_write {
-                request.extensions_mut().insert(route.clone());
-            }
-            if let Some(route) = catalog_write {
-                request.extensions_mut().insert(route.clone());
-            }
-            if let Some(route) = local_write {
-                request.extensions_mut().insert(route);
             }
             if let Some(socket) = report_socket {
                 request.extensions_mut().insert(Arc::clone(socket));

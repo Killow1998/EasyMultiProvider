@@ -1,4 +1,5 @@
 use super::{
+    body::JsonBody,
     error::{EntryError, JsonReply},
     proxy::RequestAccess,
     raw_head,
@@ -12,9 +13,9 @@ use crate::server::{connection::ConnectionContext, run_blocking};
 use crate::util::system_now;
 use axum::{
     Extension,
-    extract::{FromRequestParts, State},
+    extract::{FromRequest, FromRequestParts, State},
     http::request::Parts,
-    routing::{MethodRouter, get, post},
+    routing::{MethodFilter, MethodRouter, get, on, post},
 };
 use std::sync::Arc;
 
@@ -107,6 +108,28 @@ pub(super) fn read_route(read: ManagementRead) -> MethodRouter<Arc<ServerState>>
               _session: ManagementSession,
               State(state): State<Arc<ServerState>>| async move {
             run_blocking(move || read(&state))
+                .await
+                .map_err(|_| EntryError::internal())
+        },
+    )
+}
+
+pub(super) fn write_route<T: Send + 'static>(
+    methods: MethodFilter,
+    execute: fn(T, &ServerState, Option<&str>) -> JsonReply,
+) -> MethodRouter<Arc<ServerState>>
+where
+    JsonBody<T>: FromRequest<Arc<ServerState>, Rejection = EntryError>,
+{
+    on(
+        methods,
+        move |access: RequestAccess,
+              _session: ManagementSession,
+              State(state): State<Arc<ServerState>>,
+              Extension(connection): Extension<ConnectionContext>,
+              JsonBody(command): JsonBody<T>| async move {
+            connection.retain_request_access(access);
+            run_blocking(move || execute(command, &state, connection.request_id()))
                 .await
                 .map_err(|_| EntryError::internal())
         },

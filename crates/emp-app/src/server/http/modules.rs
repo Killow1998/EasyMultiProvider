@@ -1,22 +1,18 @@
 use super::{
     body::JsonBody,
     error::{EntryError, HttpReply, JsonReply},
-    management::{ManagementSession, same_origin},
+    management::{read_route, same_origin, write_route},
     proxy::RequestAccess,
     raw_head,
 };
 use crate::{
-    api::modules,
-    app::ServerState,
-    http::request::Request,
-    server::{connection::ConnectionContext, run_blocking},
-    services::modules::Action,
+    app::ServerState, http::request::Request, server::run_blocking, services::modules::Action,
 };
 use axum::{
-    Extension, Router,
+    Router,
     extract::{FromRequest, FromRequestParts, State},
     http::request::Parts,
-    routing::get,
+    routing::{MethodFilter, get},
 };
 use emp_modules::Module;
 use serde::Deserialize;
@@ -78,7 +74,10 @@ impl FromRequestParts<Arc<ServerState>> for ModulePanel {
 }
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
-    let mut router = Router::new().route(PATH, get(read).post(write));
+    let write = write_route(MethodFilter::POST, |action: ModuleAction, state, _| {
+        action.execute(state)
+    });
+    let mut router = Router::new().route(PATH, read_route(module_status).merge(write));
     for module in Module::ALL {
         router = router.route(
             &format!("/assets/module-{}.js", module.id()),
@@ -88,14 +87,12 @@ pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     router
 }
 
-async fn read(
-    _access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-) -> Result<JsonReply, EntryError> {
-    run_blocking(move || modules::read(&state))
-        .await
-        .map_err(|_| EntryError::internal())
+fn module_status(state: &ServerState) -> JsonReply {
+    JsonReply::ok_json(&json!({
+        "modules":state.backend.modules.status(),
+        "migration_allowed":!state.backend.team.migration_restricted(),
+    }))
+    .with_header("Cache-Control", "no-store")
 }
 
 async fn read_panel(
@@ -179,7 +176,7 @@ impl ModuleAction {
                 {
                     crate::services::account_catalog::request_refresh(state, false);
                 }
-                modules::read(state)
+                module_status(state)
             }
             Err(error) => {
                 JsonReply::error(409, "The EMP module could not be changed", Some(&error))
@@ -198,20 +195,4 @@ impl FromRequest<Arc<ServerState>> for JsonBody<ModuleAction> {
         let JsonBody(body) = JsonBody::<Value>::from_request(request, state).await?;
         Ok(Self(ModuleAction::parse(body)?))
     }
-}
-
-async fn write(
-    access: RequestAccess,
-    _session: ManagementSession,
-    State(state): State<Arc<ServerState>>,
-    Extension(connection): Extension<ConnectionContext>,
-    JsonBody(action): JsonBody<ModuleAction>,
-) -> Result<JsonReply, EntryError> {
-    connection.retain_request_access(access);
-    run_blocking(move || {
-        let _connection = connection;
-        action.execute(&state)
-    })
-    .await
-    .map_err(|_| EntryError::internal())
 }
