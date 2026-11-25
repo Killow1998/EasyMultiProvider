@@ -7,7 +7,7 @@ use crate::app::ServerState;
 use crate::services::disconnect::DisconnectRace;
 use crate::services::events::{stream_event_activity, terminal_stream_event};
 use crate::services::providers::save_learned_protocol;
-use crate::services::{activity::ActivityGuard, native};
+use crate::services::{native, request_outcome::RequestGuard};
 use crate::util::random_hex;
 use emp_state::{config::LearnedProtocol, observed_at_now};
 use serde_json::Value;
@@ -18,8 +18,7 @@ pub(super) async fn serve_native(
     turn: &Turn,
     websocket: &mut super::ObservedWebSocket<'_>,
     monitor: &mut crate::services::disconnect::DisconnectMonitor,
-    mut native_turn_activity: Option<ActivityGuard<'_>>,
-    previous_usage: Option<crate::services::request_outcome::RequestGuard<'_>>,
+    previous_usage: Option<RequestGuard<'_>>,
 ) -> TurnResult {
     let Turn {
         route,
@@ -30,14 +29,6 @@ pub(super) async fn serve_native(
         ..
     } = turn;
     let mut sent_output = false;
-    let _activity_guard = native_turn_activity.take().unwrap_or_else(|| {
-        state
-            .backend
-            .activity
-            .begin(crate::services::activity::ActivityIdentity::from_route(
-                route,
-            ))
-    });
     let execution_started = websocket.observation.execution_started();
     let (mut upstream, usage) = match native::open_stream_result_with_monitor(
         state,
@@ -142,13 +133,6 @@ pub(super) async fn serve_external(
         ..
     } = turn;
     let mut sent_output = false;
-    let _activity_guard =
-        state
-            .backend
-            .activity
-            .begin(crate::services::activity::ActivityIdentity::from_route(
-                route,
-            ));
     let (mut upstream, candidate, usage) = match crate::services::external::open_stream_async(
         state,
         route,

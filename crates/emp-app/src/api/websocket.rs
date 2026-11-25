@@ -538,16 +538,15 @@ async fn responses_turns(
             ids,
             scope: request_scope,
         };
-        let (native_turn_activity, native_usage) =
-            if turn.route.dialect == emp_domain::Dialect::CodexNative {
-                match native_session.serve(state, &turn, &mut websocket).await {
-                    NativeTurnResult::Finished => continue,
-                    NativeTurnResult::Closed => return,
-                    NativeTurnResult::HttpFallback(activity, usage) => (activity, usage),
-                }
-            } else {
-                (None, None)
-            };
+        let native_usage = if turn.route.dialect == emp_domain::Dialect::CodexNative {
+            match native_session.serve(state, &turn, &mut websocket).await {
+                NativeTurnResult::Finished => continue,
+                NativeTurnResult::Closed => return,
+                NativeTurnResult::HttpFallback(usage) => usage,
+            }
+        } else {
+            None
+        };
         let body = turn.body.as_object_mut().unwrap();
         body.remove("previous_response_id");
         let generate = body
@@ -571,7 +570,6 @@ async fn responses_turns(
                 &turn,
                 &mut websocket,
                 &mut monitor,
-                native_turn_activity,
                 native_usage.map(|usage| *usage),
             )
             .await

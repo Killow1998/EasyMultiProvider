@@ -34,13 +34,7 @@ pub(crate) fn complete(
     let router = &router;
     let mut outcome =
         RequestGuard::new(state, route, body, incoming, None, "responses").started_at(started);
-    let _activity_guard =
-        state
-            .backend
-            .activity
-            .begin(crate::services::activity::ActivityIdentity::from_route(
-                route,
-            ));
+    outcome.track_route();
     let execution = Execution { state, route, body };
     let (result, candidate) = state.backend.transport.runtime.block_on(execution.run(
         None,
@@ -62,8 +56,6 @@ pub(crate) fn complete(
     Ok(result)
 }
 
-/// Opening retries end here; the HTTP/WS relay takes completion accounting and
-/// owns activity through opening, delivery and cancellation without replaying output.
 pub(crate) fn open_stream<'a>(
     state: &'a ServerState,
     route: &ResolvedRoute,
@@ -94,6 +86,7 @@ pub(crate) async fn open_stream_async<'a>(
     let router = &router;
     let mut outcome =
         RequestGuard::new(state, route, body, incoming, None, "responses").started_at(started);
+    outcome.track_route();
     let (stream, candidate) = Execution { state, route, body }
         .run(monitor, &mut outcome, |candidate| async move {
             router.open_stream(&candidate, body, incoming, ids).await

@@ -129,17 +129,16 @@ fn assert_native_sse_activity_settlement(subscription: bool) {
     };
     let body = json!({"model":model,"input":"hello","stream":true}).to_string();
     let thread_id = "activity-settlement";
-    let socket = open_post_stream(
-        &server,
-        "/v1/responses",
-        body.as_bytes(),
-        &[
-            &session,
-            &authorization,
-            "chatgpt-account-id: caller-owner",
-            &format!("thread-id: {thread_id}"),
-        ],
-    );
+    let thread_header = format!("thread-id: {thread_id}");
+    let mut headers = vec![
+        authorization.as_str(),
+        "chatgpt-account-id: caller-owner",
+        &thread_header,
+    ];
+    if !subscription {
+        headers.push(&session);
+    }
+    let socket = open_post_stream(&server, "/v1/responses", body.as_bytes(), &headers);
     let deadline = Deadline::after(response_timeout());
     let mut upstream = accept_before(&listener, &deadline);
     let observed = receive_native_request(&mut upstream);
@@ -285,6 +284,7 @@ fn native_sse_prewarm_preserves_activity_and_billing_boundaries() {
             &directory,
             server,
             "native/alias",
+            json!("hello"),
             cancelled,
             |downstream, deadline| {
                 let mut upstream = accept_before(&listener, deadline);
@@ -334,7 +334,7 @@ fn native_sse_prewarm_preserves_activity_and_billing_boundaries() {
                         assert!(upstream_closed_before(&upstream, deadline));
                     }
                 }
-                Some(observed.headers["x-emp-request-id"].clone())
+                observed.headers["x-emp-request-id"].clone()
             },
         );
     }
@@ -359,6 +359,7 @@ fn external_sse_prewarm_disconnect_publishes_cancellation_without_billing() {
             &directory,
             server,
             "demo/model",
+            json!("hello"),
             true,
             |downstream, deadline| {
                 let mut upstream = accept_before(&listener, deadline);
@@ -381,7 +382,7 @@ fn external_sse_prewarm_disconnect_publishes_cancellation_without_billing() {
                 if !retry {
                     assert!(upstream_closed_before(&upstream, deadline));
                 }
-                Some(request_id)
+                request_id
             },
         );
     }
@@ -394,16 +395,26 @@ fn claude_cli_sse_prewarm_disconnect_publishes_cancellation_without_billing() {
     use std::process::Command;
 
     const FIXTURE: &str = "EMP_TEST_PREWARM_CLAUDE";
-    if let Some(executable) = std::env::var_os(FIXTURE) {
+    if let Ok(case) = std::env::var(FIXTURE) {
+        let executable = PathBuf::from(std::env::var_os("PATH").unwrap()).join("claude");
         assert_eq!(
             emp_codex::installed_cli::resolve_claude_cli()
                 .unwrap()
                 .executable,
-            PathBuf::from(&executable)
+            executable
         );
+        let input = match case.as_str() {
+            "plain" => json!("hello"),
+            "compaction" => json!([
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
+                {"type":"compaction_trigger"}
+            ]),
+            _ => panic!("unknown Claude prewarm case: {case}"),
+        };
         let directory = emp_test_support::fixture_dir().unwrap();
+        let root = canonical_root(&directory);
         let server = prewarm_provider_server(
-            &canonical_root(&directory),
+            &root,
             json!({
                 "id":"demo","base_url":"http://127.0.0.1:1/v1",
                 "protocol":"anthropic_messages","auth_mode":"anthropic_api_key","api_key":"fixture",
@@ -414,42 +425,55 @@ fn claude_cli_sse_prewarm_disconnect_publishes_cancellation_without_billing() {
             &directory,
             server,
             "demo/model",
+            input,
             true,
             |downstream, deadline| {
-                let ready = PathBuf::from(executable).with_extension("ready");
+                let ready = executable.with_extension("ready");
                 wait_for(deadline, || ready.is_file());
+                let mut request_id = None;
+                wait_for(deadline, || {
+                    request_id =
+                        crate::tests::internal_events_contract::live_journal_until(&root, deadline)
+                            .iter()
+                            .find(|record| record["event"] == "model_prewarm_started")
+                            .and_then(|record| record["fields"]["request_id"].as_str())
+                            .map(str::to_owned);
+                    request_id.is_some()
+                });
                 drop(downstream);
-                None
+                request_id.unwrap()
             },
         );
         return;
     }
 
-    let directory = emp_test_support::fixture_dir().unwrap();
-    let root = canonical_root(&directory);
-    let executable = root.join("claude");
-    std::fs::write(
-        &executable,
-        b"#!/bin/sh\n: > \"$0.ready\"\nwhile IFS= read -r line; do :; done\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command.args([
-        "--exact",
-        "tests::native_api_contract::sse::claude_cli_sse_prewarm_disconnect_publishes_cancellation_without_billing",
-    ]).env(FIXTURE, &executable).env("PATH", &root);
-    let output = emp_test_support::OwnedChild::output(
-        command,
-        Deadline::after(response_timeout() + response_timeout()),
-    )
-    .unwrap();
-    assert!(
-        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    for case in ["plain", "compaction"] {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = canonical_root(&directory);
+        let executable = root.join("claude");
+        std::fs::write(
+            &executable,
+            b"#!/bin/sh\n: > \"$0.ready\"\nwhile IFS= read -r line; do :; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--exact",
+            "tests::native_api_contract::sse::claude_cli_sse_prewarm_disconnect_publishes_cancellation_without_billing",
+        ]).env(FIXTURE, case).env("PATH", &root);
+        let output = emp_test_support::OwnedChild::output(
+            command,
+            Deadline::after(response_timeout() + response_timeout()),
+        )
+        .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{case}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 fn prewarm_provider_server(root: &Path, provider: Value) -> ServerHandle {
@@ -479,14 +503,15 @@ fn assert_prewarm_outcome(
     directory: &TempDir,
     server: ServerHandle,
     model: &str,
+    input: Value,
     cancelled: bool,
-    exercise: impl FnOnce(TcpStream, &Deadline) -> Option<String>,
+    exercise: impl FnOnce(TcpStream, &Deadline) -> String,
 ) {
     let db = settlement_db(&canonical_root(directory), &server);
     let session = session_header(&server);
     let mut events = open_quota_events(&server, &session);
     let deadline = Deadline::after(response_timeout());
-    let body = json!({"model":model,"input":"hello","generate":false,"stream":true}).to_string();
+    let body = json!({"model":model,"input":input,"generate":false,"stream":true}).to_string();
     let downstream = open_post_stream(
         &server,
         "/v1/responses",
@@ -504,13 +529,11 @@ fn assert_prewarm_outcome(
     assert_eq!(
         requests.len(),
         usize::from(cancelled),
-        "{model} prewarm activity after request ended: {requests:?}"
+        "{model} prewarm activity at the first finished route snapshot: {requests:?}"
     );
     if cancelled {
         let activity = &requests[0];
-        if let Some(request_id) = request_id {
-            assert_eq!(activity["request_id"], request_id);
-        }
+        assert_eq!(activity["request_id"], request_id);
         assert_eq!(activity["model_id"], model);
         assert_eq!(activity["state"], "cancelled");
         assert_eq!(activity["error_class"], "client_disconnect");

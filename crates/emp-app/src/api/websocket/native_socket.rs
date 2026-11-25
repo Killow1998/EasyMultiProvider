@@ -5,7 +5,7 @@ use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
 use crate::services::native_connections::RouteKey;
 use crate::services::observation::continuation::ContinuationReason;
-use crate::services::{activity::ActivityGuard, native};
+use crate::services::{native, request_outcome::RequestGuard};
 use crate::util::random_hex;
 use emp_transport::{AsyncClientWebSocket, FailureClass, WebSocketEvent};
 use serde_json::Value;
@@ -32,10 +32,7 @@ pub(super) struct NativeSession {
 pub(super) enum NativeTurnResult<'a> {
     Finished,
     Closed,
-    HttpFallback(
-        Option<ActivityGuard<'a>>,
-        Option<Box<crate::services::request_outcome::RequestGuard<'a>>>,
-    ),
+    HttpFallback(Option<Box<RequestGuard<'a>>>),
 }
 
 impl NativeSession {
@@ -58,7 +55,6 @@ impl NativeSession {
             scope: request_scope,
             ..
         } = turn;
-        let mut native_turn_activity = None;
         let mut fallback_usage = None;
         let (mut plan, native_account) = match tokio::task::block_in_place(|| {
             native::websocket_plan(state, route, config, request_body, request_headers)
@@ -123,7 +119,7 @@ impl NativeSession {
             let traffic_before = client.traffic();
             let compression = client.compression_enabled();
             let mut idle_deadline = Instant::now() + UPSTREAM_IDLE;
-            let mut usage = crate::services::request_outcome::RequestGuard::new(
+            let mut usage = RequestGuard::new(
                 state,
                 route,
                 request_body,
@@ -134,9 +130,7 @@ impl NativeSession {
             .started_at(websocket.observation.execution_started())
             .transport("websocket");
             usage.native_credentials(route, &plan.headers, native_account.as_deref());
-            native_turn_activity = Some(state.backend.activity.begin(
-                crate::services::activity::ActivityIdentity::from_route(route),
-            ));
+            usage.track_route();
             let payload = if let Some(prefill) = prefill::Prefill::plan(&plan.payload, &plan.url) {
                 let result = prefill
                     .run(
@@ -419,7 +413,7 @@ impl NativeSession {
         }
         *fallback_active = true;
         websocket.observation.native_continuation().http_fallback = true;
-        NativeTurnResult::HttpFallback(native_turn_activity, fallback_usage)
+        NativeTurnResult::HttpFallback(fallback_usage)
     }
 }
 

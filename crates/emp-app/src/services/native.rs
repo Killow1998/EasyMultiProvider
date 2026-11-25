@@ -102,7 +102,11 @@ pub(crate) async fn open_stream_result_with_monitor<'a>(
     let websocket_started = fallback.as_ref().map(|fallback| fallback.execution_started);
     let mut usage = fallback
         .and_then(|fallback| fallback.previous_usage)
-        .unwrap_or_else(|| RequestGuard::new(state, route, body, incoming, None, "responses"));
+        .unwrap_or_else(|| {
+            let mut usage = RequestGuard::new(state, route, body, incoming, None, "responses");
+            usage.track_route();
+            usage
+        });
     let result = {
         let receipt = Mutex::new(&mut usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();
@@ -187,6 +191,9 @@ fn buffered(
     operation: &str,
 ) -> Result<NativeCompleteResponse, NativeHttpError> {
     let mut usage = RequestGuard::new(state, route, body, incoming, None, operation);
+    if operation == "responses" {
+        usage.track_route();
+    }
     let result = {
         let receipt = Mutex::new(&mut usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();

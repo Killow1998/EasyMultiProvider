@@ -112,9 +112,7 @@ pub(crate) fn execute<'a>(
         let (compacted, candidate) = if crate::services::claude_cli::selected(&route) {
             let summary_body = crate::services::compaction::compaction_summary_body(&body);
             let mut monitor = downstream.disconnect().ok();
-            let _activity_guard = state.backend.activity.begin(
-                crate::services::activity::ActivityIdentity::from_route(&route),
-            );
+            usage.track_route();
             match crate::services::claude_cli::execute_complete(
                 state,
                 &route,
@@ -210,13 +208,6 @@ pub(crate) fn execute<'a>(
     if crate::services::claude_cli::selected(&route) {
         let started = std::time::Instant::now();
         let mut monitor = downstream.disconnect().ok();
-        let _activity_guard =
-            state
-                .backend
-                .activity
-                .begin(crate::services::activity::ActivityIdentity::from_route(
-                    &route,
-                ));
         let mut usage = crate::services::request_outcome::RequestGuard::new(
             state,
             &route,
@@ -226,6 +217,7 @@ pub(crate) fn execute<'a>(
             "responses",
         )
         .started_at(started);
+        usage.track_route();
         let mut downstream =
             stream_requested.then(|| ObservedSse::new(downstream, observation, &incoming));
         let mut live =
@@ -300,14 +292,6 @@ pub(crate) fn execute<'a>(
     }
     let native = route.dialect == emp_domain::Dialect::CodexNative;
     let streaming = body.get("stream").is_some_and(json_truthy);
-    let _activity = (native || streaming).then(|| {
-        state
-            .backend
-            .activity
-            .begin(crate::services::activity::ActivityIdentity::from_route(
-                &route,
-            ))
-    });
     if streaming {
         let downstream = ObservedSse::new(downstream, observation, &incoming);
         let result = if native {

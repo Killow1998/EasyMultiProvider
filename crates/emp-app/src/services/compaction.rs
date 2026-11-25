@@ -204,15 +204,12 @@ pub(crate) fn external_compaction_response(
 ) -> Result<(Value, ResolvedRoute), CompactionError> {
     let summary_body = compaction_summary_body(body);
     let candidates = protocol_candidates(route);
-    let mut activity_guard = None;
     for (index, protocol) in candidates.iter().copied().enumerate() {
         let candidate = route
             .with_protocol(protocol)
             .map_err(CompactionError::Route)?;
-        if activity_guard.is_none() {
-            activity_guard = Some(state.backend.activity.begin(
-                crate::services::activity::ActivityIdentity::from_route(route),
-            ));
+        if index == 0 {
+            usage.track_route();
         }
         match execute_summary_request(
             state,

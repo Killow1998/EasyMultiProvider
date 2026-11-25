@@ -1,4 +1,4 @@
-use super::activity::{ActivityIdentity, ActivityService};
+use super::activity::{ActivityGuard, ActivityIdentity, ActivityService};
 use super::request_facts;
 use crate::app::ServerState;
 use crate::services::observation::diagnostics::schema;
@@ -6,6 +6,7 @@ use emp_domain::ResolvedRoute;
 use emp_state::usage::{account_owner, reported_usage};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Instant;
 mod execution;
 mod performance;
@@ -20,6 +21,12 @@ pub(crate) fn profile_request_bytes(body: &Value) -> usize {
 pub(crate) struct RequestGuard<'a> {
     services: CompletionServices<'a>,
     pending: Option<PendingRequest>,
+    route_activity: Option<RequestActivity<'a>>,
+}
+
+enum RequestActivity<'a> {
+    Route { _guard: ActivityGuard<'a> },
+    History { _guard: Arc<ActivityGuard<'a>> },
 }
 
 struct PendingRequest {
@@ -227,7 +234,25 @@ impl<'a> RequestGuard<'a> {
         Self {
             services,
             pending: Some(pending),
+            route_activity: None,
         }
+    }
+
+    pub(crate) fn track_route(&mut self) {
+        let identity = self.pending_mut().identity.clone();
+        self.route_activity = Some(RequestActivity::Route {
+            _guard: self.services.activity.begin(identity),
+        });
+    }
+
+    pub(super) fn track_history_route(&mut self, batch: &mut Option<Arc<ActivityGuard<'a>>>) {
+        let guard = batch.get_or_insert_with(|| {
+            let identity = self.pending_mut().identity.clone();
+            Arc::new(self.services.activity.begin(identity))
+        });
+        self.route_activity = Some(RequestActivity::History {
+            _guard: Arc::clone(guard),
+        });
     }
 
     fn pending_mut(&mut self) -> &mut PendingRequest {
@@ -394,7 +419,10 @@ impl<'a> RequestGuard<'a> {
 
     pub(crate) fn finish(&mut self) {
         if let Some(pending) = self.pending.take() {
-            tokio::task::block_in_place(|| finish_request(&self.services, pending.freeze()));
+            let route_activity = self.route_activity.take();
+            tokio::task::block_in_place(|| {
+                finish_request(&self.services, pending.freeze(), route_activity)
+            });
         }
     }
 }

@@ -90,7 +90,7 @@ pub(crate) struct ActivityService {
     events: Arc<ManagementEvents>,
 }
 
-pub(crate) struct ActivityGuard<'a> {
+pub(super) struct ActivityGuard<'a> {
     service: &'a ActivityService,
     identity: Option<ActivityIdentity>,
 }
@@ -113,9 +113,7 @@ impl ActivityService {
         }
     }
 
-    /// Begin tracking one dispatched upstream request. The caller owns this
-    /// guard through response completion, stream termination, or cancellation.
-    pub(crate) fn begin<'a>(&'a self, identity: Option<ActivityIdentity>) -> ActivityGuard<'a> {
+    pub(super) fn begin(&self, identity: Option<ActivityIdentity>) -> ActivityGuard<'_> {
         let identity = identity.filter(|identity| {
             valid_public_id(&identity.model_id)
                 && identity.provider_id.as_deref().is_none_or(valid_public_id)

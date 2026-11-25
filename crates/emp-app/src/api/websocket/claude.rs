@@ -39,13 +39,6 @@ pub(super) async fn serve(
             ids,
             ..
         } = turn;
-        let _activity =
-            state
-                .backend
-                .activity
-                .begin(crate::services::activity::ActivityIdentity::from_route(
-                    &route,
-                ));
         let mut usage = crate::services::request_outcome::RequestGuard::new(
             &state,
             &route,
@@ -56,6 +49,7 @@ pub(super) async fn serve(
         )
         .started_at(started)
         .transport("websocket");
+        usage.track_route();
         let mut live = crate::api::claude_stream::LiveText::new(&ids, true, |event: &Value| {
             let (acknowledge, receipt) = oneshot::channel();
             events

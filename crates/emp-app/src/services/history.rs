@@ -131,7 +131,7 @@ pub(crate) fn prepare_destination_context(
         return Err(DestinationPrepareError::Context(assessment.into()));
     };
     let mut summary_failure = None;
-    let mut activity_guard = None;
+    let mut summary_activity = None;
     let lineage = body
         .as_object()
         .and_then(|root| emp_context::request_history_anchor(root, incoming).ok())
@@ -166,11 +166,6 @@ pub(crate) fn prepare_destination_context(
             let mut summary_headers = incoming.clone();
             summary_headers.retain(|name, _| !name.eq_ignore_ascii_case("x-emp-request-id"));
             summary_headers.insert("x-emp-request-id".into(), request_id);
-            if activity_guard.is_none() {
-                activity_guard = Some(state.backend.activity.begin(
-                    crate::services::activity::ActivityIdentity::from_route(&candidate),
-                ));
-            }
             let mut usage = crate::services::request_outcome::RequestGuard::new(
                 state,
                 &candidate,
@@ -179,6 +174,7 @@ pub(crate) fn prepare_destination_context(
                 None,
                 "history_summary",
             );
+            usage.track_history_route(&mut summary_activity);
             match crate::services::compaction::execute_summary_request(
                 state,
                 &candidate,
