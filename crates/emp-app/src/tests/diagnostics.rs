@@ -5,7 +5,7 @@ use serde_json::json;
 #[test]
 fn model_checks_do_not_evict_conversation_samples_after_restart() {
     let root = emp_test_support::fixture_dir().unwrap();
-    let diagnostics = Diagnostics::new(root.path());
+    let diagnostics = super::attached_diagnostics(root.path());
     diagnostics.record(&json!({"route":"responses", "request_id":"0123456789abcdef"}));
     for index in 0..600 {
         if index == 300 {

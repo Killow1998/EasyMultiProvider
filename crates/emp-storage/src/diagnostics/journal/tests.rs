@@ -13,13 +13,22 @@ fn hold_event(gate: &EventGate, name: &'static str) -> (Receiver<()>, Sender<()>
     (writing, resume)
 }
 
+fn channel(directory: PathBuf) -> (Journal, Receiver<Command>) {
+    let journal = Journal::new(directory);
+    let receiver = journal.queue.lock().unwrap().pending.take().unwrap();
+    (journal, receiver)
+}
+
 #[test]
 fn full_queue_attaches_loss_to_next_admitted_event_and_flush() {
     let directory = emp_test_support::fixture_dir().unwrap();
-    let journal = Journal::new(directory.path().canonicalize().unwrap().join("logs"));
+    let root = directory.path().canonicalize().unwrap();
+    let mut journal = Journal::new(root.join("logs"));
     let timeout = test_timeout(Duration::from_secs(5));
     let (writing, resume) = hold_event(&journal.event_gates.before_write, "first");
     journal.event("info", "first", &Value::Null);
+    assert!(!journal.directory.exists());
+    journal.attach(Arc::new(ServiceOwner::acquire(&root).unwrap()));
     writing.recv_timeout(timeout).unwrap();
 
     let (draining, finish) = hold_event(&journal.event_gates.before_write, "queued");
@@ -70,7 +79,7 @@ fn full_queue_attaches_loss_to_next_admitted_event_and_flush() {
 #[test]
 fn disconnected_writer_counts_drops_until_flush() {
     let directory = emp_test_support::fixture_dir().unwrap();
-    let (journal, receiver) = Journal::channel(directory.path().canonicalize().unwrap());
+    let (journal, receiver) = channel(directory.path().canonicalize().unwrap());
     drop(receiver);
     journal.event("info", "first", &Value::Null);
     journal.event("info", "second", &Value::Null);
@@ -86,7 +95,7 @@ fn disconnected_writer_counts_drops_until_flush() {
 #[test]
 fn disconnect_before_dequeue_reports_the_accepted_record() {
     let directory = emp_test_support::fixture_dir().unwrap();
-    let (journal, receiver) = Journal::channel(directory.path().to_owned());
+    let (journal, receiver) = channel(directory.path().to_owned());
     let writer = Observation::spawn(move |probe| {
         probe.observe(|_| drop(receiver));
     });
@@ -106,7 +115,7 @@ fn disconnect_before_dequeue_reports_the_accepted_record() {
 #[test]
 fn disconnect_before_flush_receipt_reports_unsettled_records() {
     let directory = emp_test_support::fixture_dir().unwrap();
-    let (journal, receiver) = Journal::channel(directory.path().to_owned());
+    let (journal, receiver) = channel(directory.path().to_owned());
     let journal = Arc::new(journal);
     let writer = Observation::spawn(move |probe| {
         probe.observe(|deadline| {
@@ -142,11 +151,12 @@ fn disconnect_before_flush_receipt_reports_unsettled_records() {
 #[test]
 fn stopped_writer_counts_the_failed_record_and_later_records() {
     let directory = emp_test_support::fixture_dir().unwrap();
-    let logs = directory.path().canonicalize().unwrap().join("logs");
+    let root = directory.path().canonicalize().unwrap();
+    let logs = root.join("logs");
     std::fs::create_dir(&logs).unwrap();
-    let (journal, receiver) = Journal::channel(logs);
+    let (journal, receiver) = channel(logs);
     let mut writer = Writer::new(
-        journal.directory.clone(),
+        Arc::new(ServiceOwner::acquire(&root).unwrap()),
         journal.run_id.clone(),
         journal.event_gates.clone(),
     );
@@ -168,9 +178,10 @@ fn stopped_writer_counts_the_failed_record_and_later_records() {
 #[test]
 fn concurrent_events_stamp_in_admission_order() {
     let directory = emp_test_support::fixture_dir().unwrap();
-    let journal = Arc::new(Journal::new(
-        directory.path().canonicalize().unwrap().join("logs"),
-    ));
+    let root = directory.path().canonicalize().unwrap();
+    let mut journal = Journal::new(root.join("logs"));
+    journal.attach(Arc::new(ServiceOwner::acquire(&root).unwrap()));
+    let journal = Arc::new(journal);
     let first = Arc::clone(&journal);
     let producer = Observation::spawn(move |probe| {
         probe.observe(|_| first.event("info", "first_to_redact", &Value::Null));

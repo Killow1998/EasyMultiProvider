@@ -240,7 +240,8 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     assert_eq!(status["command_id"], 1);
     assert_eq!(status["acknowledged"], 0);
     assert_eq!(status["completed"], 0);
-    let workers = crate::services::usage::workers(&server.state).unwrap();
+    let mut workers = Vec::new();
+    crate::services::usage::workers(&server.state, &mut workers).unwrap();
     let completed = loop {
         let frame = read_sse_frame(&mut reader);
         if frame.contains("event: usage-updated") {

@@ -10,6 +10,7 @@ mod windows;
 use crate::app::ServerState;
 use crate::error::AppError;
 use crate::http::auth::codex_auth_path;
+use emp_storage::diagnostics::ServiceOwner;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,7 +21,7 @@ pub(crate) struct ServerHandle {
     pub(crate) state: Arc<ServerState>,
     listener: Option<JoinHandle<Result<(), crate::server::ServeError>>>,
     workers: Vec<JoinHandle<()>>,
-    _service_owner: emp_state::IntegrationFileLock,
+    service_owner: Arc<ServiceOwner>,
 }
 
 #[derive(Clone, Default)]
@@ -30,6 +31,15 @@ struct UpdateStartupMarkers {
 }
 
 impl ServerHandle {
+    fn confirm_worker_startup_failure(&self, fields: &serde_json::Value) {
+        self.state.request_shutdown();
+        self.state
+            .backend
+            .diagnostics
+            .journal
+            .event_and_flush_blocking("warning", "startup_failure", fields);
+    }
+
     fn spawn_worker(
         &mut self,
         name: &str,
@@ -126,14 +136,11 @@ pub(crate) fn run_server(
             .set_listener(host, server.local_addr.port())
             .map_err(|_| AppError::ServerStopped)?;
         server.reconcile_startup();
-        let usage_workers = crate::services::usage::workers(&server.state)?;
-        server.workers.extend(usage_workers);
+        crate::services::usage::workers(&server.state, &mut server.workers)?;
         Ok::<(), AppError>(())
     })();
     if let Err(error) = prepared {
-        server.state.backend.diagnostics.journal.event(
-            "warning",
-            "startup_failure",
+        server.confirm_worker_startup_failure(
             &serde_json::json!({"stage":"background_workers", "error_class":"startup_error"}),
         );
         let _ = server.shutdown_with_handoff(false, || drop(signals));

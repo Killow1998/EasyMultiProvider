@@ -91,7 +91,7 @@ impl ServerHandle {
                     },
                 }),
             );
-        drop(self._service_owner);
+        drop(self.service_owner);
         result
     }
 

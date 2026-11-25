@@ -1,7 +1,29 @@
 mod journal;
 use emp_domain::MODEL_TEST_OPERATIONS;
+use emp_files::{IntegrationFileLock, LockError};
 pub use journal::Journal;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 const PROBE_CAPACITY: usize = 64;
+
+pub struct ServiceOwner {
+    state_root: PathBuf,
+    _lock: IntegrationFileLock,
+}
+
+impl ServiceOwner {
+    pub fn acquire(state_root: &Path) -> Result<Self, LockError> {
+        let lock = IntegrationFileLock::acquire(
+            &state_root.join("service.lock"),
+            Duration::ZERO,
+            Duration::ZERO,
+        )?;
+        Ok(Self {
+            state_root: state_root.to_owned(),
+            _lock: lock,
+        })
+    }
+}
 
 pub fn is_probe(operation: &str) -> bool {
     matches!(

@@ -116,7 +116,6 @@ pub(crate) fn compaction_error_response(error: CompactionError) -> Option<HttpRe
 
 #[cfg(test)]
 mod tests {
-    use crate::services::observation::diagnostics::Diagnostics;
     use serde_json::Value;
     use std::sync::Arc;
     #[test]
@@ -130,7 +129,7 @@ mod tests {
             if disabled {
                 std::fs::write(path.join("logs"), "block journal directory").unwrap();
             }
-            let diagnostics = Arc::new(Diagnostics::new(&path));
+            let diagnostics = crate::tests::attached_diagnostics(&path);
             let mut receipt = RequestObservation::new(
                 Arc::clone(&diagnostics),
                 Some("0123456789abcdef".into()),

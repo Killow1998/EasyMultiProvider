@@ -116,12 +116,26 @@ fn second_service_for_the_same_configuration_is_rejected() {
         .output()
         .expect("run contender");
     assert_eq!(contender.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&contender.stderr);
     assert!(
-        String::from_utf8_lossy(&contender.stderr)
-            .contains("another EMP service owns this configuration"),
-        "{}",
-        String::from_utf8_lossy(&contender.stderr)
+        stderr.contains("another EMP service owns this configuration"),
+        "{stderr}"
     );
+    let summary: Vec<Value> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("EMP startup diagnostic: "))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(summary.len(), 3, "{stderr}");
+    for (record, (name, level)) in summary.iter().zip([
+        ("process_start", "info"),
+        ("descriptor_budget", "info"),
+        ("startup_failure", "warning"),
+    ]) {
+        assert_eq!(record["event"], name);
+        assert_eq!(record["level"], level);
+    }
+    assert_eq!(summary[2]["fields"], json!({"error_class":"service_owned"}));
     assert_eq!(
         std::fs::read(&workspace.config_path).expect("config"),
         before

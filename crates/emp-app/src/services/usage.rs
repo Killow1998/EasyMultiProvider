@@ -129,7 +129,10 @@ impl UsageState {
     }
 }
 
-pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandle<()>>> {
+pub(crate) fn workers(
+    state: &Arc<ServerState>,
+    started: &mut Vec<JoinHandle<()>>,
+) -> std::io::Result<()> {
     let history_state = Arc::clone(state);
     let history = std::thread::Builder::new()
         .name("emp-usage-history".into())
@@ -183,6 +186,7 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
                 &json!({"worker":"usage_history"}),
             )
         })?;
+    started.push(history);
     let price_state = Arc::clone(state);
     let prices = std::thread::Builder::new()
         .name("emp-api-prices".into())
@@ -216,21 +220,16 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
                     usage.wait_for_prices(&price_state, 3600.0);
                 }
             }
-        });
-    let prices = match prices {
-        Ok(worker) => worker,
-        Err(error) => {
+        })
+        .inspect_err(|_| {
             state.backend.diagnostics.journal.event(
                 "warning",
                 "worker_spawn_failed",
                 &json!({"worker":"price_refresh"}),
             );
-            state.backend.usage.stop();
-            let _ = history.join();
-            return Err(error);
-        }
-    };
-    Ok(vec![history, prices])
+        })?;
+    started.push(prices);
+    Ok(())
 }
 fn refresh_prices(state: &ServerState) -> bool {
     let started = std::time::Instant::now();

@@ -100,9 +100,8 @@ mod tests {
     #[test]
     fn unavailable_journal_and_mismatches_never_change_or_repeat_execution() {
         let root = emp_test_support::fixture_dir().unwrap();
-        let blocked = root.path().join("not-a-directory");
-        std::fs::write(&blocked, b"fixture").unwrap();
-        let diagnostics = Arc::new(Diagnostics::new(&blocked));
+        std::fs::write(root.path().join("logs"), b"fixture").unwrap();
+        let diagnostics = crate::tests::attached_diagnostics(root.path());
         let mut executions = 0;
         let result: Result<usize, &str> = observe(&diagnostics, None, "fixture", |receipt| {
             receipt.check("expected_matches_actual", Some(false));

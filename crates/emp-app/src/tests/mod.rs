@@ -104,6 +104,20 @@ fn canonical_root(directory: &TempDir) -> PathBuf {
         .expect("canonical temporary root")
 }
 
+pub(crate) fn attached_diagnostics(
+    state_root: &Path,
+) -> Arc<crate::services::observation::diagnostics::Diagnostics> {
+    use crate::services::observation::diagnostics::Diagnostics;
+    use emp_storage::diagnostics::ServiceOwner;
+
+    let state_root = state_root.canonicalize().unwrap();
+    let mut diagnostics = Diagnostics::new(&state_root);
+    diagnostics
+        .journal
+        .attach(Arc::new(ServiceOwner::acquire(&state_root).unwrap()));
+    Arc::new(diagnostics)
+}
+
 /// Existing imported-account fixtures must own a key before startup validates them.
 fn credential_root(directory: &TempDir) -> PathBuf {
     let root = canonical_root(directory);

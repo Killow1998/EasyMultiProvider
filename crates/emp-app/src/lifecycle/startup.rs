@@ -10,11 +10,14 @@ use crate::util::system_now;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use emp_state::{WEB_SESSION_TOKEN_BYTES, load_or_create_web_session, web_session_path};
+use emp_storage::diagnostics::ServiceOwner;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
+
+#[cfg(test)]
+mod tests;
 
 struct StartupContext<'a> {
     host: IpAddr,
@@ -213,14 +216,20 @@ impl ServerHandle {
     }
 
     fn start_with_config_options_inner(context: StartupContext<'_>) -> Result<Self, AppError> {
+        Self::start_with_workers(context, Self::spawn_workers)
+    }
+
+    fn start_with_workers(
+        context: StartupContext<'_>,
+        spawn_workers: impl FnOnce(&mut Self, bool) -> Result<(), AppError>,
+    ) -> Result<Self, AppError> {
         let budget = super::resources::prepare();
         let config_path = emp_state::config::resolve_user_path(context.config_path);
-        let diagnostics = Arc::new(Diagnostics::new(
-            &config_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join("state"),
-        ));
+        let state_root = config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("state");
+        let mut diagnostics = Diagnostics::new(&state_root);
         diagnostics.journal.event(
             "info",
             "process_start",
@@ -236,40 +245,59 @@ impl ServerHandle {
                 "raised":budget.raised,"os_error":budget.os_error,
             }),
         );
-        let record_failure = |error: &AppError| {
-            diagnostics.journal.event_and_flush_blocking(
+        let owner = if is_loopback(context.host) {
+            ServiceOwner::acquire(&state_root).map_err(|_| AppError::ServiceOwned)
+        } else {
+            Err(AppError::HostNotLoopback)
+        };
+        let owner = Arc::new(owner.inspect_err(|error| {
+            diagnostics.journal.close_with_event_blocking(
                 "warning",
                 "startup_failure",
-                &serde_json::json!({
-                    "error_class":match error {
-                        AppError::HostNotLoopback => "host_not_loopback",
-                        AppError::ServiceOwned => "service_owned",
-                        AppError::WebSession(_) => "web_session_error",
-                        AppError::Config(_) => "config_error",
-                        AppError::Filesystem(_) => "filesystem_error",
-                        AppError::Io(_) => "io_error",
-                        AppError::Transport(_) => "transport_error",
-                        AppError::RequestLimits(_) => "request_limits_error",
-                        AppError::RandomUnavailable => "random_unavailable",
-                        _ => "startup_error",
-                    },
-                }),
+                &startup_error_fields(error),
             );
+        })?);
+        diagnostics.journal.attach(Arc::clone(&owner));
+        let diagnostics = Arc::new(diagnostics);
+        let context = StartupContext {
+            config_path: &config_path,
+            admission: budget.admission(context.admission),
+            ..context
         };
         let enable_catalog_refresh_worker = context.enable_catalog_refresh_worker;
         let (mut handle, listener) =
-            Self::start_recorded(context, Arc::clone(&diagnostics)).inspect_err(record_failure)?;
-        if let Err(error) = handle.start_workers(listener, enable_catalog_refresh_worker) {
-            record_failure(&error);
+            Self::start_recorded(context, Arc::clone(&diagnostics), Arc::clone(&owner))
+                .inspect_err(|error| {
+                    diagnostics.journal.close_with_event_blocking(
+                        "warning",
+                        "startup_failure",
+                        &startup_error_fields(error),
+                    );
+                })?;
+        let started = listener
+            .start(Arc::clone(&handle.state))
+            .map_err(AppError::Io)
+            .and_then(|listener| {
+                handle.listener = Some(listener);
+                spawn_workers(&mut handle, enable_catalog_refresh_worker)
+            });
+        if let Err(error) = started {
+            handle.confirm_worker_startup_failure(&startup_error_fields(&error));
             let _ = handle.shutdown();
             return Err(error);
         }
+        diagnostics.journal.event(
+            "info",
+            "service_listening",
+            &serde_json::json!({"port": handle.local_addr.port()}),
+        );
         Ok(handle)
     }
 
     fn start_recorded(
         context: StartupContext<'_>,
         diagnostics: Arc<Diagnostics>,
+        service_owner: Arc<ServiceOwner>,
     ) -> Result<(Self, HttpListener), AppError> {
         let StartupContext {
             host,
@@ -285,21 +313,6 @@ impl ServerHandle {
             external_key,
             official_models,
         } = context;
-        let admission = super::resources::prepare().admission(admission);
-        if !is_loopback(host) {
-            return Err(AppError::HostNotLoopback);
-        }
-        let resolved_config = emp_state::config::resolve_user_path(config_path);
-        let config_path = resolved_config.as_path();
-        let service_owner = emp_state::IntegrationFileLock::acquire(
-            &config_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join("state/service.lock"),
-            Duration::ZERO,
-            Duration::from_millis(20),
-        )
-        .map_err(|_| AppError::ServiceOwned)?;
         let now = system_now();
         let session_path = web_session_path(config_path)?;
         let session =
@@ -384,17 +397,12 @@ impl ServerHandle {
             state,
             listener: None,
             workers: Vec::new(),
-            _service_owner: service_owner,
+            service_owner,
         };
         Ok((handle, listener))
     }
 
-    fn start_workers(
-        &mut self,
-        listener: HttpListener,
-        enable_catalog_refresh_worker: bool,
-    ) -> Result<(), AppError> {
-        self.listener = Some(listener.start(self.state.clone())?);
+    fn spawn_workers(&mut self, enable_catalog_refresh_worker: bool) -> Result<(), AppError> {
         if enable_catalog_refresh_worker {
             self.spawn_worker("emp-catalog-refresh", |state| {
                 crate::services::account_catalog::run_refresh_worker(&state);
@@ -412,11 +420,21 @@ impl ServerHandle {
         })?;
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         self.spawn_worker("emp-heap-reclaim", super::memory::run)?;
-        self.state.backend.diagnostics.journal.event(
-            "info",
-            "service_listening",
-            &serde_json::json!({"port": self.local_addr.port()}),
-        );
         Ok(())
     }
+}
+
+fn startup_error_fields(error: &AppError) -> serde_json::Value {
+    serde_json::json!({"error_class": match error {
+        AppError::HostNotLoopback => "host_not_loopback",
+        AppError::ServiceOwned => "service_owned",
+        AppError::WebSession(_) => "web_session_error",
+        AppError::Config(_) => "config_error",
+        AppError::Filesystem(_) => "filesystem_error",
+        AppError::Io(_) => "io_error",
+        AppError::Transport(_) => "transport_error",
+        AppError::RequestLimits(_) => "request_limits_error",
+        AppError::RandomUnavailable => "random_unavailable",
+        _ => "startup_error",
+    }})
 }

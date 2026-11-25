@@ -1,4 +1,5 @@
 //! Private rotating JSONL diagnostics; journal failures never stop routing.
+use super::ServiceOwner;
 pub use emp_domain::redaction::redact_sensitive_text;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -151,6 +152,7 @@ enum Action {
 
 #[derive(Default)]
 struct QueueState {
+    pending: Option<Receiver<Command>>,
     closed: bool,
     pending_events: usize,
     rejected: usize,
@@ -198,6 +200,11 @@ impl Event {
             name,
             fields,
         }
+    }
+
+    fn write_summary(&self, stderr: &mut impl Write) -> bool {
+        let summary = json!({"level":self.level,"event":self.name,"fields":self.fields});
+        writeln!(stderr, "EMP startup diagnostic: {summary}").is_ok()
     }
 }
 
@@ -278,27 +285,32 @@ pub struct Journal {
 }
 
 impl Journal {
-    fn channel(directory: PathBuf) -> (Self, Receiver<Command>) {
+    pub fn new(directory: PathBuf) -> Self {
         let (sender, receiver) = mpsc::channel();
-        let journal = Self {
+        Self {
             directory,
             run_id: super::random_id(8),
             sender,
-            queue: Arc::default(),
+            queue: Arc::new(Mutex::new(QueueState {
+                pending: Some(receiver),
+                ..QueueState::default()
+            })),
             flush_lock: Mutex::default(),
             event_gates: SharedEventGates::default(),
-        };
-        (journal, receiver)
+        }
     }
 
-    pub fn new(directory: PathBuf) -> Self {
-        let (journal, receiver) = Self::channel(directory);
-        let mut writer = Writer::new(
-            journal.directory.clone(),
-            journal.run_id.clone(),
-            journal.event_gates.clone(),
-        );
-        let queue = Arc::clone(&journal.queue);
+    pub fn attach(&mut self, owner: Arc<ServiceOwner>) {
+        let receiver = self
+            .queue
+            .lock()
+            .unwrap()
+            .pending
+            .take()
+            .expect("unattached journal");
+        let writer = Writer::new(owner, self.run_id.clone(), self.event_gates.clone());
+        self.directory = writer.directory.clone();
+        let queue = Arc::clone(&self.queue);
         if let Err(error) = std::thread::Builder::new()
             .name("emp-diagnostic-journal".into())
             .spawn(move || writer.run(receiver, &queue))
@@ -309,7 +321,6 @@ impl Journal {
                 error.kind()
             );
         }
-        journal
     }
 
     pub fn pseudonym(&self, value: &str) -> String {
@@ -378,6 +389,25 @@ impl Journal {
             }
             queue.closed = close;
             let rejected = queue.rejected;
+            if let Some(pending) = queue.pending.as_ref() {
+                let mut stderr = std::io::stderr().lock();
+                let mut lost = 0;
+                for command in pending.try_iter() {
+                    let Action::Event(record) = command.action else {
+                        unreachable!("only events are queued before attachment");
+                    };
+                    lost += usize::from(!record.event.write_summary(&mut stderr));
+                }
+                if let Some(event) = event {
+                    lost += usize::from(!event.write_summary(&mut stderr));
+                }
+                queue.settled = queue.accepted;
+                queue.pending_events = 0;
+                queue.lost_by_writer += lost;
+                drop(stderr);
+                drop(queue);
+                return report_losses(&self.queue, Some(rejected));
+            }
             let records = usize::from(event.is_some());
             let record = event.map(|event| Record {
                 timestamp: super::timestamp(),
@@ -432,10 +462,11 @@ struct Writer {
     sequence: u64,
     managed: u64,
     event_gates: SharedEventGates,
+    _owner: Arc<ServiceOwner>,
 }
 
 impl Writer {
-    fn new(directory: PathBuf, run_id: String, event_gates: SharedEventGates) -> Self {
+    fn new(owner: Arc<ServiceOwner>, run_id: String, event_gates: SharedEventGates) -> Self {
         let now = time::OffsetDateTime::now_utc();
         let basename = format!(
             "emp-{:04}{:02}{:02}T{:02}{:02}{:02}Z-{}-{run_id}",
@@ -448,7 +479,7 @@ impl Writer {
             std::process::id()
         );
         Self {
-            directory,
+            directory: owner.state_root.join("logs"),
             run_id,
             basename,
             file: None,
@@ -457,10 +488,11 @@ impl Writer {
             sequence: 0,
             managed: 0,
             event_gates,
+            _owner: owner,
         }
     }
 
-    fn run(&mut self, receiver: Receiver<Command>, queue: &Mutex<QueueState>) {
+    fn run(mut self, receiver: Receiver<Command>, queue: &Mutex<QueueState>) {
         let opened = (|| -> std::io::Result<()> {
             no_symlinks(&self.directory)?;
             std::fs::create_dir_all(&self.directory)?;
@@ -507,13 +539,13 @@ impl Writer {
                 queue.lost_by_writer += usize::from(lost);
             }
             if let Some((rejected, close, receipt)) = confirmation {
+                let losses = report_losses(queue, Some(rejected));
                 if close {
-                    self.file = None;
-                }
-                let _ = receipt.send(report_losses(queue, Some(rejected)));
-                if close {
+                    drop(self);
+                    let _ = receipt.send(losses);
                     return;
                 }
+                let _ = receipt.send(losses);
             }
         }
         report_losses(queue, None);

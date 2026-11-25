@@ -72,9 +72,10 @@ generation and numeric counts; they omit rollout paths and conversation data.
 Sideband receipts pair an opaque connection ID with the local command ID;
 the final outstanding receipt is checked after the socket worker exits.
 
-The journal is created before session/backend construction, so configuration,
-service ownership, vault, transport and listener startup failures have fixed
-classes. Worker startup failure attempts cleanup of workers already created.
+The journal buffers startup records before acquiring the service lock, so
+configuration, service ownership, vault, transport and listener startup failures
+have fixed classes. Worker startup failure closes request admission before
+waiting for the failure receipt and cleaning up workers already created.
 Failures before configuration-path resolution and unrecoverable process
 termination cannot be covered by an initialized journal. Individual low-level
 framing steps are not journal events. Listener readiness is recorded when the
@@ -304,13 +305,16 @@ bodies.
 - A `serve` invocation creates one logical run with a random run ID.
 - Default location: `<config directory>/state/logs/`.
 - The service owns `state/`, including `logs/`, under `state/service.lock`.
-  It closes exit callbacks, waits for the writer to confirm the write and flush
-  of `shutdown_complete` and close the journal, then releases the lock. Early
-  release would allow a replacement service to write concurrently or recovery
-  to move an active log directory. Recovery holds the same lock while moving
-  state during reset.
-- Startup diagnostics emitted outside service ownership and whole-directory
-  CLI migration retain their existing lock-free paths.
+  The journal writer starts after lock acquisition and drains buffered startup
+  events in enqueue order. If acquisition fails, the summaries go to stderr
+  with the same field redaction, leaving `logs/` untouched.
+- The lock covers the final write attempt and file close. On exit the service
+  closes exit callbacks, waits for the journal confirmation, then releases the
+  lock. Write failures are counted in the existing stderr loss summary. Consult
+  that summary if `shutdown_complete` is missing, since the exit flow can finish
+  even when that record could not be written.
+- Recovery holds the same lock while moving state during reset. Whole-directory
+  CLI migration remains a separate path.
 - Files use UTF-8 JSON Lines and a stable `emp-<UTC>-<pid>-<run>-pNNN.jsonl`
   naming scheme. Multiple parts still belong to one startup run.
 - Directory permissions are private where the operating system supports POSIX
