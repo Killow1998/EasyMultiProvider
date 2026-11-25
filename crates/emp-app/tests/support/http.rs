@@ -61,32 +61,13 @@ impl Response {
             .map(String::as_str)
     }
 
-    /// Parsed `data:` frames of a server-sent event stream.
     pub fn sse_events(&self) -> Vec<Value> {
-        sse_frames(&self.text())
-            .filter_map(sse::data)
+        sse::frames(&self.body)
+            .filter_map(|frame| frame.expect("complete SSE response frame").data())
             .filter(|data| *data != "[DONE]")
             .map(|data| serde_json::from_str(&data).expect("SSE data JSON"))
             .collect()
     }
-}
-
-fn sse_frames(mut body: &str) -> impl Iterator<Item = &str> {
-    std::iter::from_fn(move || {
-        if body.is_empty() {
-            return None;
-        }
-        let mut offset = 0;
-        for line in body.split_inclusive('\n') {
-            if matches!(line, "\n" | "\r\n") {
-                let frame = &body[..offset];
-                body = &body[offset + line.len()..];
-                return Some(frame);
-            }
-            offset += line.len();
-        }
-        Some(std::mem::take(&mut body))
-    })
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -166,16 +147,25 @@ fn dechunk(mut raw: &[u8]) -> io::Result<Option<Vec<u8>>> {
 }
 
 fn sse_finished(body: &[u8]) -> bool {
-    body.ends_with(b"\n\n")
-        && sse_frames(&String::from_utf8_lossy(body))
-            .filter_map(sse::data)
-            .filter_map(|data| serde_json::from_str::<Value>(&data).ok())
-            .any(|event| {
-                matches!(
-                    event["type"].as_str(),
-                    Some("response.completed" | "response.incomplete" | "response.failed")
-                )
-            })
+    if !body.ends_with(b"\n") {
+        return false;
+    }
+    let mut finished = false;
+    for frame in sse::frames(body) {
+        let Ok(frame) = frame else {
+            return false;
+        };
+        if !finished
+            && let Some(data) = frame.data()
+            && let Ok(event) = serde_json::from_str::<Value>(&data)
+        {
+            finished = matches!(
+                event["type"].as_str(),
+                Some("response.completed" | "response.incomplete" | "response.failed")
+            );
+        }
+    }
+    finished
 }
 
 /// Read one HTTP message (request or response) whose head ends at `\r\n\r\n`.
@@ -316,6 +306,10 @@ pub(super) fn send_request(
 }
 
 pub struct SseClient {
+    body: BufReader<SseBody>,
+}
+
+struct SseBody {
     input: BufReader<DeadlineIo<TcpStream>>,
     chunk_remaining: Option<usize>,
     ended: bool,
@@ -365,15 +359,46 @@ impl SseClient {
         deadline
             .accept(
                 Self {
-                    input,
-                    chunk_remaining: chunked.then_some(0),
-                    ended: false,
+                    body: BufReader::new(SseBody {
+                        input,
+                        chunk_remaining: chunked.then_some(0),
+                        ended: false,
+                    }),
                 },
                 "SSE response head",
             )
             .unwrap()
     }
 
+    #[allow(dead_code, reason = "Used by the standalone HTTP and Linux Aero tests")]
+    pub fn expect_eof(&mut self, deadline: &Deadline) -> io::Result<()> {
+        self.body.get_mut().input.get_mut().set_deadline(deadline);
+        if !self.body.fill_buf()?.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "data after SSE end",
+            ));
+        }
+        deadline.accept((), "SSE body EOF")
+    }
+
+    pub fn next_event(&mut self, deadline: &Deadline) -> io::Result<Option<Value>> {
+        self.body.get_mut().input.get_mut().set_deadline(deadline);
+        while let Some(frame) = sse::read_frame(&mut self.body)? {
+            if let Some(data) = frame.data().filter(|data| !data.is_empty()) {
+                if data.trim() == "[DONE]" {
+                    return deadline.accept(None, "SSE done marker");
+                }
+                let event = serde_json::from_str(&data)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                return deadline.accept(Some(event), "SSE event");
+            }
+        }
+        deadline.accept(None, "SSE body EOF")
+    }
+}
+
+impl SseBody {
     fn read_chunk_line(&mut self, line: &mut Vec<u8>) -> io::Result<()> {
         line.clear();
         if self.input.read_until(b'\n', line)? == 0 || !line.ends_with(b"\r\n") {
@@ -381,10 +406,12 @@ impl SseClient {
         }
         Ok(())
     }
+}
 
-    fn byte(&mut self) -> io::Result<Option<u8>> {
-        if self.ended {
-            return Ok(None);
+impl Read for SseBody {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.ended || buffer.is_empty() {
+            return Ok(0);
         }
         if self.chunk_remaining == Some(0) {
             let mut line = Vec::new();
@@ -401,21 +428,25 @@ impl SseClient {
                     }
                 }
                 self.ended = true;
-                return Ok(None);
+                return Ok(0);
             }
             self.chunk_remaining = Some(length);
         }
-        let mut byte = [0_u8; 1];
-        if self.input.read(&mut byte)? == 0 {
+        let length = self
+            .chunk_remaining
+            .unwrap_or(buffer.len())
+            .min(buffer.len());
+        let count = self.input.read(&mut buffer[..length])?;
+        if count == 0 {
             self.ended = true;
             return if self.chunk_remaining.is_some() {
                 Err(io::Error::from(io::ErrorKind::UnexpectedEof))
             } else {
-                Ok(None)
+                Ok(0)
             };
         }
         if let Some(remaining) = &mut self.chunk_remaining {
-            *remaining -= 1;
+            *remaining -= count;
             if *remaining == 0 {
                 let mut end = [0_u8; 2];
                 self.input.read_exact(&mut end)?;
@@ -424,52 +455,6 @@ impl SseClient {
                 }
             }
         }
-        Ok(Some(byte[0]))
-    }
-
-    #[allow(dead_code, reason = "Used by the standalone HTTP and Linux Aero tests")]
-    pub fn expect_eof(&mut self, deadline: &Deadline) -> io::Result<()> {
-        self.input.get_mut().set_deadline(deadline);
-        if self.byte()?.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "data after SSE end",
-            ));
-        }
-        deadline.accept((), "SSE body EOF")
-    }
-
-    pub fn next_event(&mut self, deadline: &Deadline) -> io::Result<Option<Value>> {
-        self.input.get_mut().set_deadline(deadline);
-        let mut frame = String::new();
-        loop {
-            let mut line = Vec::new();
-            loop {
-                match self.byte()? {
-                    Some(b'\n') => break,
-                    Some(byte) => line.push(byte),
-                    None if line.is_empty() && frame.is_empty() => {
-                        return deadline.accept(None, "SSE body EOF");
-                    }
-                    None => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
-                }
-            }
-            let line = String::from_utf8(line)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            if line.trim_end_matches('\r').is_empty() {
-                if let Some(data) = sse::data(&frame).filter(|data| !data.is_empty()) {
-                    if data.trim() == "[DONE]" {
-                        return deadline.accept(None, "SSE done marker");
-                    }
-                    let event = serde_json::from_str(&data)
-                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                    return deadline.accept(Some(event), "SSE event");
-                }
-                frame.clear();
-            } else {
-                frame.push_str(&line);
-                frame.push('\n');
-            }
-        }
+        Ok(count)
     }
 }

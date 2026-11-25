@@ -103,8 +103,8 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
     set_sse_deadline(&mut streams[0], &deadline);
     notify_quota_update(&server.state, "@native", Some("quota_auth_required"));
     assert_eq!(
-        read_sse_frame(&mut streams[0]),
-        "event: quota-updated\ndata: {}\n"
+        read_sse_frame(&mut streams[0]).raw(),
+        "event: quota-updated\ndata: {}\n\n"
     );
     let accounts = request_before(&server, "/api/accounts", &[&session], &deadline);
     assert!(accounts.starts_with("HTTP/1.1 200 OK\r\n"), "{accounts}");
@@ -121,8 +121,8 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
     set_sse_deadline(&mut streams[0], &deadline);
     notify_quota_update(&server.state, "@native", None);
     assert_eq!(
-        read_sse_frame(&mut streams[0]),
-        "event: quota-updated\ndata: {}\n"
+        read_sse_frame(&mut streams[0]).raw(),
+        "event: quota-updated\ndata: {}\n\n"
     );
     deadline.accept((), "second quota notification").unwrap();
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));

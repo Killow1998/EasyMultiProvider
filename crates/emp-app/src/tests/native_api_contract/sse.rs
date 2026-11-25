@@ -2,7 +2,7 @@ use super::support::*;
 use super::*;
 use crate::tests::activity_contract::next_activity_snapshot;
 use crate::tests::request_observation_contract::{lock_settlement_writes, settlement_db};
-use emp_test_support::sse::data;
+use emp_test_support::sse::Frame;
 
 const SSE_UPSTREAM_HEAD: &[u8] =
     b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
@@ -64,7 +64,7 @@ impl Drop for NativeErrorSseUpstream {
     }
 }
 
-fn read_native_sse(input: impl BufRead, deadline: &Deadline) -> (String, Vec<String>) {
+fn read_native_sse(input: impl BufRead, deadline: &Deadline) -> (String, Vec<Frame>) {
     let (head, mut stream) = read_sse_head(input, deadline);
     assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
     let frames = read_sse_frames(&mut stream).collect();
@@ -73,19 +73,28 @@ fn read_native_sse(input: impl BufRead, deadline: &Deadline) -> (String, Vec<Str
         .unwrap()
 }
 
-fn post_native_sse(server: &ServerHandle, body: &[u8], headers: &[&str]) -> (String, Vec<String>) {
+fn post_native_sse(server: &ServerHandle, body: &[u8], headers: &[&str]) -> (String, Vec<Frame>) {
     let deadline = Deadline::after(response_timeout());
     let stream = open_post_stream(server, "/v1/responses", body, headers);
     read_native_sse(BufReader::new(deadline.io(stream)), &deadline)
 }
 
-fn incomplete_sse_event(frames: &[String]) -> Value {
+fn incomplete_sse_event(frames: &[Frame]) -> Value {
     frames
         .iter()
-        .filter_map(|frame| data(frame))
+        .filter_map(Frame::data)
         .filter_map(|data| serde_json::from_str::<Value>(&data).ok())
         .find(|event| event["type"] == "response.incomplete")
         .expect("incomplete terminal")
+}
+
+fn first_native_sse_event(frames: impl IntoIterator<Item = Frame>) -> Value {
+    let frame = frames
+        .into_iter()
+        .find(|frame| !frame.is_comment_or_empty())
+        .expect("first native SSE business frame");
+    let data = frame.data().expect("native SSE event data");
+    serde_json::from_str(&data).expect("native SSE event JSON")
 }
 
 #[test]
@@ -214,12 +223,8 @@ fn native_sse_activity_terminal_has_a_committed_call_and_usage() {
 
     let deadline = Deadline::after(response_timeout());
     let (_, frames) = read_native_sse(BufReader::new(deadline.io(socket)), &deadline);
-    let completed = frames
-        .iter()
-        .filter_map(|frame| data(frame))
-        .map(|data| serde_json::from_str::<Value>(&data).unwrap())
-        .find(|event| event["type"] == "response.completed")
-        .expect("downstream completed event");
+    let completed = first_native_sse_event(frames);
+    assert_eq!(completed["type"], "response.completed");
     assert_eq!(completed["response"]["id"], terminal["response"]["id"]);
     server.shutdown().unwrap();
 }
@@ -269,11 +274,7 @@ fn native_sse_prewarm_preserves_activity_and_billing_boundaries() {
                 write!(wire, "data: {terminal}\n\n").unwrap();
                 let (_, frames) =
                     read_native_sse(BufReader::new(deadline.io(downstream)), &deadline);
-                assert!(
-                    frames
-                        .iter()
-                        .any(|frame| frame.contains("response.completed"))
-                );
+                assert_eq!(first_native_sse_event(frames)["type"], "response.completed");
             }
             End::UpstreamFailure => {
                 wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
@@ -292,7 +293,10 @@ fn native_sse_prewarm_preserves_activity_and_billing_boundaries() {
                 .unwrap();
                 let (_, mut stream) =
                     read_sse_head(BufReader::new(deadline.io(downstream)), &deadline);
-                assert!(read_sse_frame(&mut stream).contains("response.output_text.delta"));
+                assert_eq!(
+                    first_native_sse_event(read_sse_frames(&mut stream))["type"],
+                    "response.output_text.delta"
+                );
                 drop(stream);
                 assert!(upstream_closed_before(&upstream, &deadline));
             }
@@ -432,7 +436,7 @@ fn native_sse_and_ordinary_json_cross_the_real_endpoint() {
                 "x-openai-subagent: stream-subagent",
             ],
         );
-        let has_event = |value| frames.iter().any(|frame| frame.contains(value));
+        let has_event = |value| frames.iter().any(|frame| frame.raw().contains(value));
         assert_eq!(
             response_header(&head, "openai-model"),
             Some("native/alias"),
@@ -498,10 +502,10 @@ fn native_sse_context_and_incomplete_boundaries_match_codex_http_behavior() {
             assert!(
                 frames
                     .iter()
-                    .any(|frame| frame.contains("response.output_text.delta"))
+                    .any(|frame| frame.raw().contains("response.output_text.delta"))
             );
             assert!(frames.iter().any(|frame| {
-                frame.contains("response.failed") && frame.contains("stream_incomplete")
+                frame.raw().contains("response.failed") && frame.raw().contains("stream_incomplete")
             }));
         }
         if name == "failed" {
@@ -665,7 +669,7 @@ fn responses_sse_filters_codex_extensions_only_for_generic_clients() {
                 },
             ],
         );
-        let has_event = |value| frames.iter().any(|frame| frame.contains(value));
+        let has_event = |value| frames.iter().any(|frame| frame.raw().contains(value));
         assert!(has_event("response.output_text.delta"), "{frames:?}");
         assert!(has_event("response.completed"), "{frames:?}");
         for extension in [
@@ -677,7 +681,7 @@ fn responses_sse_filters_codex_extensions_only_for_generic_clients() {
             assert_eq!(has_event(extension), codex, "{frames:?}");
         }
         if !codex {
-            assert!(frames.iter().any(|frame| frame == ": keepalive\n"));
+            assert!(frames.iter().any(|frame| frame.raw() == ": keepalive\n\n"));
         }
         upstream.finish();
         server.shutdown().unwrap();

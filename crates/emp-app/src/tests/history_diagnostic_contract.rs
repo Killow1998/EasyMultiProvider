@@ -117,9 +117,12 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         let deadline = Deadline::after(response_timeout());
         let (_, mut reader) = read_sse_head(Cursor::new(&reply), &deadline);
-        let frame = read_sse_frame(&mut reader);
-        assert_eq!(sse::event(&frame), Some("response.failed"), "{frame}");
-        let data = sse::data(&frame).expect("response.failed SSE data");
+        let frame = sse::first_business_frame(&mut reader)
+            .expect("read history failure SSE stream")
+            .expect("history failure SSE frame");
+        let frame = deadline.accept(frame, "history failure SSE frame").unwrap();
+        assert_eq!(frame.event(), Some("response.failed"), "{frame:?}");
+        let data = frame.data().expect("response.failed SSE data");
         let failed: Value = serde_json::from_str(&data).expect("response.failed SSE JSON");
         assert_eq!(failed["response"]["error"]["code"], "invalid_prompt");
         count += 1;
@@ -213,8 +216,11 @@ fn assert_missing_summary_output(stream: bool) {
         let (head, mut reader) = read_sse_head(BufReader::new(deadline.io(stream)), &deadline);
         assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
         let frame = read_sse_frame(&mut reader);
-        assert_eq!(sse::event(&frame), Some("response.failed"), "{frame}");
-        let data = sse::data(&frame).expect("response.failed SSE data");
+        assert!(
+            frame.raw().starts_with("event: response.failed\ndata: "),
+            "{frame:?}"
+        );
+        let data = frame.data().expect("response.failed SSE data");
         let failed: Value = serde_json::from_str(&data).expect("response.failed SSE JSON");
         assert_eq!(failed["type"], "response.failed");
     } else {

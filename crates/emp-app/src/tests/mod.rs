@@ -362,26 +362,20 @@ fn read_sse_head<R: BufRead>(
     )
 }
 
-fn read_sse_frame<R: BufRead>(reader: &mut BufReader<ChunkedSse<R>>) -> String {
-    let mut frame = String::new();
-    loop {
-        let mut line = String::new();
-        let count = reader.read_line(&mut line).expect("read SSE frame");
-        assert!(count > 0, "SSE stream ended before a complete frame");
-        if line == "\r\n" || line == "\n" {
-            return reader
-                .get_ref()
-                .deadline
-                .accept(frame, "complete SSE frame")
-                .unwrap();
-        }
-        frame.push_str(&line);
-    }
+fn read_sse_frame<R: BufRead>(reader: &mut BufReader<ChunkedSse<R>>) -> sse::Frame {
+    let frame = sse::read_frame(reader)
+        .expect("read SSE frame")
+        .expect("SSE stream ended before the next frame");
+    reader
+        .get_ref()
+        .deadline
+        .accept(frame, "complete SSE frame")
+        .unwrap()
 }
 
 fn read_sse_frames<R: BufRead>(
     reader: &mut BufReader<ChunkedSse<R>>,
-) -> impl Iterator<Item = String> {
+) -> impl Iterator<Item = sse::Frame> {
     std::iter::from_fn(move || {
         (!reader.fill_buf().expect("read SSE body").is_empty()).then(|| read_sse_frame(reader))
     })
@@ -408,12 +402,12 @@ fn subscribe_quota_events(server: &ServerHandle, session: &str) -> SseReader {
     assert!(head.contains("Content-Security-Policy: frame-ancestors 'none'\r\n"));
     assert!(head.contains("X-Content-Type-Options: nosniff\r\n"));
     assert_eq!(
-        read_sse_frame(&mut reader),
-        "event: quota-updated\ndata: {}\n"
+        read_sse_frame(&mut reader).raw(),
+        "event: quota-updated\ndata: {}\n\n"
     );
     assert_eq!(
-        read_sse_frame(&mut reader),
-        "event: integration-updated\ndata: {}\n"
+        read_sse_frame(&mut reader).raw(),
+        "event: integration-updated\ndata: {}\n\n"
     );
     reader
 }
@@ -421,8 +415,13 @@ fn subscribe_quota_events(server: &ServerHandle, session: &str) -> SseReader {
 fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
     let mut reader = subscribe_quota_events(server, session);
     let activity_frame = read_sse_frame(&mut reader);
-    assert_eq!(sse::event(&activity_frame), Some("activity-updated"));
-    let activity_body = sse::data(&activity_frame).expect("activity event data");
+    assert!(
+        activity_frame
+            .raw()
+            .starts_with("event: activity-updated\ndata: "),
+        "{activity_frame:?}"
+    );
+    let activity_body = activity_frame.data().expect("activity event data");
     let activity: Value = serde_json::from_str(&activity_body).expect("activity snapshot");
     assert_eq!(activity["recent_for_seconds"], 60);
     assert_eq!(activity["routes"], json!([]));
@@ -442,8 +441,8 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
         ]
     );
     assert_eq!(
-        read_sse_frame(&mut reader),
-        "event: usage-updated\ndata: {}\n"
+        read_sse_frame(&mut reader).raw(),
+        "event: usage-updated\ndata: {}\n\n"
     );
     reader
 }

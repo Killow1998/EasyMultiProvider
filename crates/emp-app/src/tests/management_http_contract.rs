@@ -521,8 +521,8 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
     let _ = request_before(&server, "/v1/models", &[], &deadline);
 
     assert_eq!(
-        read_sse_frame(&mut events),
-        "event: integration-updated\ndata: {}\n"
+        read_sse_frame(&mut events).raw(),
+        "event: integration-updated\ndata: {}\n\n"
     );
     let status = request(&server, "/api/integration", &[&session]);
     let status = response_json(&status);

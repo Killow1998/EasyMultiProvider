@@ -35,7 +35,7 @@ fn responses_sse_stops_at_terminal_without_eof_or_parsing_the_tail() {
         deadline.io(downstream).read_to_string(&mut wire).unwrap();
         let (_, mut reader) = read_sse_head(Cursor::new(&wire), &deadline);
         let events: Vec<Value> = read_sse_frames(&mut reader)
-            .filter_map(|frame| sse::data(&frame))
+            .filter_map(|frame| frame.data())
             .map(|data| serde_json::from_str(&data).unwrap())
             .collect();
         assert_eq!(
@@ -82,7 +82,7 @@ fn native_and_external_json_replies_stream_to_completion_beyond_64_mib() {
             let mut terminals = 0;
             let mut saw_delta = false;
             let mut delivered_bytes = 0;
-            for data in read_sse_frames(&mut reader).filter_map(|frame| sse::data(&frame)) {
+            for data in read_sse_frames(&mut reader).filter_map(|frame| frame.data()) {
                 delivered_bytes += data.len();
                 let event: Value = serde_json::from_str(&data).unwrap();
                 saw_delta |= event["type"] == "response.output_text.delta";
@@ -143,7 +143,10 @@ fn disconnect_during_synthesis_stops_delivery_without_retry_or_false_completion(
         let (_, mut reader) = read_sse_head(BufReader::new(deadline.io(&stream)), &deadline);
         loop {
             let frame = read_sse_frame(&mut reader);
-            if sse::data(&frame).is_some_and(|data| data.contains("response.output_text.delta")) {
+            if frame
+                .data()
+                .is_some_and(|data| data.contains("response.output_text.delta"))
+            {
                 break;
             }
         }

@@ -271,7 +271,7 @@ fn stream_errors_keep_pre_and_post_output_boundaries() {
     let deadline = Deadline::after(response_timeout());
     let (_, mut reader) = read_sse_head(Cursor::new(&response), &deadline);
     let failed: Value = read_sse_frames(&mut reader)
-        .filter_map(|frame| sse::data(&frame))
+        .filter_map(|frame| frame.data())
         .filter_map(|data| serde_json::from_str::<Value>(&data).ok())
         .find(|event| event["type"] == "response.failed")
         .expect("terminal failure is valid SSE JSON");
@@ -558,11 +558,19 @@ fn stream_boundary_frames_and_activity_are_directly_asserted() {
     ];
     for event in &events {
         let name = event["type"].as_str().unwrap();
-        let frame = String::from_utf8(sse_frame(name, event).unwrap()).unwrap();
-        assert!(frame.starts_with("event: "));
-        assert_eq!(sse::event(&frame), Some(name));
-        assert!(frame.ends_with("\n\n"));
-        let data = sse::data(&frame).expect("SSE data");
+        let wire = sse_frame(name, event).unwrap();
+        let frames = sse::frames(&wire)
+            .collect::<std::io::Result<Vec<_>>>()
+            .unwrap();
+        let [frame] = frames.as_slice() else {
+            panic!("expected exactly one SSE frame: {frames:?}");
+        };
+        assert!(
+            frame.raw().starts_with(&format!("event: {name}\ndata: ")),
+            "{frame:?}"
+        );
+        assert!(frame.raw().ends_with("\n\n"), "{frame:?}");
+        let data = frame.data().expect("SSE data");
         let parsed: Value = serde_json::from_str(&data).expect("SSE JSON");
         assert_eq!(parsed, *event);
     }

@@ -122,19 +122,18 @@ pub(super) fn next_activity_snapshot(
 ) -> Value {
     loop {
         let frame = read_sse_frame(events);
-        match sse::event(&frame) {
-            Some("activity-updated") => {
-                let data = sse::data(&frame).expect("activity frame data");
-                let snapshot: Value = serde_json::from_str(&data).expect("activity frame JSON");
-                if matches(&snapshot) {
-                    return snapshot;
-                }
+        if frame.raw().starts_with("event: activity-updated\ndata: ") {
+            let data = frame.data().expect("activity frame data");
+            let snapshot: Value = serde_json::from_str(&data).expect("activity frame JSON");
+            if matches(&snapshot) {
+                return snapshot;
             }
-            Some("usage-updated") if sse::data(&frame).is_some() => {}
-            None if frame.starts_with(':') => {}
-            _ => {
-                panic!("request activity emitted an unrelated management event: {frame}");
-            }
+        } else {
+            assert!(
+                frame.is_comment_or_empty()
+                    || frame.raw().starts_with("event: usage-updated\ndata: "),
+                "request activity emitted an unrelated management event: {frame:?}"
+            );
         }
     }
 }

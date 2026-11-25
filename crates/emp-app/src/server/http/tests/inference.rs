@@ -677,20 +677,15 @@ impl SseClient {
     pub(super) async fn next(&mut self) -> Option<Value> {
         use tokio::io::AsyncBufReadExt as _;
         loop {
-            let bytes = loop {
-                if let Some(frame_end) =
-                    self.pending.iter().enumerate().find_map(|(index, byte)| {
-                        if *byte != b'\n' {
-                            return None;
-                        }
-                        match self.pending[index + 1..] {
-                            [b'\n', ..] => Some(index + 2),
-                            [b'\r', b'\n', ..] => Some(index + 3),
-                            _ => None,
-                        }
-                    })
-                {
-                    break self.pending.drain(..frame_end).collect::<Vec<_>>();
+            let frame = loop {
+                match sse::read_frame(&mut self.pending.as_slice()) {
+                    Ok(Some(frame)) => {
+                        self.pending.drain(..frame.raw().len());
+                        break frame;
+                    }
+                    Ok(None) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {}
+                    Err(error) => panic!("read SSE frame: {error}"),
                 }
                 {
                     let mut line = String::new();
@@ -717,13 +712,11 @@ impl SseClient {
                     }
                 }
             };
-            let text = std::str::from_utf8(&bytes).unwrap();
-            let Some(event_type) = text.lines().find_map(|line| line.strip_prefix("event: "))
-            else {
-                assert!(text.starts_with(':'));
+            if frame.is_comment_or_empty() {
                 continue;
-            };
-            let payload = sse::data(text).expect("SSE event data");
+            }
+            let event_type = frame.event().expect("SSE event name");
+            let payload = frame.data().expect("SSE event data");
             let event: Value = serde_json::from_str(&payload).unwrap();
             assert_eq!(event["type"], event_type);
             return Some(event);

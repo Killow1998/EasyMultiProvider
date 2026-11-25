@@ -50,7 +50,7 @@ fn client_failure(
             let (_, mut reader) = read_sse_head(Cursor::new(&wire), &deadline);
             events.extend(
                 read_sse_frames(&mut reader)
-                    .filter_map(|frame| sse::data(&frame))
+                    .filter_map(|frame| frame.data())
                     .filter(|data| *data != "[DONE]")
                     .map(|data| serde_json::from_str(&data).unwrap()),
             );
