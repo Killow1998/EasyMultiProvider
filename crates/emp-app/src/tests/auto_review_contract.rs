@@ -607,7 +607,7 @@ impl Drop for ReviewStreamUpstream {
                 let _ =
                     stream.write_all(b"POST /v1/responses HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}");
             }
-            worker.join().expect("join WS upstream");
+            emp_test_support::drop_check(worker.join(), "join WS upstream");
         }
     }
 }

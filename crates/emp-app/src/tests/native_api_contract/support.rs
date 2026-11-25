@@ -184,7 +184,7 @@ impl NativeUpstream {
 impl Drop for NativeUpstream {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
-            worker.join().expect("join native upstream");
+            emp_test_support::drop_check(worker.join(), "join native upstream");
         }
     }
 }
@@ -372,7 +372,7 @@ impl Drop for NativeSseUpstream {
         if let Some(worker) = self.worker.take() {
             self.stopping.store(true, Ordering::Release);
             let _ = TcpStream::connect(self.address);
-            worker.join().unwrap();
+            emp_test_support::drop_check(worker.join(), "join upstream");
         }
     }
 }

@@ -101,7 +101,7 @@ impl Drop for UpstreamServer {
         self.shutdown.store(true, Ordering::Release);
         let _ = TcpStream::connect(self.address);
         if let Some(thread) = self.thread.take() {
-            thread.join().expect("join upstream");
+            emp_test_support::drop_check(thread.join(), "join upstream");
         }
     }
 }

@@ -313,24 +313,38 @@ mod test_commits {
 
     static COUNTERS: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
 
-    pub struct CommitCount(PathBuf);
+    type DropCheck = fn(Result<(), &'static str>, &str) -> Option<()>;
+
+    pub struct CommitCount {
+        path: PathBuf,
+        check_drop: DropCheck,
+    }
 
     impl CommitCount {
         pub fn get(&self) -> usize {
-            COUNTERS.lock().unwrap()[&self.0]
+            COUNTERS.lock().unwrap()[&self.path]
         }
     }
 
     impl Drop for CommitCount {
         fn drop(&mut self) {
-            COUNTERS.lock().unwrap().remove(&self.0);
+            let cleanup = COUNTERS
+                .lock()
+                .map(|mut counters| {
+                    counters.remove(&self.path);
+                })
+                .map_err(|_| "commit counter lock poisoned");
+            (self.check_drop)(cleanup, "remove file commit counter");
         }
     }
 
-    pub fn count_commits(path: &Path) -> CommitCount {
+    pub fn count_commits(path: &Path, check_drop: DropCheck) -> CommitCount {
         let previous = COUNTERS.lock().unwrap().insert(path.to_owned(), 0);
         assert!(previous.is_none());
-        CommitCount(path.to_owned())
+        CommitCount {
+            path: path.to_owned(),
+            check_drop,
+        }
     }
 
     pub(super) fn record(path: &Path) {

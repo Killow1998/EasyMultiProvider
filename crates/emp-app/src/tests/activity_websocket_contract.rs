@@ -91,9 +91,11 @@ impl HeldActivityUpstream {
 impl Drop for HeldActivityUpstream {
     fn drop(&mut self) {
         drop(self.release.take());
-        let result = self.worker.take().unwrap().join();
-        if !thread::panicking() {
-            result.expect("join held upstream");
+        if let Some(worker) = emp_test_support::drop_check(
+            self.worker.take().ok_or("missing worker"),
+            "join held upstream",
+        ) {
+            emp_test_support::drop_check(worker.join(), "join held upstream");
         }
     }
 }

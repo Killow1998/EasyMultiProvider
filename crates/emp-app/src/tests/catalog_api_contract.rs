@@ -159,7 +159,7 @@ impl Drop for CatalogUpstream {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
-            worker.join().expect("join discovery server");
+            emp_test_support::drop_check(worker.join(), "join discovery server");
         }
     }
 }

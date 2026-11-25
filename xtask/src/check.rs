@@ -7,6 +7,7 @@ mod modules;
 mod production_sockets;
 mod prose;
 mod test_deadlines;
+mod test_drop;
 mod test_fixture_root;
 mod test_thread_observations;
 mod workflows;
@@ -46,6 +47,7 @@ pub fn run(args: &[String]) -> Result {
         if let Ok(source) = std::str::from_utf8(&bytes) {
             single_http_driver(&path, source, &mut errors);
             production_sockets::check(&path, source, &mut errors)?;
+            test_drop::check(&path, source, &mut errors)?;
         }
         if path.starts_with("crates/") && path.split('/').nth(2) == Some("tests") {
             test_boundary(&path, &bytes, &mut errors);
@@ -57,7 +59,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations passed"
+            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop passed"
         );
         Ok(())
     } else {

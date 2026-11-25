@@ -1,12 +1,13 @@
 use emp_domain::FixedWait;
 use std::{
     borrow::Borrow,
-    fmt::Display,
+    fmt::{Debug, Display},
     io::{self, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     ops::Add,
     path::PathBuf,
     sync::OnceLock,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -16,6 +17,17 @@ mod process;
 pub mod websocket;
 pub use observation::{Observation, ObservationResult, Probe};
 pub use process::{ChildError, OwnedChild};
+
+pub fn drop_check<T, E: Debug>(result: Result<T, E>, label: &str) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) if thread::panicking() => {
+            let _ = writeln!(io::stderr(), "{label}: {error:?}");
+            None
+        }
+        Err(error) => panic!("{label}: {error:?}"),
+    }
+}
 
 pub fn accept_blocking(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
     let (stream, peer) = listener.accept()?;
@@ -225,6 +237,37 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
+    #[test]
+    fn drop_failure_during_unwind_does_not_abort() {
+        const CASE: &str = "EMP_TEST_DROP_FAILURE_DURING_UNWIND";
+        if std::env::var_os(CASE).is_some() {
+            struct FailingFixture(Option<thread::JoinHandle<()>>);
+            impl Drop for FailingFixture {
+                fn drop(&mut self) {
+                    if let Some(worker) = self.0.take() {
+                        drop_check(worker.join(), "join failing fixture");
+                    }
+                }
+            }
+            let _fixture = FailingFixture(Some(thread::spawn(|| panic!("fixture worker failed"))));
+            panic!("original test failed");
+        }
+
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "tests::drop_failure_during_unwind_does_not_abort",
+                "--nocapture",
+            ])
+            .env(CASE, "1");
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let output = OwnedChild::output(command, deadline).unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(101), "{stderr}");
+        assert!(stderr.contains("original test failed"), "{stderr}");
+        assert!(stderr.contains("join failing fixture"), "{stderr}");
+    }
     #[test]
     fn test_budget_construction_and_composition_saturate() {
         let maximum = test_timeout(Duration::MAX);

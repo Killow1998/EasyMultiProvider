@@ -129,7 +129,7 @@ impl Drop for TestServer {
         self.shutdown.store(true, Ordering::Release);
         let _ = TcpStream::connect(self.address);
         if let Some(thread) = self.accept_thread.take() {
-            thread.join().expect("join test server");
+            emp_test_support::drop_check(thread.join(), "join test server");
         }
     }
 }
@@ -246,7 +246,7 @@ impl Drop for TlsTestServer {
         self.shutdown.store(true, Ordering::Release);
         let _ = TcpStream::connect(self.address);
         if let Some(thread) = self.accept_thread.take() {
-            thread.join().expect("join TLS server");
+            emp_test_support::drop_check(thread.join(), "join TLS server");
         }
     }
 }

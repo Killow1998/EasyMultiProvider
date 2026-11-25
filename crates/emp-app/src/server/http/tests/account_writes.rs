@@ -1,6 +1,6 @@
 use super::*;
 use emp_state::filesystem::count_commits;
-use emp_test_support::test_timeout;
+use emp_test_support::{drop_check, test_timeout};
 use std::{io::ErrorKind, os::unix::fs::PermissionsExt, path::Path};
 use tokio::{io::AsyncBufReadExt, net::TcpListener as AsyncListener};
 
@@ -273,6 +273,7 @@ fn account_writes_persist_configuration_and_credentials() {
         let commits = count_commits(
             &fixture.server.state.backend.configuration.config_path
                 .with_file_name("accounts/demo/models_cache.json"),
+            drop_check,
         );
         let (models, ()) = tokio::join!(
             fixture.post(MODELS, br#"{"other":7}"#, 200),
@@ -363,6 +364,7 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
                 .configuration
                 .config_path
                 .with_file_name("accounts/demo/models_cache.json"),
+            drop_check,
         );
         let refresh = json_request(port, MODELS, &[session], b"{}");
         let (mut client, task) = connect_submitted_write(fixture).await;

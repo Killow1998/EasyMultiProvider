@@ -166,19 +166,8 @@ impl Drop for RefreshCatalogFixture {
         if let Some(release) = &self.release_first {
             let _ = release.send(());
         }
-        if let Some(worker) = self.worker.take()
-            && let Err(payload) = worker.join()
-        {
-            if thread::panicking() {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .map(String::as_str)
-                    .or_else(|| payload.downcast_ref::<&str>().copied())
-                    .unwrap_or("non-string panic payload");
-                eprintln!("refresh fixture worker also panicked during test unwind: {message}");
-            } else {
-                std::panic::resume_unwind(payload);
-            }
+        if let Some(worker) = self.worker.take() {
+            emp_test_support::drop_check(worker.join(), "refresh fixture worker panicked");
         }
     }
 }

@@ -83,7 +83,7 @@ impl TimedUsageUpstream {
 impl Drop for TimedUsageUpstream {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
-            worker.join().expect("join usage upstream");
+            emp_test_support::drop_check(worker.join(), "join usage upstream");
         }
     }
 }

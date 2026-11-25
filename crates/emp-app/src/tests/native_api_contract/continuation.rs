@@ -391,9 +391,9 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
         let mut client = connect(&server, "11111111-1111-4111-8111-111111111111");
         let request = json!({"type":"response.create","model":model,"input":initial_input()});
         if fault == Fault::SilentPrefill {
-            client.send_json(&request).unwrap();
             let started = Instant::now();
-            let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
+            let deadline = Deadline::starting_at(started, large_context_turn());
+            client.send_json(&request).unwrap();
             while upstream.traffic.lock().unwrap().warmups == 0 {
                 assert!(!deadline.is_expired());
                 #[expect(
@@ -460,6 +460,7 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
 fn prefill_disconnect_waits_for_the_client_to_retry() {
     use crate::server::raw_tcp::{RawClient, read_websocket_frame, websocket_frame, wire_timeout};
     use tokio::io::AsyncWriteExt;
+    use tokio::time::timeout;
 
     {
         let upstream = Upstream::with_fault(10 * 1024 * 1024, Fault::SilentPrefill);
@@ -478,21 +479,22 @@ fn prefill_disconnect_waits_for_the_client_to_retry() {
             Some([11, 12, 13, 14]),
             &serde_json::to_vec(&request).unwrap(),
         );
-        let send_request = async || {
+        let send_request = async |deadline: Deadline| {
             let mut client = RawClient::request(address, wire.as_bytes()).await;
             assert!(
                 client
                     .head
                     .starts_with("HTTP/1.1 101 Switching Protocols\r\n")
             );
-            client.io.write_all(&frame).await.unwrap();
+            timeout(deadline.remaining(), client.io.write_all(&frame))
+                .await
+                .expect("large-context request before deadline")
+                .unwrap();
             client
         };
-        let mut client = runtime.block_on(send_request());
-        crate::tests::wait_for(
-            &Deadline::after(test_timeout(Duration::from_secs(30))),
-            || upstream.traffic.lock().unwrap().warmups == 1,
-        );
+        let prefill = Deadline::after(large_context_turn());
+        let mut client = runtime.block_on(send_request(prefill));
+        crate::tests::wait_for(&prefill, || upstream.traffic.lock().unwrap().warmups == 1);
         runtime.block_on(client.io.shutdown()).unwrap();
         runtime.block_on(async {
             assert_eq!(
@@ -503,10 +505,9 @@ fn prefill_disconnect_waits_for_the_client_to_retry() {
                 Some(&[0x88, 0])
             );
         });
-        crate::tests::wait_for(
-            &Deadline::after(test_timeout(Duration::from_secs(5))),
-            || upstream.traffic.lock().unwrap().cancelled_prefills == 1,
-        );
+        crate::tests::wait_for(&Deadline::after(wire_timeout()), || {
+            upstream.traffic.lock().unwrap().cancelled_prefills == 1
+        });
         {
             let stats = upstream.traffic.lock().unwrap();
             assert_eq!(stats.ws_connections, 1);
@@ -514,8 +515,8 @@ fn prefill_disconnect_waits_for_the_client_to_retry() {
             assert!(stats.generated_hashes.is_empty());
         }
         runtime.block_on(async {
-            let mut retry = send_request().await;
-            let deadline = Deadline::after(wire_timeout());
+            let deadline = Deadline::after(large_context_turn());
+            let mut retry = send_request(deadline).await;
             loop {
                 let (flags, payload) = read_websocket_frame(&mut retry.io, false, &deadline).await;
                 assert_eq!(flags, 0x81);

@@ -414,10 +414,14 @@ fn catalog_writes_persist_models_and_provider_observations() {
                 .await["error"]["message"],
             "selected model is not in the discovered list"
         );
-        let config_commits = count_commits(&fixture.server.state.backend.configuration.config_path);
-        let catalog_commits = count_commits(&crate::services::catalog::generated_catalog_path(
-            &fixture.server.state,
-        ));
+        let config_commits = count_commits(
+            &fixture.server.state.backend.configuration.config_path,
+            emp_test_support::drop_check,
+        );
+        let catalog_commits = count_commits(
+            &crate::services::catalog::generated_catalog_path(&fixture.server.state),
+            emp_test_support::drop_check,
+        );
         let selected = fixture
             .request_checked(
                 |port, session| json_request(port, DISCOVER, &[session], SELECT),
@@ -581,7 +585,7 @@ async fn wait_for_write(fixture: &Fixture) {
 async fn refresh_after_disconnect(fixture: &Fixture) {
     let state = &fixture.server.state;
     let catalog = crate::services::catalog::generated_catalog_path(state);
-    let commits = count_commits(&catalog);
+    let commits = count_commits(&catalog, emp_test_support::drop_check);
     std::fs::remove_file(&catalog).unwrap();
     let body = b"{}";
     let wire = json_request(fixture.port(), REFRESH, &[&fixture.session()], body);
@@ -672,8 +676,8 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
         let balance = AsyncListener::from_std(balance).unwrap();
         { let (fixture, address) = (fixture, endpoint);
             let state = &fixture.server.state;
-            let config_commits = count_commits(&state.backend.configuration.config_path);
-            let catalog_commits = count_commits(&crate::services::catalog::generated_catalog_path(state));
+            let config_commits = count_commits(&state.backend.configuration.config_path, emp_test_support::drop_check);
+            let catalog_commits = count_commits(&crate::services::catalog::generated_catalog_path(state), emp_test_support::drop_check);
             let (client, task) = submit(fixture, DISCOVER, br#"{"provider":"fixture","selected":["gpt-6-luna"]}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/models", "fixture-key").await;
             assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));

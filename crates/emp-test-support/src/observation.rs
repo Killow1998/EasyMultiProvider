@@ -53,9 +53,11 @@ pub struct Worker(Option<JoinHandle<()>>);
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        let result = self.0.take().unwrap().join();
-        if !thread::panicking() {
-            result.expect("observation worker panicked");
+        if let Some(worker) = crate::drop_check(
+            self.0.take().ok_or("missing worker"),
+            "observation worker panicked",
+        ) {
+            crate::drop_check(worker.join(), "observation worker panicked");
         }
     }
 }

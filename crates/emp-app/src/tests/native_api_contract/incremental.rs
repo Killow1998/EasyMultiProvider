@@ -275,7 +275,7 @@ impl NativeFailureContinuityUpstream {
 impl Drop for NativeFailureContinuityUpstream {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
-            worker.join().unwrap();
+            emp_test_support::drop_check(worker.join(), "join upstream");
         }
     }
 }

@@ -116,6 +116,25 @@ fn captures_exit_status_and_both_streams() {
     assert_payload(&output.stderr, b"normal stderr\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn cleans_up_an_exited_unreaped_process_group() {
+    for terminate_first in [false, true] {
+        let mut command = fixture("exit");
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = OwnedChild::spawn(command).unwrap();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        child.wait_for_exit_and_output(deadline).unwrap();
+        if terminate_first {
+            assert_eq!(child.terminate().unwrap().code(), Some(7));
+        }
+        let output = child.wait_until(deadline).unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_payload(&output.stdout, b"normal stdout\n");
+        assert_payload(&output.stderr, b"normal stderr\n");
+    }
+}
+
 #[test]
 fn invalid_time_scale_panics_during_construction_without_aborting() {
     for scale in ["bad", "2e18"] {

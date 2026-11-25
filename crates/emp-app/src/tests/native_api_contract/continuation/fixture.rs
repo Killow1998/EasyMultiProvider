@@ -2,7 +2,7 @@
 use super::super::*;
 use emp_test_support::websocket::ClientWebSocket;
 use emp_test_support::websocket::WebSocketPoll;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, TestBudget, test_timeout};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 
@@ -98,7 +98,7 @@ impl Upstream {
                     if request.header("Upgrade").is_none() {
                         let size: usize = request.header("Content-Length").unwrap().parse().unwrap();
                         let encoding = request.header("Content-Encoding").unwrap_or("").to_owned();
-                        let mut input = Deadline::after(test_timeout(Duration::from_secs(5))).io(&stream);
+                        let mut input = Deadline::after(large_context_turn()).io(&stream);
                         let mut bytes = raw.body_prefix;
                         while bytes.len() < size {
                             let mut buffer = [0; 65536];
@@ -291,7 +291,12 @@ impl Upstream {
 impl Drop for Upstream {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        self.worker.take().unwrap().join().unwrap();
+        if let Some(worker) = emp_test_support::drop_check(
+            self.worker.take().ok_or("missing worker"),
+            "join upstream",
+        ) {
+            emp_test_support::drop_check(worker.join(), "join upstream");
+        }
     }
 }
 
@@ -361,10 +366,14 @@ pub(super) fn connect(server: &ServerHandle, thread_id: &str) -> ClientWebSocket
     .unwrap()
 }
 
+pub(super) fn large_context_turn() -> TestBudget {
+    test_timeout(Duration::from_secs(30))
+}
+
 pub(super) fn turn(client: &mut ClientWebSocket, body: &Value) -> Value {
-    client.send_json(body).unwrap();
     let started = Instant::now();
-    let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
+    let deadline = Deadline::starting_at(started, large_context_turn());
+    client.send_json(body).unwrap();
     loop {
         assert!(!deadline.is_expired(), "fixture turn did not terminate");
         let event: Value = match client

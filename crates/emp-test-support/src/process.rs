@@ -243,21 +243,31 @@ impl OwnedChild {
             return Ok(status);
         }
         #[cfg(unix)]
-        {
-            use rustix::{
-                io::Errno,
-                process::{Pid, Signal, kill_process_group},
-            };
-            match kill_process_group(Pid::from_child(&self.child), Signal::KILL) {
-                Ok(()) | Err(Errno::SRCH) => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
+        self.terminate_group()?;
         #[cfg(windows)]
         self.job.terminate()?;
         let status = self.child.wait()?;
         self.status = Some(status);
         Ok(status)
+    }
+
+    /// XNU [killpg1](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c#L1709-L1718)
+    /// skips zombies and returns EPERM for an existing group with no eligible members.
+    #[cfg(unix)]
+    fn terminate_group(&self) -> io::Result<()> {
+        use rustix::{
+            io::Errno,
+            process::{Pid, Signal, kill_process_group},
+        };
+        match kill_process_group(Pid::from_child(&self.child), Signal::KILL) {
+            Ok(()) | Err(Errno::SRCH) => Ok(()),
+            Err(Errno::PERM)
+                if cfg!(target_os = "macos") && matches!(self.has_exited(), Ok(true)) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 }
 

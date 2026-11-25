@@ -64,6 +64,11 @@ impl Drop for Upstream {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         let _ = TcpStream::connect(self.address);
-        self.worker.take().unwrap().join().unwrap();
+        if let Some(worker) = emp_test_support::drop_check(
+            self.worker.take().ok_or("missing worker"),
+            "join upstream",
+        ) {
+            emp_test_support::drop_check(worker.join(), "join upstream");
+        }
     }
 }
