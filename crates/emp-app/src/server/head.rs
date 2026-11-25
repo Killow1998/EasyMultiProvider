@@ -1,7 +1,7 @@
 use super::ServerMode;
 use crate::http::request::{
-    REQUEST_READ_TIMEOUT, REQUEST_VERSION, Request, RequestMethod, parse_request, request_head_end,
-    reserved_source_header,
+    REQUEST_READ_TIMEOUT, REQUEST_VERSION, Request, RequestMethod, RequestMethods,
+    parse_request_with_methods, request_head_end, reserved_source_header,
 };
 use crate::server::http::{error::EntryError, stream::Delivery};
 use axum::body::Bytes;
@@ -17,11 +17,17 @@ use tokio::{
 };
 
 #[derive(Clone)]
-pub(crate) struct RawRequestHead(pub(crate) Arc<str>, usize, Arc<Mutex<BodyRead>>);
+pub(crate) struct RawRequestHead(
+    pub(crate) Arc<str>,
+    usize,
+    Arc<Mutex<BodyRead>>,
+    RequestMethods,
+);
 
 impl RawRequestHead {
     pub(crate) fn request(&self) -> Request<'_> {
-        parse_request(&self.0).expect("the connection already parsed the request head")
+        parse_request_with_methods(&self.0, self.3)
+            .expect("the connection already parsed the request head")
     }
 
     pub(crate) fn body_prefix_len(&self) -> usize {
@@ -54,6 +60,7 @@ impl GuardedHead {
     pub(super) async fn read(
         io: &mut (impl AsyncRead + Unpin),
         deadline: Instant,
+        methods: RequestMethods,
     ) -> Result<Self, EntryError> {
         let mut bytes = Vec::new();
         let mut buffer = [0; 1024];
@@ -79,12 +86,14 @@ impl GuardedHead {
             };
             let body_prefix = bytes.split_off(end);
             let head = str::from_utf8(&bytes).map_err(|_| EntryError::InvalidHead)?;
-            let request = parse_request(head).ok_or(EntryError::InvalidHead)?;
+            let request =
+                parse_request_with_methods(head, methods).ok_or(EntryError::InvalidHead)?;
             return Ok(Self {
                 raw: RawRequestHead(
                     Arc::from(head),
                     body_prefix.len(),
                     Arc::new(Mutex::new(BodyRead::Waiting(None))),
+                    methods,
                 ),
                 account_events: request.method == RequestMethod::Get
                     && request.raw_path() == "/api/accounts/events",
@@ -332,6 +341,7 @@ mod tests {
         let head = GuardedHead::read(
             &mut request.as_slice(),
             Instant::now() + test_timeout(REQUEST_READ_TIMEOUT).duration(),
+            RequestMethods::Standard,
         )
         .await
         .ok()

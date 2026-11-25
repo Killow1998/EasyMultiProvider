@@ -163,7 +163,13 @@ pub(crate) fn request_head_end(request: &[u8], previous_len: usize) -> Result<Op
     }
 }
 
-fn request_line(request: &str) -> Option<(RequestMethod<'_>, &str)> {
+#[derive(Clone, Copy)]
+pub(crate) enum RequestMethods {
+    Standard,
+    ExtendedFor(fn(&str) -> bool),
+}
+
+fn request_line(request: &str, methods: RequestMethods) -> Option<(RequestMethod<'_>, &str)> {
     let request_line = request.lines().next()?;
     let mut parts = request_line.split_whitespace();
     let method = parts.next()?;
@@ -173,19 +179,28 @@ fn request_line(request: &str) -> Option<(RequestMethod<'_>, &str)> {
         "HEAD" => RequestMethod::Head,
         "POST" => RequestMethod::Post,
         "DELETE" => RequestMethod::Delete,
-        method if module_runtime_target(target).is_some() => match method {
-            "PUT" => RequestMethod::Put,
-            "PATCH" => RequestMethod::Patch,
-            _ => RequestMethod::Other(method),
-        },
+        method if matches!(methods, RequestMethods::ExtendedFor(accepts) if accepts(target)) => {
+            match method {
+                "PUT" => RequestMethod::Put,
+                "PATCH" => RequestMethod::Patch,
+                _ => RequestMethod::Other(method),
+            }
+        }
         _ => return None,
     };
     (parts.next()? == REQUEST_VERSION && parts.next().is_none()).then_some((method, target))
 }
 
 pub(crate) fn parse_request(request: &str) -> Option<Request<'_>> {
+    parse_request_with_methods(request, RequestMethods::Standard)
+}
+
+pub(crate) fn parse_request_with_methods(
+    request: &str,
+    methods: RequestMethods,
+) -> Option<Request<'_>> {
     let headers_end = request.find("\r\n\r\n")?;
-    let (method, target) = request_line(request)?;
+    let (method, target) = request_line(request, methods)?;
     Some(Request {
         method,
         target,

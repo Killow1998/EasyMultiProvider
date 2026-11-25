@@ -166,7 +166,7 @@ mod implementation {
 
     #[derive(Default)]
     pub(crate) struct ServerHooks {
-        pub(crate) module_routes: Mutex<Vec<(String, u64, String)>>,
+        pub(crate) module_routes: Mutex<Vec<(String, String, u64, String)>>,
         pub(in crate::server) report_gate: Mutex<Option<ReportGate>>,
         pub(crate) upgrade_handoff: Mutex<Option<UpgradeHandoffGate>>,
         pub(in crate::server) request: Mutex<Option<RequestProbe>>,
@@ -260,6 +260,7 @@ mod implementation {
             caller: &Caller,
         ) {
             self.module_routes.lock().unwrap().push((
+                module.id.to_string(),
                 id.to_owned(),
                 module.generation,
                 caller.id.clone(),

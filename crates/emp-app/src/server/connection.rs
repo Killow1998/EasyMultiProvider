@@ -16,7 +16,10 @@ use super::{
 };
 use crate::{
     app::ServerState,
-    http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE, RequestMethod},
+    http::request::{
+        MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE, RequestMethod, RequestMethods,
+        module_runtime_target,
+    },
     services::{
         connection_admission::{BusinessToken, ConnectionSlot},
         modules::aero::CallLease,
@@ -163,7 +166,12 @@ pub(super) async fn drive_http(
         let _ = run_blocking(move || observation.failure("socket_setup_failed")).await;
         return;
     }
-    let head = GuardedHead::read(&mut io, accepted + REQUEST_HEAD_DEADLINE).await;
+    let head = GuardedHead::read(
+        &mut io,
+        accepted + REQUEST_HEAD_DEADLINE,
+        RequestMethods::ExtendedFor(|target| module_runtime_target(target).is_some()),
+    )
+    .await;
     let Some((permit, delegation)) = intake.admit(
         head.as_ref().ok().map(|head| head.raw.request()),
         &state,
@@ -258,7 +266,13 @@ pub(super) async fn drive(
     permit: BusinessToken,
 ) {
     let mode = recovery_driver_mode(control.mode);
-    let head = match GuardedHead::read(&mut io, accepted + mode.head_timeout()).await {
+    let head = match GuardedHead::read(
+        &mut io,
+        accepted + mode.head_timeout(),
+        RequestMethods::Standard,
+    )
+    .await
+    {
         Ok(head) => head,
         Err(error) => {
             let _slot = permit.slot().clone();

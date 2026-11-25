@@ -1,4 +1,7 @@
-use crate::http::request::{MAX_HEADER_BYTES, MODULE_RUNTIME_PREFIX, REQUEST_VERSION};
+use crate::http::{
+    auth::SESSION_HEADER,
+    request::{MODULE_RUNTIME_PREFIX, REQUEST_VERSION, request_head_end},
+};
 use emp_modules::{
     manifest::{Contribution, HookPhase, ModuleManifest, RouteAuth},
     peer::PeerHandle,
@@ -10,10 +13,11 @@ use std::{
 
 #[derive(Default)]
 pub struct ModuleRegistry {
-    active: Mutex<BTreeMap<String, Arc<ActiveModule>>>,
+    active: Mutex<BTreeMap<Arc<str>, Arc<ActiveModule>>>,
 }
 
 pub struct ActiveModule {
+    pub id: Arc<str>,
     pub generation: u64,
     pub connection: PeerHandle,
     pub hooks: BTreeSet<HookPhase>,
@@ -38,8 +42,11 @@ impl ModuleRegistry {
         manifest: ModuleManifest,
         generation: u64,
         connection: PeerHandle,
+        port: u16,
+        local_proxy_key_len: usize,
     ) -> Result<(), String> {
         let mut module = ActiveModule {
+            id: Arc::from(manifest.id),
             generation,
             connection,
             hooks: BTreeSet::new(),
@@ -55,13 +62,20 @@ impl ModuleRegistry {
                     path,
                     auth,
                 } => {
-                    let line_len = method.len()
-                        + MODULE_RUNTIME_PREFIX.len()
-                        + manifest.id.len()
-                        + path.len()
-                        + REQUEST_VERSION.len()
-                        + 2;
-                    if path.chars().any(char::is_whitespace) || line_len > MAX_HEADER_BYTES {
+                    let (header, prefix, token_len) = match auth {
+                        RouteAuth::Management | RouteAuth::Proxy => {
+                            (SESSION_HEADER, "", emp_state::WEB_SESSION_TOKEN_LENGTH)
+                        }
+                        RouteAuth::LocalProxy => ("Authorization", "Bearer ", local_proxy_key_len),
+                    };
+                    let head = format!(
+                        "{method} {MODULE_RUNTIME_PREFIX}{}{path} {REQUEST_VERSION}\r\nHost:127.0.0.1:{port}\r\n{header}:{prefix}{}\r\n\r\n",
+                        module.id,
+                        "x".repeat(token_len),
+                    );
+                    if path.chars().any(char::is_whitespace)
+                        || !matches!(request_head_end(head.as_bytes(), 0), Ok(Some(_)))
+                    {
                         return Err(format!(
                             "route {id} cannot be represented in an HTTP request"
                         ));
@@ -90,7 +104,7 @@ impl ModuleRegistry {
             .active
             .lock()
             .expect("module registry")
-            .insert(manifest.id, module);
+            .insert(module.id.clone(), module);
         drop(replaced);
         Ok(())
     }

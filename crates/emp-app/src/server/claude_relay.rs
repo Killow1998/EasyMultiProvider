@@ -118,3 +118,29 @@ impl RelayStream {
             .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_write_failed"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::http::tests::request;
+    use emp_test_support::{Deadline, test_timeout};
+    use std::time::Duration;
+
+    #[test]
+    fn relay_rejects_module_methods_before_authentication() {
+        let (listener, port) = RelayListener::bind().unwrap();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
+        let client = deadline
+            .connect((Ipv4Addr::LOCALHOST, port).into())
+            .unwrap();
+        let mut stream = listener.accept_peer().unwrap().unwrap();
+        deadline
+            .io(client)
+            .write_all(&request(port, "PUT", "/api/module-runtime/demo/", &[], b""))
+            .unwrap();
+        assert!(matches!(
+            read(&mut stream, "fixture-token"),
+            Err(ClaudeCliError::Failure("claude_cli_relay_invalid_headers"))
+        ));
+    }
+}

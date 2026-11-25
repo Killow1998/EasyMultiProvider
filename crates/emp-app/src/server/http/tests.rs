@@ -2296,6 +2296,12 @@ fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
                     .await
                     .is_empty()
             );
+            let module_route = request(port, "PUT", "/api/module-runtime/demo/", &[], b"");
+            assert!(
+                exchange_wire(address, &module_route, false)
+                    .await
+                    .is_empty()
+            );
             let exit = request(
                 port,
                 "POST",

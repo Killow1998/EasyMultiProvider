@@ -309,11 +309,15 @@ mod body_capacity_tests {
             "POST /api/config HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n"
         );
         let deadline = Instant::now() + test_timeout(REQUEST_READ_TIMEOUT).duration();
-        GuardedHead::read(&mut head.as_bytes(), deadline)
-            .await
-            .ok()
-            .expect("valid request head")
-            .raw
+        GuardedHead::read(
+            &mut head.as_bytes(),
+            deadline,
+            crate::http::request::RequestMethods::Standard,
+        )
+        .await
+        .ok()
+        .expect("valid request head")
+        .raw
     }
 
     #[tokio::test]
