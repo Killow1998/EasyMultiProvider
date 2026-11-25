@@ -1,0 +1,312 @@
+use serde::{Deserialize, Deserializer, Serialize};
+use std::{collections::BTreeSet, fmt};
+
+pub const HOST_API_V3: HostApi = HostApi { major: 3, minor: 0 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostApi {
+    pub major: u16,
+    pub minor: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiRequirement {
+    pub major: u16,
+    pub min_minor: u16,
+}
+
+impl ApiRequirement {
+    pub const fn accepts(&self, host: HostApi) -> bool {
+        self.major == host.major && self.min_minor <= host.minor
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleManifest {
+    pub id: String,
+    pub module_version: String,
+    pub host_api: ApiRequirement,
+    pub contributions: Vec<Contribution>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Contribution {
+    HttpRoute {
+        id: String,
+        method: String,
+        path: String,
+        auth: RouteAuth,
+    },
+    Hook {
+        phase: HookPhase,
+    },
+    #[serde(deserialize_with = "deserialize_catalog")]
+    Catalog,
+    Panel {
+        id: String,
+        entry: String,
+        revision: String,
+    },
+}
+
+fn deserialize_catalog<'de, D: Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Catalog {}
+
+    Catalog::deserialize(deserializer).map(|_| ())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteAuth {
+    Management,
+    Proxy,
+    LocalProxy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookPhase {
+    Authenticate,
+    ProjectAccounts,
+    ResolveRoute,
+    CheckAccess,
+    ProjectCatalog,
+    CallFinished,
+}
+
+impl HookPhase {
+    pub const fn method(self) -> &'static str {
+        match self {
+            Self::Authenticate => "module.auth.authenticate",
+            Self::ProjectAccounts => "module.accounts.project",
+            Self::ResolveRoute => "module.route.resolve",
+            Self::CheckAccess => "module.access.check",
+            Self::ProjectCatalog => "module.catalog.project",
+            Self::CallFinished => "module.call.finished",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ManifestError {
+    InvalidModuleId {
+        id: String,
+    },
+    EmptyModuleVersion,
+    IncompatibleHostApi {
+        required: ApiRequirement,
+        host: HostApi,
+    },
+    DuplicateContributionId {
+        index: usize,
+        id: String,
+    },
+    InvalidRouteMethod {
+        index: usize,
+        id: String,
+        method: String,
+    },
+    InvalidRoutePath {
+        index: usize,
+        id: String,
+        path: String,
+    },
+    DuplicateRoute {
+        index: usize,
+        id: String,
+        method: String,
+        path: String,
+    },
+    DuplicateHook {
+        index: usize,
+        phase: HookPhase,
+    },
+    DuplicateCatalog {
+        index: usize,
+    },
+    InvalidPanelEntry {
+        index: usize,
+        id: String,
+        entry: String,
+    },
+    EmptyPanelRevision {
+        index: usize,
+        id: String,
+    },
+}
+
+impl fmt::Display for ManifestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidModuleId { id } => {
+                write!(f, "模组 ID {id:?} 必须匹配 ^[a-z][a-z0-9-]{{0,31}}$")
+            }
+            Self::EmptyModuleVersion => f.write_str("模组版本不能为空"),
+            Self::IncompatibleHostApi { required, host } => write!(
+                f,
+                "模组要求宿主 API 主版本为 {} 且次版本至少为 {}，当前为 {}.{}",
+                required.major, required.min_minor, host.major, host.minor
+            ),
+            Self::DuplicateContributionId { index, id } => {
+                write!(f, "贡献[{index}] 的 ID {id:?} 已声明")
+            }
+            Self::InvalidRouteMethod { index, id, method } => {
+                write!(
+                    f,
+                    "贡献[{index}] 路由 {id:?} 的 HTTP 方法 {method:?} 不受支持"
+                )
+            }
+            Self::InvalidRoutePath { index, id, path } => {
+                write!(f, "贡献[{index}] 路由 {id:?} 的路径 {path:?} 无效")
+            }
+            Self::DuplicateRoute {
+                index,
+                id,
+                method,
+                path,
+            } => {
+                write!(f, "贡献[{index}] 路由 {id:?} 的 {method} {path:?} 已声明")
+            }
+            Self::DuplicateHook { index, phase } => {
+                write!(f, "贡献[{index}] 的钩子 {} 已声明", phase.method())
+            }
+            Self::DuplicateCatalog { index } => write!(f, "贡献[{index}] 重复声明目录"),
+            Self::InvalidPanelEntry { index, id, entry } => write!(
+                f,
+                "贡献[{index}] 面板 {id:?} 的入口 {entry:?} 必须是以 .js 结尾且不含 .. 的相对路径"
+            ),
+            Self::EmptyPanelRevision { index, id } => {
+                write!(f, "贡献[{index}] 面板 {id:?} 的修订版本不能为空")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ManifestError {}
+
+impl ModuleManifest {
+    pub fn validate(&self, host: HostApi) -> Result<(), Vec<ManifestError>> {
+        let mut errors = Vec::new();
+        let valid_id = self
+            .id
+            .as_bytes()
+            .split_first()
+            .is_some_and(|(first, rest)| {
+                first.is_ascii_lowercase()
+                    && rest.len() <= 31
+                    && rest
+                        .iter()
+                        .all(|&byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+            });
+        if !valid_id {
+            errors.push(ManifestError::InvalidModuleId {
+                id: self.id.clone(),
+            });
+        }
+        if self.module_version.is_empty() {
+            errors.push(ManifestError::EmptyModuleVersion);
+        }
+        if !self.host_api.accepts(host) {
+            errors.push(ManifestError::IncompatibleHostApi {
+                required: self.host_api,
+                host,
+            });
+        }
+
+        let mut ids = BTreeSet::new();
+        let mut routes = BTreeSet::new();
+        let mut hooks = BTreeSet::new();
+        let mut has_catalog = false;
+        for (index, contribution) in self.contributions.iter().enumerate() {
+            if let Contribution::HttpRoute { id, .. } | Contribution::Panel { id, .. } =
+                contribution
+                && !ids.insert(id)
+            {
+                errors.push(ManifestError::DuplicateContributionId {
+                    index,
+                    id: id.clone(),
+                });
+            }
+            match contribution {
+                Contribution::HttpRoute {
+                    id, method, path, ..
+                } => {
+                    if !matches!(method.as_str(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE") {
+                        errors.push(ManifestError::InvalidRouteMethod {
+                            index,
+                            id: id.clone(),
+                            method: method.clone(),
+                        });
+                    }
+                    if !path.starts_with('/')
+                        || path.contains("..")
+                        || path.contains("//")
+                        || path.contains(['?', '#'])
+                    {
+                        errors.push(ManifestError::InvalidRoutePath {
+                            index,
+                            id: id.clone(),
+                            path: path.clone(),
+                        });
+                    }
+                    if !routes.insert((method, path)) {
+                        errors.push(ManifestError::DuplicateRoute {
+                            index,
+                            id: id.clone(),
+                            method: method.clone(),
+                            path: path.clone(),
+                        });
+                    }
+                }
+                Contribution::Hook { phase } => {
+                    if !hooks.insert(*phase) {
+                        errors.push(ManifestError::DuplicateHook {
+                            index,
+                            phase: *phase,
+                        });
+                    }
+                }
+                Contribution::Catalog => {
+                    if has_catalog {
+                        errors.push(ManifestError::DuplicateCatalog { index });
+                    }
+                    has_catalog = true;
+                }
+                Contribution::Panel {
+                    id,
+                    entry,
+                    revision,
+                } => {
+                    if entry.starts_with(['/', '\\'])
+                        || matches!(entry.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
+                        || !entry.ends_with(".js")
+                        || entry.contains("..")
+                    {
+                        errors.push(ManifestError::InvalidPanelEntry {
+                            index,
+                            id: id.clone(),
+                            entry: entry.clone(),
+                        });
+                    }
+                    if revision.is_empty() {
+                        errors.push(ManifestError::EmptyPanelRevision {
+                            index,
+                            id: id.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}

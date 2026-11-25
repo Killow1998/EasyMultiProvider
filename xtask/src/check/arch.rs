@@ -26,7 +26,6 @@ const NORMAL_BUILD: &[(&str, &str)] = &[
     ("emp-mod-gateway", "emp-modules"),
     ("emp-mod-team", "emp-modules"),
     ("emp-mod-team", "emp-state"),
-    ("emp-modules", "emp-domain"),
     ("emp-router", "emp-domain"),
     ("emp-router", "emp-protocol"),
     ("emp-router", "emp-transport"),
@@ -188,13 +187,20 @@ fn dependencies(
             let to = dependency["name"]
                 .as_str()
                 .ok_or("[arch] dependency 缺少 name")?;
+            let dev = dependency["kind"].as_str() == Some("dev");
+            if from == "emp-modules" && !dev && !matches!(to, "emp-domain" | "serde" | "serde_json")
+            {
+                errors.push(format!(
+                    "[module-sdk-deps] {}: emp-modules → {to} 不在 SDK 的普通及构建依赖白名单中，只允许 emp-domain、serde 和 serde_json",
+                    package["manifest_path"].as_str().unwrap_or("Cargo.toml"),
+                ));
+            }
             let Some(path) = dependency["path"].as_str() else {
                 continue;
             };
             if names.get(to).copied() != Some(Path::new(path)) {
                 continue;
             }
-            let dev = dependency["kind"].as_str() == Some("dev");
             if to == "emp-test-support" {
                 websocket_fixture_consumer(package, from, dependency, errors);
             }
@@ -202,6 +208,7 @@ fn dependencies(
                 errors.push(format!("[arch] {} [dependencies]: {from} → {to} 在正常依赖里打开了 test-support；测试钩子只能由 [dev-dependencies] 或本 crate 的 test-support 特性打开", package["manifest_path"].as_str().unwrap_or("Cargo.toml")));
             }
             let allowed = match (from, to) {
+                ("emp-modules", _) => true,
                 ("emp-test-support", "emp-transport") => {
                     websocket_transport(package, dependency, errors);
                     true
@@ -381,6 +388,49 @@ fn forbidden(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn module_sdk_limits_non_dev_dependencies_including_external_crates() {
+        for (to, path, kind, valid) in [
+            (
+                "emp-domain",
+                json!("/workspace/emp-domain"),
+                Value::Null,
+                true,
+            ),
+            ("serde", Value::Null, Value::Null, true),
+            ("serde_json", Value::Null, Value::Null, true),
+            ("tokio", Value::Null, Value::Null, false),
+            ("tokio", Value::Null, json!("build"), false),
+            ("tokio", Value::Null, json!("dev"), true),
+            (
+                "emp-config",
+                json!("/workspace/emp-config"),
+                Value::Null,
+                false,
+            ),
+            (
+                "emp-config",
+                json!("/workspace/emp-config"),
+                json!("dev"),
+                true,
+            ),
+        ] {
+            let metadata = json!({"workspace_members": ["emp-modules", "emp-domain", "emp-config"], "packages": [
+                {"id": "emp-modules", "name": "emp-modules", "manifest_path": "/workspace/emp-modules/Cargo.toml",
+                 "dependencies": [{"name": to, "path": path, "kind": kind}]},
+                {"id": "emp-domain", "name": "emp-domain", "manifest_path": "/workspace/emp-domain/Cargo.toml", "dependencies": []},
+                {"id": "emp-config", "name": "emp-config", "manifest_path": "/workspace/emp-config/Cargo.toml", "dependencies": []}
+            ]});
+            let mut errors = Vec::new();
+            dependencies(&metadata, &[], &mut errors).unwrap();
+            assert_eq!(errors.is_empty(), valid, "emp-modules → {to}: {errors:?}");
+            if !valid {
+                assert!(errors[0].starts_with("[module-sdk-deps]"));
+                assert!(errors[0].contains(&format!("emp-modules → {to}")));
+            }
+        }
+    }
 
     #[test]
     fn arch_accepts_snapshot_edges_and_dev_edges_parallel_to_normal_ones() {

@@ -36,6 +36,7 @@ const RULES: &[&str] = &[
     "domain-purity",
     "module-path-extension",
     "module-paths",
+    "module-sdk-deps",
     "module-version",
     "msvc-only",
     "no-mod-in-macro",
