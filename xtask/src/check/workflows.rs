@@ -2,13 +2,10 @@ mod cargo_tests;
 mod yaml;
 
 use regex::Regex;
+use saphyr::SafelyIndex as _;
 use std::{collections::BTreeSet, sync::LazyLock};
-use yaml::{Node, NodeExt as _};
+use yaml::Node;
 
-const CONTEXTS: &[&str] = &[
-    "github", "env", "vars", "secrets", "inputs", "job", "jobs", "steps", "runner", "strategy",
-    "matrix", "needs",
-];
 const WORKFLOW_CONTEXTS: &[(&str, &[&str])] = &[
     ("env", &["github", "secrets", "inputs", "vars"]),
     ("concurrency", &["github", "inputs", "vars"]),
@@ -88,14 +85,20 @@ pub(super) fn check(
         }
     };
     let mut check = WorkflowCheck { path, errors };
+    check.mapping_keys(&workflow.root);
 
     for &(field, allowed) in WORKFLOW_CONTEXTS {
-        if let Some(value) = workflow.get(field) {
+        if let Some(value) = workflow.root.get(field) {
             check.contexts(field, value, allowed, false);
         }
     }
-    if let Some(jobs) = workflow.get("jobs").and_then(Node::entries) {
+    if let Some(jobs) = workflow
+        .root
+        .get("jobs")
+        .and_then(|node| node.data.as_mapping())
+    {
         for (id, job) in jobs {
+            let id = id.data.as_str().unwrap_or("<非字符串键>");
             let job_path = format!("jobs.{id}");
             for &(field, allowed) in JOB_CONTEXTS {
                 if let Some(value) = job.get(field) {
@@ -107,38 +110,37 @@ pub(super) fn check(
                     );
                 }
             }
-            let matrix = job
+            if let Some(exclude) = job
                 .get("strategy")
-                .and_then(|strategy| strategy.get("matrix"));
-            let default_directory = working_directory(job)
-                .or_else(|| working_directory(&workflow))
-                .unwrap_or_default();
-            let steps = job.get("steps").and_then(Node::as_sequence);
+                .and_then(|strategy| strategy.get("matrix"))
+                .and_then(|matrix| matrix.data.as_mapping())
+                .and_then(|matrix| {
+                    matrix
+                        .keys()
+                        .find(|key| key.data.as_str() == Some("exclude"))
+                })
+            {
+                let line = exclude.span.start.line();
+                check.errors.push(format!(
+                    "[workflow-test-targets] {path}:{line}: {job_path}.strategy.matrix 不能使用 exclude；请用 include 列出要运行的配置，并把测试目标静态写进命令"
+                ));
+            }
+            let steps = job.get("steps").and_then(|node| node.data.as_sequence());
             for step in steps.into_iter().flatten() {
                 if let Some(run_node) = step.get("run")
-                    && let Some(run) = run_node.as_str()
+                    && let Some(run) = run_node.data.as_str()
                 {
-                    let directory = step
-                        .get("working-directory")
-                        .and_then(Node::as_str)
-                        .unwrap_or(default_directory);
-                    for target in cargo_tests::missing(run, directory, matrix, app_tests) {
-                        let line = run_node.line();
-                        check.errors.push(format!(
-                            "[workflow-test-targets] {path}:{line}: emp-app 没有名为 {target} 的集成测试目标"
-                        ));
-                    }
+                    cargo_tests::check(
+                        path,
+                        run,
+                        workflow.script_lines(run_node),
+                        app_tests,
+                        check.errors,
+                    );
                 }
             }
         }
     }
-}
-
-fn working_directory(node: &Node) -> Option<&str> {
-    node.get("defaults")?
-        .get("run")?
-        .get("working-directory")?
-        .as_str()
 }
 
 struct WorkflowCheck<'a> {
@@ -147,24 +149,45 @@ struct WorkflowCheck<'a> {
 }
 
 impl WorkflowCheck<'_> {
+    fn mapping_keys(&mut self, node: &Node) {
+        if let Some(map) = node.data.as_mapping() {
+            for (key, value) in map {
+                if key.data.as_str().is_some_and(|name| name.contains("${{")) {
+                    let path = self.path;
+                    let line = key.span.start.line();
+                    self.errors.push(format!(
+                        "[workflow-yaml] {path}:{line}: 映射键不能使用表达式；请使用固定键名，把表达式放进支持表达式的值"
+                    ));
+                }
+                self.mapping_keys(value);
+            }
+        } else if let Some(sequence) = node.data.as_sequence() {
+            for value in sequence {
+                self.mapping_keys(value);
+            }
+        }
+    }
+
     fn contexts(&mut self, key: &str, node: &Node, allowed: &[&str], implicit: bool) {
-        if let Some(map) = node.entries() {
+        if let Some(map) = node.data.as_mapping() {
             for (name, value) in map {
+                let name = name.data.as_str().unwrap_or("<非字符串键>");
                 self.contexts(&format!("{key}.{name}"), value, allowed, false);
             }
-        } else if let Some(sequence) = node.as_sequence() {
+        } else if let Some(sequence) = node.data.as_sequence() {
             for (index, value) in sequence.iter().enumerate() {
                 self.contexts(&format!("{key}[{index}]"), value, allowed, false);
             }
-        } else if let Some(text) = node.as_str() {
+        } else if let Some(text) = node.data.as_str() {
+            let line = node.span.start.line();
             let expressions = EXPRESSION
                 .captures_iter(text)
                 .map(|captures| captures.extract::<1>().1[0]);
             if implicit && !text.contains("${{") {
-                self.expression_contexts(key, node.line(), text, allowed);
+                self.expression_contexts(key, line, text, allowed);
             } else {
                 for expression in expressions {
-                    self.expression_contexts(key, node.line(), expression, allowed);
+                    self.expression_contexts(key, line, expression, allowed);
                 }
             }
         }
@@ -172,28 +195,30 @@ impl WorkflowCheck<'_> {
 
     fn expression_contexts(&mut self, key: &str, line: usize, expression: &str, allowed: &[&str]) {
         static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"'(?:[^']|'')*'|[a-zA-Z_][a-zA-Z0-9_-]*|[^\s]")
-                .expect("Actions expression token pattern")
+            Regex::new(concat!(
+                r"'(?:[^']|'')*'|-?(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)|",
+                r"([a-zA-Z_][a-zA-Z0-9_-]*)|[^\s]",
+            ))
+            .expect("Actions expression token pattern")
         });
-        let mut tokens = TOKEN
-            .find_iter(expression)
-            .map(|token| token.as_str())
-            .peekable();
+        let mut tokens = TOKEN.captures_iter(expression).peekable();
         let mut previous = "";
         while let Some(token) = tokens.next() {
             if previous != "."
-                && tokens.peek() != Some(&"(")
-                && let Some(context) = CONTEXTS
-                    .iter()
-                    .find(|context| token.eq_ignore_ascii_case(context))
-                && !allowed.contains(context)
+                && let Some(identifier) = token.get(1)
+                && tokens.peek().is_none_or(|next| &next[0] != "(")
             {
-                let path = self.path;
-                self.errors.push(format!(
-                    "[workflow-contexts] {path}:{line}: {key} 不能使用 {context} 上下文"
-                ));
+                let context = identifier.as_str().to_ascii_lowercase();
+                if !matches!(context.as_str(), "true" | "false" | "null")
+                    && !allowed.contains(&context.as_str())
+                {
+                    let path = self.path;
+                    self.errors.push(format!(
+                        "[workflow-contexts] {path}:{line}: {key} 不能使用 {context} 上下文"
+                    ));
+                }
             }
-            previous = token;
+            previous = token.get_match().as_str();
         }
     }
 }
@@ -285,6 +310,59 @@ jobs:
     }
 
     #[test]
+    fn rejects_unknown_expression_roots() {
+        let errors = workflow_errors(
+            r#"jobs:
+  native:
+    env:
+      CODEX_HOME: ${{ runer.temp }}/home
+    if: contains(github.event.labels, 'runner '' test') || github.event.*.label == null || true || false || 0xff == -2.99e-2
+"#,
+        );
+        assert_eq!(
+            errors,
+            [
+                "[workflow-contexts] workflow.yml:4: jobs.native.env.CODEX_HOME 不能使用 runer 上下文"
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_expressions_in_mapping_keys() {
+        let errors = workflow_errors(
+            r#"jobs:
+  native:
+    env: { "${{ runner.os }}": "1" }
+    steps:
+      - with:
+          "prefix-${{ github.ref }}": value
+        run: echo ok
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:#?}");
+        for (error, line) in errors.iter().zip([3, 6]) {
+            assert!(error.starts_with(&format!("[workflow-yaml] workflow.yml:{line}:")));
+            assert!(error.contains("固定键名"));
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_run_keys_at_the_duplicate_line() {
+        let errors = workflow_errors(
+            r#"jobs:
+  native:
+    steps:
+      - run: cargo test -p emp-app --test retired
+        "run": cargo test -p emp-app --test exit_process
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert!(errors[0].starts_with("[workflow-yaml] workflow.yml:"));
+        assert!(errors[0].contains("duplicated key in mapping"));
+        assert!(errors[0].contains("line 5 column"));
+    }
+
+    #[test]
     fn test_targets_are_checked_after_yaml_and_shell_continuations() {
         let errors = workflow_errors(
             r#"jobs:
@@ -296,78 +374,103 @@ jobs:
           cargo +1.93.1 test --package emp-app
           --test retired_folded
       - run: |
+          echo "preparing"
+
           cargo test -pemp-app \
             --test retired_literal
+          cargo test -pemp-app --test retired_after_continuation
           cargo test -pemp-app --test exit_process -- --test forwarded_filter
+          cargo test -p emp-transport --test http_client
+          cargo test --test unselected_package
           # cargo test -pemp-app --test comment
           echo "cargo test -pemp-app --test printed"
 "#,
         );
-        assert_eq!(errors.len(), 3, "{errors:#?}");
-        for target in ["retired_plain", "retired_folded", "retired_literal"] {
-            assert!(
-                errors
-                    .iter()
-                    .any(|error| error.ends_with(&format!("{target} 的集成测试目标"))),
-                "{errors:#?}"
+        assert_eq!(errors.len(), 4, "{errors:#?}");
+        for (error, (line, target)) in errors.iter().zip([
+            (4, "retired_plain"),
+            (6, "retired_folded"),
+            (12, "retired_literal"),
+            (14, "retired_after_continuation"),
+        ]) {
+            assert_eq!(
+                error,
+                &format!(
+                    "[workflow-test-targets] workflow.yml:{line}: emp-app 没有名为 {target} 的集成测试目标"
+                ),
             );
         }
     }
 
     #[test]
-    fn test_targets_are_checked_when_manifest_selects_emp_app() {
+    fn rejects_manifest_paths_in_cargo_commands() {
         let errors = workflow_errors(
             r#"jobs:
   native:
     steps:
-      - run: cargo test --manifest-path crates/emp-app/Cargo.toml --test retired_at_root
-      - run: cargo test --manifest-path=".\crates\emp-app\Cargo.toml" --test retired_windows
-      - working-directory: crates/emp-codex
-        run: cargo test --manifest-path ../emp-app/Cargo.toml --test retired_relative
-      - run: cargo test --manifest-path crates/emp-codex/Cargo.toml --test other_package
+      - run: cargo test --manifest-path crates/emp-app/Cargo.toml -p emp-transport --test http_client
+      - run: cargo +1.93.1 build --manifest-path=".\crates\emp-app\Cargo.toml"
+      - run: cargo test -p emp-app --test exit_process -- --manifest-path forwarded_filter
 "#,
         );
-        assert_eq!(errors.len(), 3, "{errors:#?}");
-        for target in ["retired_at_root", "retired_windows", "retired_relative"] {
-            assert!(
-                errors
-                    .iter()
-                    .any(|error| error.ends_with(&format!("{target} 的集成测试目标"))),
-                "{errors:#?}"
-            );
+        assert_eq!(errors.len(), 2, "{errors:#?}");
+        for (error, line) in errors.iter().zip([4, 5]) {
+            assert!(error.starts_with(&format!("[workflow-test-targets] workflow.yml:{line}:")));
+            assert!(error.contains("--manifest-path"));
+            assert!(error.contains("-p <crate>"));
         }
     }
 
     #[test]
-    fn test_target_expressions_expand_static_matrix_values() {
-        let workflow = r#"jobs:
+    fn rejects_cd_before_cargo_in_a_run() {
+        let errors = workflow_errors(
+            r#"jobs:
+  native:
+    steps:
+      - run: cd crates/emp-app && cargo test -p emp-app --test exit_process
+      - run: |
+          cd crates/emp-app
+          cargo build -p emp-app
+      - working-directory: crates/emp-app
+        run: cargo test -p emp-app --test exit_process
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:#?}");
+        for (error, line) in errors.iter().zip([4, 7]) {
+            assert!(error.starts_with(&format!("[workflow-test-targets] workflow.yml:{line}:")));
+            assert!(error.contains("cd"));
+            assert!(error.contains("working-directory:"));
+            assert!(error.contains("-p"));
+        }
+    }
+
+    #[test]
+    fn rejects_matrix_exclude_and_dynamic_test_targets() {
+        let errors = workflow_errors(
+            r#"jobs:
   native:
     strategy:
       matrix:
-        target: [exit_process]
+        target: [exit_process, retired]
         include:
           - target: http_support
+        exclude:
+          - target: retired
     steps:
       - run: cargo test -pemp-app --test "${{ matrix.target }}"
-      - run: cargo test -pemp-app --test=${{ matrix.target }}
-      - run: cargo test -pemp-app --test "${{ inputs.target }}"
-"#;
-        assert!(workflow_errors(workflow).is_empty());
-        let errors = workflow_errors(
-            &workflow
-                .replace("[exit_process]", "[exit_process, retired_axis]")
-                .replace("target: http_support", "target: retired_include"),
+      - run: cargo test -p emp-transport --test=${{ inputs.target }}
+      - run: cargo test -pemp-app --test exit_process -- --test "${{ inputs.filter }}"
+"#,
         );
-        assert_eq!(errors.len(), 4, "{errors:#?}");
-        for target in ["retired_axis", "retired_include"] {
-            assert_eq!(
-                errors
-                    .iter()
-                    .filter(|error| error.ends_with(&format!("{target} 的集成测试目标")))
-                    .count(),
-                2,
-                "{errors:#?}"
-            );
+        assert_eq!(errors.len(), 3, "{errors:#?}");
+        for (error, (line, option)) in
+            errors
+                .iter()
+                .zip([(8, "exclude"), (11, "--test"), (12, "--test")])
+        {
+            assert!(error.starts_with(&format!("[workflow-test-targets] workflow.yml:{line}:")));
+            assert!(error.contains(option));
+            assert!(error.contains("把测试目标静态写进命令"));
         }
     }
 

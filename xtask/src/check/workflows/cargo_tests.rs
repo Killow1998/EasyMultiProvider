@@ -1,16 +1,14 @@
-use super::{
-    EXPRESSION, expression_pattern,
-    yaml::{Node, NodeExt as _},
-};
+use super::{expression_pattern, yaml::ScriptLines};
 use regex::Regex;
-use std::{borrow::Cow, collections::BTreeSet, sync::LazyLock};
+use std::{collections::BTreeSet, sync::LazyLock};
 
-pub(super) fn missing(
+pub(super) fn check(
+    path: &str,
     script: &str,
-    directory: &str,
-    matrix: Option<&Node>,
+    lines: ScriptLines,
     app_tests: &BTreeSet<String>,
-) -> BTreeSet<String> {
+    errors: &mut Vec<String>,
+) {
     static CONTINUATION: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?:\\|\x60)\r?\n").expect("shell continuation pattern"));
     static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
@@ -21,31 +19,47 @@ pub(super) fn missing(
         ))
         .expect("shell command token pattern")
     });
-    let script = CONTINUATION.replace_all(script, "");
+    let mut continuations = CONTINUATION.find_iter(script).peekable();
+    let joined = CONTINUATION.replace_all(script, "");
+    let mut removed_bytes = 0;
+    let mut previous = 0;
+    let mut offset = 0;
     let mut command = Vec::new();
-    let mut missing = BTreeSet::new();
-    for token in TOKEN
-        .find_iter(&script)
-        .map(|token| token.as_str())
-        .chain(["\n"])
+    let mut changed_directory = false;
+    for (start, word) in TOKEN
+        .find_iter(&joined)
+        .map(|token| (token.start(), token.as_str()))
+        .chain([(joined.len(), "\n")])
     {
-        match token.as_bytes()[0] {
+        while let Some(continuation) =
+            continuations.next_if(|span| span.start() <= start + removed_bytes)
+        {
+            offset += 1;
+            removed_bytes += continuation.len();
+        }
+        offset += joined[previous..start]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        previous = start;
+
+        match word.as_bytes()[0] {
             b'\n' | b';' | b'&' | b'|' => {
-                for target in app_test_targets(&command, directory) {
-                    missing.extend(
-                        test_names(target, matrix)
-                            .into_iter()
-                            .filter(|name| !app_tests.contains(name.as_ref()))
-                            .map(Cow::into_owned),
-                    );
-                }
+                check_command(
+                    &command,
+                    &mut changed_directory,
+                    app_tests,
+                    |offset, message| {
+                        let line = lines.command(offset);
+                        errors.push(format!("[workflow-test-targets] {path}:{line}: {message}"));
+                    },
+                );
                 command.clear();
             }
             b'#' => {}
-            _ => command.push(unquote(token)),
+            _ => command.push((offset, unquote(word))),
         }
     }
-    missing
 }
 
 fn unquote(word: &str) -> &str {
@@ -60,32 +74,41 @@ fn unquote(word: &str) -> &str {
     word
 }
 
-fn app_test_targets<'a>(command: &[&'a str], directory: &str) -> Vec<&'a str> {
-    let mut arguments = command
-        .iter()
-        .copied()
-        .skip_while(|argument| {
-            argument.split_once('=').is_some_and(|(name, _)| {
-                name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            })
+fn check_command(
+    command: &[(usize, &str)],
+    changed_directory: &mut bool,
+    app_tests: &BTreeSet<String>,
+    mut report: impl FnMut(usize, &str),
+) {
+    let mut words = command.iter().copied().skip_while(|(_, word)| {
+        word.split_once('=').is_some_and(|(name, _)| {
+            name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         })
+    });
+    let offset = match words.next() {
+        Some((_, "cd")) => {
+            *changed_directory = true;
+            return;
+        }
+        Some((offset, "cargo")) => offset,
+        _ => return,
+    };
+    if *changed_directory {
+        report(
+            offset,
+            "同一 run 中不能先 cd 再调用 cargo；请使用 step 的 working-directory:，或在仓库根目录用 -p <crate>",
+        );
+    }
+
+    let mut arguments = words
+        .map(|(_, word)| word)
+        .skip_while(|word| word.starts_with('+'))
+        .take_while(|word| *word != "--")
         .peekable();
-    if arguments.next() != Some("cargo") {
-        return Vec::new();
-    }
-    if arguments
-        .peek()
-        .is_some_and(|argument| argument.starts_with('+'))
-    {
-        arguments.next();
-    }
-    if arguments.next() != Some("test") {
-        return Vec::new();
-    }
-    let mut arguments = arguments.take_while(|argument| *argument != "--");
+    let is_test = arguments.next_if_eq(&"test").is_some();
     let mut selects_app = false;
-    let mut targets = Vec::new();
+    let mut targets = BTreeSet::new();
     while let Some(argument) = arguments.next() {
         let (option, value) = argument
             .split_once('=')
@@ -93,67 +116,40 @@ fn app_test_targets<'a>(command: &[&'a str], directory: &str) -> Vec<&'a str> {
                 (option, Some(unquote(value)))
             });
         match option {
+            "--manifest-path" => {
+                report(
+                    offset,
+                    "工作流的 cargo 命令不能使用 --manifest-path；请在工作区用 -p <crate> 选包",
+                );
+                if value.is_none() {
+                    arguments.next();
+                }
+            }
             "-pemp-app" => selects_app = true,
             "-p" | "--package" => {
-                selects_app |= value.or_else(|| arguments.next()) == Some("emp-app")
+                selects_app |= value.or_else(|| arguments.next()) == Some("emp-app");
             }
-            "--manifest-path" => {
-                selects_app |= value
-                    .or_else(|| arguments.next())
-                    .is_some_and(|path| is_app_manifest(path, directory));
+            "--test" => {
+                if let Some(target) = value.or_else(|| arguments.next()) {
+                    if target.contains("${{") {
+                        report(
+                            offset,
+                            "--test 的值不能使用表达式；请把测试目标静态写进命令",
+                        );
+                    } else if is_test {
+                        targets.insert(target);
+                    }
+                }
             }
-            "--test" => targets.extend(value.or_else(|| arguments.next())),
             _ => {}
         }
     }
-    if selects_app { targets } else { Vec::new() }
-}
-
-fn is_app_manifest(path: &str, directory: &str) -> bool {
-    let from_workspace =
-        path.starts_with(['/', '\\', '$']) || path.as_bytes().get(1) == Some(&b':');
-    let base = if from_workspace { "" } else { directory };
-    let mut components = Vec::new();
-    for component in base.split(['/', '\\']).chain(path.split(['/', '\\'])) {
-        match component {
-            "" | "." => {}
-            ".." => {
-                components.pop();
-            }
-            _ => components.push(component),
+    if selects_app {
+        for target in targets
+            .into_iter()
+            .filter(|target| !app_tests.contains(*target))
+        {
+            report(offset, &format!("emp-app 没有名为 {target} 的集成测试目标"));
         }
     }
-    components.ends_with(&["crates", "emp-app", "Cargo.toml"])
-}
-
-fn test_names<'a>(target: &'a str, matrix: Option<&'a Node>) -> Vec<Cow<'a, str>> {
-    let Some(expression) = EXPRESSION.captures(target) else {
-        return vec![Cow::Borrowed(target)];
-    };
-    let (whole, [body]) = expression.extract::<1>();
-    let Some((context, key)) = body.trim().split_once('.') else {
-        return Vec::new();
-    };
-    if whole != target || !context.trim().eq_ignore_ascii_case("matrix") {
-        return Vec::new();
-    }
-    let Some(matrix) = matrix else {
-        return Vec::new();
-    };
-    let key = key.trim();
-    let axis = matrix
-        .get(key)
-        .and_then(Node::as_sequence)
-        .into_iter()
-        .flatten();
-    let included = matrix
-        .get("include")
-        .and_then(Node::as_sequence)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.get(key));
-    axis.chain(included)
-        .filter_map(Node::scalar_text)
-        .filter(|name| !EXPRESSION.is_match(name))
-        .collect()
 }
