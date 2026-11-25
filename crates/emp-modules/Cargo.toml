@@ -10,5 +10,9 @@ workspace = true
 
 [dependencies]
 emp-domain = { path = "../emp-domain" }
+lsp-server = "=0.10.0"
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+emp-test-support = { path = "../emp-test-support" }

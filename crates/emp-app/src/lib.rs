@@ -4,6 +4,7 @@ mod cli;
 mod error;
 mod http;
 mod lifecycle;
+pub mod modules;
 mod server;
 mod services;
 mod startup_recovery;

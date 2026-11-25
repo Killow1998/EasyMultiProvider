@@ -45,7 +45,7 @@ shlex = "2.0.1"
 socket2 = "0.6.5"
 tempfile = "3.27"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
-tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }
 url = "2.5.7"
 

@@ -191,10 +191,10 @@ fn dependencies(
             let dev = kind.as_str() == Some("dev");
             if from == "emp-modules"
                 && kind.is_null()
-                && !matches!(to, "emp-domain" | "serde" | "serde_json")
+                && !matches!(to, "emp-domain" | "lsp-server" | "serde" | "serde_json")
             {
                 errors.push(format!(
-                    "[module-sdk-deps] {}: emp-modules → {to} 不在 SDK 的普通依赖白名单中，只允许 emp-domain、serde 和 serde_json",
+                    "[module-sdk-deps] {}: emp-modules → {to} 不在 SDK 的普通依赖白名单中，只允许 emp-domain、lsp-server、serde 和 serde_json",
                     package["manifest_path"].as_str().unwrap_or("Cargo.toml"),
                 ));
             }
@@ -403,6 +403,7 @@ mod tests {
             ),
             ("serde", Value::Null, Value::Null, true),
             ("serde_json", Value::Null, Value::Null, true),
+            ("lsp-server", Value::Null, Value::Null, true),
             ("tokio", Value::Null, Value::Null, false),
             ("tokio", Value::Null, json!("build"), true),
             ("tokio", Value::Null, json!("dev"), true),

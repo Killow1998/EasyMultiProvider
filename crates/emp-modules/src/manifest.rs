@@ -227,6 +227,10 @@ impl std::error::Error for ManifestError {}
 
 impl ModuleManifest {
     pub fn from_json(bytes: &[u8]) -> Result<Self, ManifestDecodeError> {
+        Self::from_value(serde_json::from_slice(bytes).map_err(ManifestDecodeError::Json)?)
+    }
+
+    pub fn from_value(value: Value) -> Result<Self, ManifestDecodeError> {
         #[derive(Deserialize)]
         #[serde(remote = "ModuleManifest", deny_unknown_fields)]
         struct ManifestFields {
@@ -236,7 +240,6 @@ impl ModuleManifest {
             contributions: Vec<Contribution>,
         }
 
-        let value: Value = serde_json::from_slice(bytes).map_err(ManifestDecodeError::Json)?;
         let manifest = value
             .as_object()
             .ok_or(ManifestDecodeError::ManifestNotObject)?;
@@ -260,8 +263,7 @@ impl ModuleManifest {
             }
         }
 
-        ManifestFields::deserialize(&mut serde_json::Deserializer::from_slice(bytes))
-            .map_err(ManifestDecodeError::Json)
+        ManifestFields::deserialize(value).map_err(ManifestDecodeError::Json)
     }
 
     pub fn validate(&self, host: HostApi) -> Result<(), Vec<ManifestError>> {
