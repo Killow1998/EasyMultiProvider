@@ -75,15 +75,13 @@ jobs:
         run: cargo +1.93.1 xtask package
 
       - name: Verify native TLS validation and trusted roots
-        run: >-
-          cargo +1.93.1 test --locked -p emp-transport --test http_client
-          tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name
+        run: cargo +1.93.1 xtask ci native-tls
 
       - name: Verify native memory statistics and request admission
-        run: cargo +1.93.1 test --locked -p emp-transport --lib system_memory -- --nocapture
+        run: cargo +1.93.1 xtask ci native-memory
 
       - name: Verify large HTTP request admission against the native memory probe
-        run: cargo +1.93.1 test --locked -p emp-app --lib native_memory_large_http_body -- --ignored --nocapture
+        run: cargo +1.93.1 xtask ci large-http-admission
 
       - name: Verify native background update and rollback
         run: cargo +1.93.1 xtask package-smoke
@@ -101,36 +99,21 @@ jobs:
           }
 
       - name: Verify startup recovery and native restoration on exit
-        run: >-
-          cargo +1.93.1 test --locked -p emp-app
-          --test desktop_startup --test startup_recovery --test exit_process --test http_support -- --test-threads=1
+        run: cargo +1.93.1 xtask ci startup-recovery-and-exit
 
       - name: Verify tray actions preserve admitted requests and publish state
-        run: cargo +1.93.1 test --locked -p emp-app --lib tray::actions::tests -- --test-threads=1
+        run: cargo +1.93.1 xtask ci tray-actions
 
       - name: Verify request cancellation and socket teardown
-        run: >-
-          cargo +1.93.1 test --locked -p emp-app --lib
-          disconnect -- --test-threads=1
+        run: cargo +1.93.1 xtask ci disconnect
 
-      - name: Verify WebSocket readiness preserves blocking writes
-        run: >-
-          cargo +1.93.1 test --locked -p emp-transport --lib
-          ready_reads_preserve_partial_frames_timeouts_and_blocking_writes
+      - name: Verify WebSocket async I/O on native sockets (partial frames, resets, write deadlines)
+        run: cargo +1.93.1 xtask ci websocket-native-io
 
       - name: Verify Windows process handoff and private state
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          cargo +1.93.1 test --locked -p emp-updater --lib process::tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +1.93.1 test --locked -p emp-app --lib configured_browser_helpers_never_allocate_a_console
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +1.93.1 test --locked -p emp-transport --lib background_proxy_commands_never_allocate_a_console
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +1.93.1 test --locked -p emp-files --lib private_windows::tests -- --skip detects_directory_reparse_points
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +1.93.1 test --locked -p emp-storage --lib vault::store::windows_tests
+        run: cargo +1.93.1 xtask ci windows-process-handoff
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

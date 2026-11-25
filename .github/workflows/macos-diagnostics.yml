@@ -43,18 +43,14 @@ jobs:
           sw_vers
           uname -m
           mkdir -m 700 "$CODEX_HOME"
-          cargo +1.93.1 test --locked -p emp-codex --lib runtime_inventory::
-          cargo +1.93.1 test --locked -p emp-codex --lib executable_trust::
-          cargo +1.93.1 test --locked -p emp-app --lib browser_login_classifies_engine_failures
-          cargo +1.93.1 test --locked -p emp-app --lib tray::actions::tests
-          cargo +1.93.1 test --locked -p emp-app --test desktop_startup --test exit_process --test http_support
+          cargo +1.93.1 xtask ci macos-discovery
       - name: Probe the official standalone CLI
         run: |
           prefix="$RUNNER_TEMP/emp-official-cli"
           npm install --prefix "$prefix" --no-audit --no-fund @openai/codex@0.169.0
           printf 'EMP_MACOS_DIAGNOSTIC_CLI=%s\n' "$prefix/node_modules/.bin/codex" >> "$GITHUB_ENV"
           EMP_MACOS_DIAGNOSTIC_CLI="$prefix/node_modules/.bin/codex" \
-            cargo +1.93.1 test --locked -p emp-codex --lib installed_macos_cli_discovery -- --ignored --nocapture
+            cargo +1.93.1 xtask ci macos-installed-cli
       - name: Inspect and probe the official desktop bundle
         if: matrix.runner == inputs.app_runner && (inputs.app_dmg_url != '' || inputs.app_dmg_sha256 != '')
         env:
@@ -97,4 +93,4 @@ jobs:
             fi
           done
           export EMP_MACOS_DIAGNOSTIC_APP="$app"
-          cargo +1.93.1 test --locked -p emp-codex --lib installed_macos_ -- --ignored --nocapture
+          cargo +1.93.1 xtask ci macos-installed-app

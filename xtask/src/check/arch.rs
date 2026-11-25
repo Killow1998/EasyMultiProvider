@@ -87,10 +87,12 @@ const FORBIDDEN: &[(&str, &str, &str)] = &[
 /// Forbidden paths that still exist until the named PLAN step removes them.
 const TRANSITIONAL: &[(&str, &str, &str)] = &[];
 
+pub(super) type TestTargets = BTreeMap<String, BTreeSet<String>>;
+
 pub(super) fn check(
     root: &Path,
     errors: &mut Vec<String>,
-) -> Result<(test_scope::Index, BTreeSet<String>)> {
+) -> Result<(test_scope::Index, TestTargets)> {
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .current_dir(root)
         .args([
@@ -113,8 +115,10 @@ pub(super) fn check(
         .map_err(|error| format!("[arch] cargo metadata JSON: {error}"))?;
     dependencies(&metadata, TRANSITIONAL, errors)?;
     let mut test_scopes = test_scope::Index::default();
-    let mut app_tests = BTreeSet::new();
+    let mut test_targets = TestTargets::new();
     for package in workspace_packages(&metadata)? {
+        let name = package["name"].as_str().ok_or("[arch] package 缺少 name")?;
+        let package_tests = test_targets.entry(name.to_owned()).or_default();
         let directory = package["manifest_path"]
             .as_str()
             .and_then(|path| Path::new(path).parent())
@@ -126,11 +130,9 @@ pub(super) fn check(
             use test_scope::SourceKind;
             let file = Path::new(target["src_path"].as_str()?);
             let kind = if target["kind"].as_array()?.iter().any(|kind| kind == "test") {
-                if package["name"] == "emp-app" {
-                    app_tests.insert(target["name"].as_str()?.to_owned());
-                }
+                package_tests.insert(target["name"].as_str()?.to_owned());
                 SourceKind::Integration
-            } else if package["name"] == "emp-test-support" {
+            } else if name == "emp-test-support" {
                 SourceKind::Fixture
             } else {
                 SourceKind::Production
@@ -139,7 +141,7 @@ pub(super) fn check(
         });
         module_paths::check(root, directory, files, &mut test_scopes, errors)?;
     }
-    Ok((test_scopes, app_tests))
+    Ok((test_scopes, test_targets))
 }
 
 fn workspace_packages(metadata: &Value) -> Result<impl Iterator<Item = &Value>> {

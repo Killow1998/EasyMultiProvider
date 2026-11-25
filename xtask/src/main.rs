@@ -1,4 +1,5 @@
 mod check;
+mod ci;
 mod cross_check;
 mod loc;
 mod module_e2e;
@@ -24,6 +25,7 @@ const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
   check                            check architecture, module versions, tests, docs and CI
+  ci <profile>|--list              run or list CI test profiles
   package [--skip-service-smoke]   build and smoke-test this platform's native package
   package-module ID [--output DIR] build one official module and its checksum
   module-e2e [--skip-aero]          build real modules and run ignored module journeys
@@ -40,6 +42,7 @@ fn main() -> ExitCode {
     let rest = args.get(1..).unwrap_or_default();
     let result = match args.first().map(String::as_str) {
         Some("check") => check::run(rest),
+        Some("ci") => ci::run(rest),
         Some("package") => package::run(rest),
         Some("package-module") => package::run_module(rest),
         Some("module-e2e") => module_e2e::run(rest),

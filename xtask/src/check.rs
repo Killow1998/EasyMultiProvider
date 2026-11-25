@@ -1,5 +1,6 @@
 mod arch;
 mod cfg_test;
+mod ci_profiles;
 mod comments;
 mod imports;
 mod module_paths;
@@ -13,9 +14,10 @@ mod test_scope;
 mod test_thread_observations;
 mod workflows;
 
-use crate::{Result, project_root};
+use crate::{Result, ci::PROFILES, project_root};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens as _;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -28,7 +30,7 @@ pub fn run(args: &[String]) -> Result {
     }
     let root = project_root();
     let mut errors = Vec::new();
-    let (test_scopes, app_tests) = arch::check(&root, &mut errors)?;
+    let (test_scopes, test_targets) = arch::check(&root, &mut errors)?;
     modules::check(&root, &mut errors)?;
     let list_files = [
         "ls-files",
@@ -43,6 +45,7 @@ pub fn run(args: &[String]) -> Result {
     test_deadlines::check(&root, &paths, &test_scopes, &mut errors)?;
     test_fixture_root::check(&root, &paths, &test_scopes, &mut errors)?;
     test_thread_observations::check(&root, &paths, &test_scopes, &mut errors)?;
+    let mut referenced_profiles = BTreeSet::new();
     for path in paths {
         if !root.join(&path).is_file() {
             continue;
@@ -62,12 +65,20 @@ pub fn run(args: &[String]) -> Result {
             && (path.ends_with(".yml") || path.ends_with(".yaml"))
         {
             let contents = read(&root, &path)?;
-            workflows::check(&path, &contents, &app_tests, &mut errors);
+            workflows::check(&path, &contents, &mut errors);
+            ci_profiles::check_references(
+                &path,
+                &contents,
+                PROFILES,
+                &mut referenced_profiles,
+                &mut errors,
+            );
         }
     }
+    ci_profiles::check_profiles(PROFILES, &test_targets, &referenced_profiles, &mut errors);
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, conditional-module-path, module-path-extension, module-version, test-boundary, docs-prose, no-python-on-main, workflow-contexts, workflow-test-targets, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
+            "check: arch, module-paths, conditional-module-path, module-path-extension, module-version, test-boundary, docs-prose, no-python-on-main, workflow-cargo-test, ci-profiles, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
         );
         Ok(())
     } else {
