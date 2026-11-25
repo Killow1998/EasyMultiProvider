@@ -1,6 +1,7 @@
 mod arch;
 mod cfg_test;
 mod comments;
+mod imports;
 mod module_paths;
 mod modules;
 mod production_sockets;

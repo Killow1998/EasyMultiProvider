@@ -1,4 +1,5 @@
 use super::{Path, Result, comments, read};
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::collections::BTreeMap;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -78,6 +79,32 @@ struct TestCfg<'ast> {
 }
 
 impl<'ast> TestCfg<'ast> {
+    fn inspect_macro_tokens(&mut self, tokens: TokenStream) {
+        let mut tokens = tokens.into_iter().peekable();
+        while let Some(token) = tokens.next() {
+            match token {
+                TokenTree::Punct(punct) if punct.as_char() == '#' => {
+                    if matches!(tokens.peek(), Some(TokenTree::Punct(punct)) if punct.as_char() == '!')
+                    {
+                        tokens.next();
+                    }
+                    if let Some(TokenTree::Group(group)) =
+                        tokens.next_if(|token| matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket))
+                        && let Ok(meta) = syn::parse2::<Meta>(group.stream())
+                        && condition_mentions_test(&meta)
+                    {
+                        self.findings.count += 1;
+                        if !self.test_scope {
+                            self.findings.non_item_lines.push(punct.span().start().line);
+                        }
+                    }
+                }
+                TokenTree::Group(group) => self.inspect_macro_tokens(group.stream()),
+                _ => {}
+            }
+        }
+    }
+
     fn visit_declaration<T>(
         &mut self,
         item: &'ast T,
@@ -182,6 +209,10 @@ impl<'ast> Visit<'ast> for TestCfg<'ast> {
                 .push(attribute.span().start().line);
         }
     }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        self.inspect_macro_tokens(invocation.tokens.clone());
+    }
 }
 
 fn condition_mentions_test(meta: &Meta) -> bool {
@@ -237,6 +268,25 @@ mod tests {
         for source in cases {
             assert_eq!(inspect(source).unwrap().non_item_lines, [1], "{source}");
         }
+    }
+
+    #[test]
+    fn counts_and_rejects_test_cfg_in_macro_inputs() {
+        let source = r##"
+fn drive() {
+    tokio::select! {
+        #[cfg(test)] _ = work() => (),
+        #[cfg(not(test))] _ = work() => (),
+        #[cfg(any(test, unix))] _ = work() => (),
+        #[cfg_attr(test, allow(unused))] _ = work() => (),
+    }
+    assert!(matches!({ #[cfg(test)] hook(); state() }, Ready));
+    trace!("#[cfg(test)]");
+}
+"##;
+        let cfg = inspect(source).unwrap();
+        assert_eq!(cfg.non_item_lines, [4, 5, 6, 7, 9]);
+        assert_eq!(cfg.count, 5);
     }
 
     #[test]

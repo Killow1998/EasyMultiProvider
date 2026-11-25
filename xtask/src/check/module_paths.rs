@@ -76,8 +76,13 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
                 || matches!(portable.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic());
             let native = Path::new(&value);
             let mut targets = BTreeSet::from([self.directory.join(native)]);
-            if !rooted {
-                targets.insert(self.directory.join(&portable));
+            if native.is_absolute() || !rooted {
+                let normalized = if cfg!(windows) && native.is_absolute() {
+                    value.replace('/', "\\")
+                } else {
+                    portable
+                };
+                targets.insert(self.directory.join(normalized));
             }
             if rooted && !native.is_absolute()
                 || targets
@@ -299,5 +304,40 @@ mod nested {
         for (error, line) in errors.iter().zip([2, 3, 5, 6, 7, 8, 9]) {
             assert!(error.contains(&format!("lib.rs:{line}:")), "{error}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalizes_separators_in_native_absolute_paths() {
+        let root = emp_test_support::fixture_dir().unwrap();
+        let crate_dir = root.path().join("app");
+        let src = crate_dir.join("src");
+        let other = root.path().join("other/src");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        fs::write(src.join("inside.rs"), "").unwrap();
+        fs::write(other.join("lib.rs"), "").unwrap();
+        let entry = src.join("lib.rs");
+        let source = src.canonicalize().unwrap();
+        fs::write(
+            &entry,
+            format!(
+                "#[path = {:?}] mod inside;\n#[path = {:?}] mod outside;\n",
+                source.join(r"..\src\inside.rs").to_str().unwrap(),
+                source.join(r"..\..\other\src\lib.rs").to_str().unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let mut errors = Vec::new();
+        check(
+            root.path(),
+            &crate_dir,
+            [entry.as_path()].into_iter(),
+            &mut errors,
+        )
+        .unwrap();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("lib.rs:2:"), "{errors:?}");
     }
 }

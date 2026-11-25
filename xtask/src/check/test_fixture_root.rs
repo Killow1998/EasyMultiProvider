@@ -1,6 +1,7 @@
-use super::{Path, Result, comments, read};
+use super::{Path, Result, comments, imports::Imports, read};
+use std::collections::BTreeSet;
 use syn::{
-    Expr,
+    Expr, Pat,
     parse::Parser as _,
     punctuated::Punctuated,
     visit::{self, Visit},
@@ -50,6 +51,8 @@ fn violations(path: &str, contents: &str) -> Result<Vec<(usize, &'static str)>> 
         test_file: comments::test_file(path),
         xtask: path.starts_with("xtask/"),
         scopes: comments::TestScopes::default(),
+        imports: Imports::module(&file.items),
+        builder_bindings: BTreeSet::new(),
         production_roots_remaining: PRODUCTION_ROOTS
             .iter()
             .find_map(|&(source, count)| (source == path).then_some(count))
@@ -67,39 +70,46 @@ struct FixtureRoots {
     test_file: bool,
     xtask: bool,
     scopes: comments::TestScopes,
+    imports: Imports,
+    builder_bindings: BTreeSet<String>,
     production_roots_remaining: usize,
     violations: Vec<(usize, &'static str)>,
 }
 
-fn tempfile_builder_call(path: &syn::ExprPath, method: &str) -> bool {
-    path.path
-        .segments
-        .iter()
-        .map(|segment| &segment.ident)
-        .eq(["tempfile", "Builder", method])
-}
-
-fn tempfile_builder_receiver(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call(call) => matches!(
-            call.func.as_ref(),
-            Expr::Path(path) if tempfile_builder_call(path, "new")
-        ),
-        Expr::MethodCall(call)
-            if matches!(
-                call.method.to_string().as_str(),
-                "prefix" | "suffix" | "rand_bytes" | "permissions" | "append" | "disable_cleanup"
-            ) =>
-        {
-            tempfile_builder_receiver(&call.receiver)
-        }
-        Expr::Paren(paren) => tempfile_builder_receiver(&paren.expr),
-        Expr::Group(group) => tempfile_builder_receiver(&group.expr),
-        _ => false,
-    }
-}
-
 impl FixtureRoots {
+    fn is_builder(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Call(call) => {
+                let Expr::Path(path) = call.func.as_ref() else {
+                    return false;
+                };
+                let parts = self.imports.resolve(&path.path);
+                parts == ["tempfile", "Builder", "new"]
+                    || parts == ["tempfile", "Builder", "default"]
+            }
+            Expr::MethodCall(call)
+                if matches!(
+                    call.method.to_string().as_str(),
+                    "prefix"
+                        | "suffix"
+                        | "rand_bytes"
+                        | "permissions"
+                        | "append"
+                        | "disable_cleanup"
+                ) =>
+            {
+                self.is_builder(&call.receiver)
+            }
+            Expr::Path(path) => path
+                .path
+                .get_ident()
+                .is_some_and(|name| self.builder_bindings.contains(&name.to_string())),
+            Expr::Paren(paren) => self.is_builder(&paren.expr),
+            Expr::Group(group) => self.is_builder(&group.expr),
+            _ => false,
+        }
+    }
+
     fn in_test(&self, line: usize) -> bool {
         self.test_file || self.scopes.contains(line)
     }
@@ -116,6 +126,44 @@ impl FixtureRoots {
 }
 
 impl<'ast> Visit<'ast> for FixtureRoots {
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if let Some((_, items)) = &module.content {
+            let outer_imports = std::mem::replace(&mut self.imports, Imports::module(items));
+            let outer_bindings = std::mem::take(&mut self.builder_bindings);
+            visit::visit_item_mod(self, module);
+            self.builder_bindings = outer_bindings;
+            self.imports = outer_imports;
+        }
+    }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        self.imports.enter_block(block);
+        let outer_bindings = self.builder_bindings.clone();
+        visit::visit_block(self, block);
+        self.builder_bindings = outer_bindings;
+        self.imports.leave_block();
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        visit::visit_local(self, local);
+        let pat = match &local.pat {
+            Pat::Type(typed) => typed.pat.as_ref(),
+            pat => pat,
+        };
+        if let Pat::Ident(pat) = pat {
+            let name = pat.ident.to_string();
+            if local
+                .init
+                .as_ref()
+                .is_some_and(|init| self.is_builder(&init.expr))
+            {
+                self.builder_bindings.insert(name);
+            } else {
+                self.builder_bindings.remove(&name);
+            }
+        }
+    }
+
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
         if let Ok(expressions) =
             Punctuated::<Expr, syn::Token![,]>::parse_terminated.parse2(invocation.tokens.clone())
@@ -141,7 +189,8 @@ impl<'ast> Visit<'ast> for FixtureRoots {
                     || name == "temp_dir"
                     || name == "tempfile"
                     || name == "spooled_tempfile"
-                    || name == "make" && tempfile_builder_call(path, "make")
+                    || name == "make"
+                        && self.imports.resolve(&path.path) == ["tempfile", "Builder", "make"]
                     || name == "new" && owner.is_some_and(|owner| owner == "SpooledTempFile")
                     || (name == "new" || name == "with_prefix" || name == "with_suffix")
                         && owner.is_some_and(|owner| owner == "TempDir" || owner == "NamedTempFile")
@@ -158,7 +207,7 @@ impl<'ast> Visit<'ast> for FixtureRoots {
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         if call.method == "tempdir"
             || call.method == "tempfile"
-            || call.method == "make" && tempfile_builder_receiver(&call.receiver)
+            || call.method == "make" && self.is_builder(&call.receiver)
         {
             self.uses_implicit_root(call.method.span().start().line);
         }
@@ -235,6 +284,54 @@ fn fixture() {
             (3..=6)
                 .map(|line| (line, FIXTURE_ROOT_GUIDANCE))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rejects_implicit_builder_root_through_local_binding() {
+        let source =
+            "fn fixture() { let builder = tempfile::Builder::new(); builder.make(create); }";
+        assert_eq!(
+            violations("crates/example/tests/wire.rs", source).unwrap(),
+            [(1, FIXTURE_ROOT_GUIDANCE)]
+        );
+    }
+
+    #[test]
+    fn rejects_implicit_builder_root_through_import_alias() {
+        let source =
+            "use tempfile::{Builder as Fixture}; fn fixture() { Fixture::new().make(create); }";
+        assert_eq!(
+            violations("crates/example/tests/wire.rs", source).unwrap(),
+            [(1, FIXTURE_ROOT_GUIDANCE)]
+        );
+    }
+
+    #[test]
+    fn rejects_implicit_root_from_default_builder() {
+        let source = "fn fixture() { tempfile::Builder::default().make(create); }";
+        assert_eq!(
+            violations("crates/example/tests/wire.rs", source).unwrap(),
+            [(1, FIXTURE_ROOT_GUIDANCE)]
+        );
+    }
+
+    #[test]
+    fn allows_explicit_roots_with_local_and_imported_builders() {
+        let source = r#"
+use tempfile::Builder as Fixture;
+fn fixture() {
+    let mut builder = Fixture::default();
+    builder.prefix("case-").make_in(root, create);
+    builder.tempdir_in(root);
+    Fixture::new().tempfile_in(root);
+    other::Builder::new().make(create);
+}
+"#;
+        assert!(
+            violations("crates/example/tests/wire.rs", source)
+                .unwrap()
+                .is_empty()
         );
     }
 

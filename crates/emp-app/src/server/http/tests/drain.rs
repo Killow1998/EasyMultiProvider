@@ -370,9 +370,7 @@ async fn quit_response(address: SocketAddr, session: &str) -> Vec<u8> {
         address,
         &json_request(address.port(), "/api/quit", &[session], b"{}"),
         false,
-        &Deadline::after(
-            crate::services::shutdown::QUIT_PRECHECK_WAIT + crate::server::raw_tcp::wire_timeout(),
-        ),
+        &Deadline::after(crate::services::shutdown::QUIT_PRECHECK_WAIT + wire_timeout()),
     )
     .await
 }

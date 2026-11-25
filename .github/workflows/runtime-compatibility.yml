@@ -55,6 +55,8 @@ jobs:
       - name: Verify frontend copy and behavior
         run: node --test crates/emp-app/tests/*_contract.cjs
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      # --all-targets unifies features enabled by dev-dependencies, which can hide production branches from Clippy.
+      - run: cargo clippy --locked --workspace --lib --bins -- -D warnings
       - run: cargo test --locked --workspace --all-targets --no-fail-fast
 
   windows-exit:

@@ -1,4 +1,4 @@
-use super::{Path, Result, comments, read};
+use super::{Path, Result, comments, imports::Imports, read};
 use std::collections::BTreeMap;
 use syn::{
     Expr, Pat,
@@ -103,6 +103,7 @@ fn inspect_source(path: &str, contents: &str) -> Result<(Vec<usize>, Vec<usize>)
         emp_app: group(path) == Some("emp-app"),
         socket_implementation: path == "crates/emp-test-support/src/lib.rs",
         scopes,
+        imports: Imports::module(&source.items),
         lines: Vec::new(),
         socket_lines: Vec::new(),
     };
@@ -117,6 +118,7 @@ struct Deadlines {
     emp_app: bool,
     socket_implementation: bool,
     scopes: comments::TestScopes,
+    imports: Imports,
     lines: Vec<usize>,
     socket_lines: Vec<usize>,
 }
@@ -128,13 +130,13 @@ impl Deadlines {
 
     fn inspect(&mut self, expr: &Expr, constants: bool) {
         let line = expr.span().start().line;
-        if self.in_test(line) && bare_duration(expr, constants, self.emp_app, false) {
+        if self.in_test(line) && bare_duration(expr, constants, self.emp_app, false, &self.imports)
+        {
             self.lines.push(line);
         }
     }
 
-    fn inspect_socket_timeout(&mut self, name: &syn::Ident) {
-        let line = name.span().start().line;
+    fn inspect_socket_timeout(&mut self, name: &str, line: usize) {
         if (!self.socket_implementation || self.scopes.contains(line))
             && self.in_test(line)
             && (name == "set_read_timeout" || name == "set_write_timeout")
@@ -174,49 +176,56 @@ impl Deadlines {
     }
 }
 
-fn bare_duration(expr: &Expr, constants: bool, emp_app: bool, arithmetic: bool) -> bool {
+fn bare_duration(
+    expr: &Expr,
+    constants: bool,
+    emp_app: bool,
+    arithmetic: bool,
+    imports: &Imports,
+) -> bool {
     match expr {
-        Expr::Paren(paren) => bare_duration(&paren.expr, constants, emp_app, arithmetic),
-        Expr::Group(group) => bare_duration(&group.expr, constants, emp_app, arithmetic),
+        Expr::Paren(paren) => bare_duration(&paren.expr, constants, emp_app, arithmetic, imports),
+        Expr::Group(group) => bare_duration(&group.expr, constants, emp_app, arithmetic, imports),
         Expr::Binary(binary) if matches!(binary.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) => {
-            if starts_at_now(&binary.left) {
+            if starts_at_now(&binary.left, imports) {
                 return false;
             }
-            bare_duration(&binary.left, true, emp_app, true)
-                || bare_duration(&binary.right, true, emp_app, true)
+            bare_duration(&binary.left, true, emp_app, true, imports)
+                || bare_duration(&binary.right, true, emp_app, true, imports)
         }
         Expr::Call(call) => {
             let Expr::Path(path) = call.func.as_ref() else {
                 return arithmetic;
             };
-            let mut parts = path.path.segments.iter().rev();
+            let path = imports.resolve(&path.path);
+            let mut parts = path.iter().rev().map(String::as_str);
             let Some(name) = parts.next() else {
                 return false;
             };
-            if name.ident == "Some" {
-                return call
-                    .args
-                    .first()
-                    .is_some_and(|expr| bare_duration(expr, constants, emp_app, arithmetic));
+            if name == "Some" {
+                return call.args.first().is_some_and(|expr| {
+                    bare_duration(expr, constants, emp_app, arithmetic, imports)
+                });
             }
-            if name.ident == "test_timeout"
-                || (emp_app && path_matches(path, &["crate", "server", "raw_tcp", "wire_timeout"]))
+            if name == "test_timeout"
+                || (emp_app && path == ["crate", "server", "raw_tcp", "wire_timeout"])
             {
                 return false;
             }
             arithmetic
                 || (matches!(
-                    name.ident.to_string().as_str(),
+                    name,
                     "from_secs"
                         | "from_millis"
                         | "from_secs_f64"
                         | "from_micros"
                         | "from_nanos"
                         | "new"
-                ) && parts.next().is_some_and(|part| part.ident == "Duration")
+                ) && parts.next() == Some("Duration")
                     && call.args.iter().all(|arg| matches!(arg, Expr::Lit(_))))
         }
         Expr::Path(path) if constants => {
+            let path = imports.resolve(&path.path);
             if emp_app
                 && [
                     &["crate", "server", "REQUEST_DRAIN_TIMEOUT"][..],
@@ -224,20 +233,14 @@ fn bare_duration(expr: &Expr, constants: bool, emp_app: bool, arithmetic: bool) 
                     &["crate", "services", "runtime", "CODEX_CATALOG_APPLY_DELAY"],
                 ]
                 .iter()
-                .any(|expected| path_matches(path, expected))
+                .any(|expected| path == *expected)
             {
                 return false;
             }
-            let name = path
-                .path
-                .segments
-                .last()
-                .expect("expression path")
-                .ident
-                .to_string();
+            let name = path.last().expect("expression path");
             arithmetic
-                || (!path.path.segments.iter().rev().nth(1).is_some_and(|part| {
-                    part.ident == "Duration" && matches!(name.as_str(), "ZERO" | "MAX")
+                || (!path.iter().rev().nth(1).is_some_and(|part| {
+                    part == "Duration" && matches!(name.as_str(), "ZERO" | "MAX")
                 }) && name.bytes().any(|byte| byte.is_ascii_uppercase())
                     && !name.bytes().any(|byte| byte.is_ascii_lowercase()))
         }
@@ -246,31 +249,23 @@ fn bare_duration(expr: &Expr, constants: bool, emp_app: bool, arithmetic: bool) 
     }
 }
 
-fn path_matches(path: &syn::ExprPath, expected: &[&str]) -> bool {
-    path.path
-        .segments
-        .iter()
-        .map(|part| &part.ident)
-        .eq(expected.iter().copied())
-}
-
-fn instant_now(expr: &Expr) -> bool {
+fn instant_now(expr: &Expr, imports: &Imports) -> bool {
     matches!(
         expr,
         Expr::Call(call)
-            if matches!(call.func.as_ref(), Expr::Path(path) if path
-                .path.segments.iter().rev().take(2).map(|part| &part.ident).eq(["now", "Instant"]))
+            if matches!(call.func.as_ref(), Expr::Path(path) if imports
+                .resolve(&path.path).iter().rev().take(2).map(String::as_str).eq(["now", "Instant"]))
     )
 }
 
-fn starts_at_now(expr: &Expr) -> bool {
+fn starts_at_now(expr: &Expr, imports: &Imports) -> bool {
     match expr {
-        Expr::Paren(paren) => starts_at_now(&paren.expr),
-        Expr::Group(group) => starts_at_now(&group.expr),
+        Expr::Paren(paren) => starts_at_now(&paren.expr, imports),
+        Expr::Group(group) => starts_at_now(&group.expr, imports),
         Expr::Binary(binary) if matches!(binary.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) => {
-            starts_at_now(&binary.left)
+            starts_at_now(&binary.left, imports)
         }
-        _ => instant_now(expr),
+        _ => instant_now(expr, imports),
     }
 }
 
@@ -281,6 +276,20 @@ fn deadline_name(name: &syn::Ident) -> bool {
 }
 
 impl<'ast> Visit<'ast> for Deadlines {
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if let Some((_, items)) = &module.content {
+            let outer_imports = std::mem::replace(&mut self.imports, Imports::module(items));
+            visit::visit_item_mod(self, module);
+            self.imports = outer_imports;
+        }
+    }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        self.imports.enter_block(block);
+        visit::visit_block(self, block);
+        self.imports.leave_block();
+    }
+
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
         for expression in &assertion_expressions(invocation) {
             self.visit_expr(expression);
@@ -291,29 +300,24 @@ impl<'ast> Visit<'ast> for Deadlines {
         if let Expr::Path(path) = call.func.as_ref()
             && let Some(name) = path.path.segments.last()
         {
-            self.inspect_socket_timeout(&name.ident);
-            if name.ident == "after"
-                && path
-                    .path
-                    .segments
-                    .iter()
-                    .rev()
-                    .nth(1)
-                    .is_some_and(|part| part.ident == "Deadline")
+            let path = self.imports.resolve(&path.path);
+            let resolved = path.last().expect("expression path");
+            self.inspect_socket_timeout(resolved, name.ident.span().start().line);
+            if matches!(path.as_slice(), [.., owner, name] if owner == "Deadline" && name == "after")
             {
                 if let Some(argument) = call.args.first() {
                     self.inspect(argument, true);
                 }
             } else {
-                self.arguments(&name.ident.to_string(), &call.args);
+                self.arguments(resolved, &call.args);
             }
         }
         visit::visit_expr_call(self, call);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        self.inspect_socket_timeout(&call.method);
         let name = call.method.to_string();
+        self.inspect_socket_timeout(&name, call.method.span().start().line);
         if name == "wait_timeout" || name == "wait_timeout_while" {
             if let Some(expr) = call.args.iter().nth(1) {
                 self.inspect(expr, true);
@@ -325,7 +329,9 @@ impl<'ast> Visit<'ast> for Deadlines {
     }
 
     fn visit_expr_binary(&mut self, expr: &'ast syn::ExprBinary) {
-        if matches!(expr.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) && starts_at_now(&expr.left) {
+        if matches!(expr.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_))
+            && starts_at_now(&expr.left, &self.imports)
+        {
             self.inspect(&expr.right, true);
         }
         visit::visit_expr_binary(self, expr);
@@ -476,6 +482,28 @@ fn drain() {
         assert_eq!(
             violations("crates/emp-app/tests/wire.rs", source).unwrap(),
             [6, 7, 8, 10, 11, 14, 16, 18]
+        );
+    }
+
+    #[test]
+    fn compares_imported_and_qualified_deadlines_by_path() {
+        let source = r#"
+use crate::server::{REQUEST_DRAIN_TIMEOUT as DRAIN, raw_tcp::wire_timeout};
+fn drain() {
+    timeout(wire_timeout(), future);
+    timeout(crate::server::raw_tcp::wire_timeout(), future);
+    timeout(DRAIN + wire_timeout(), future);
+    timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::wire_timeout(), future);
+    {
+        use crate::fixture::wire_timeout;
+        timeout(DRAIN + wire_timeout(), future);
+    }
+    timeout(DRAIN + wire_timeout(), future);
+}
+"#;
+        assert_eq!(
+            violations("crates/emp-app/tests/wire.rs", source).unwrap(),
+            [10]
         );
     }
 

@@ -8,7 +8,7 @@ use syn::{
     visit::{self, Visit},
 };
 
-const ALLOWED: &[(&str, usize)] = &[("emp-app", 26), ("emp-transport", 4)];
+const ALLOWED: &[(&str, usize)] = &[("emp-app", 32), ("emp-transport", 6)];
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
     let mut counts: BTreeMap<&str, Vec<String>> = ALLOWED
@@ -77,8 +77,8 @@ impl TestFunctions {
         if self.test_file || self.scopes.contains(block.span().start().line) {
             let mut body = ThreadBody::default();
             body.visit_block(block);
-            if let Some(line) = body.spawn.filter(|_| body.receives) {
-                self.lines.push(line);
+            if body.receives {
+                self.lines.extend(body.spawns);
             }
         }
     }
@@ -105,7 +105,7 @@ impl<'ast> Visit<'ast> for TestFunctions {
 
 #[derive(Default)]
 struct ThreadBody {
-    spawn: Option<usize>,
+    spawns: Vec<usize>,
     receives: bool,
 }
 
@@ -124,7 +124,7 @@ impl<'ast> Visit<'ast> for ThreadBody {
             let segments = &expr.path.segments;
             let names = segments.iter().map(|segment| &segment.ident);
             if names.clone().eq(["thread", "spawn"]) || names.eq(["std", "thread", "spawn"]) {
-                self.spawn.get_or_insert(call.span().start().line);
+                self.spawns.push(call.span().start().line);
             }
             if let Some(name) = segments.last()
                 && segments
@@ -187,6 +187,24 @@ mod tests {
         assert_eq!(
             inspect_source("crates/sample/tests/wire.rs", source).unwrap(),
             [2, 7, 11]
+        );
+    }
+
+    #[test]
+    fn counts_each_spawn_in_a_function_with_manual_observations() {
+        let source = r#"
+fn manual() {
+    let (first_tx, first_rx) = mpsc::channel();
+    let (second_tx, second_rx) = mpsc::channel();
+    std::thread::spawn(move || first_tx.send(first));
+    thread::spawn(move || second_tx.send(second));
+    assert_eq!(first_rx.recv().unwrap(), expected_first);
+    assert_eq!(Receiver::recv(&second_rx).unwrap(), expected_second);
+}
+"#;
+        assert_eq!(
+            inspect_source("crates/sample/tests/wire.rs", source).unwrap(),
+            [5, 6]
         );
     }
 }
