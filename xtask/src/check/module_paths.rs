@@ -1,9 +1,9 @@
 use super::{
-    Path, Result, contains_ident, fs,
+    Path, Result, attribute_group, contains_ident, fs,
     test_scope::{Index, SourceKind},
 };
 use proc_macro2::{
-    Delimiter, Span, TokenStream,
+    Delimiter, Spacing, Span, TokenStream,
     TokenTree::{Group, Ident, Literal, Punct},
 };
 use quote::ToTokens as _;
@@ -180,14 +180,14 @@ impl SourceRules<'_> {
                 {
                     self.report("[conditional-module-path]", name.span(), "禁止通过 cfg_attr 设置模块的 path；请用 #[cfg(...)] 分别声明两个 mod，或把差异放到同一文件内的 cfg 块中");
                 }
-                [Punct(hash), Group(attribute), ..]
-                    if hash.as_char() == '#' && attribute.delimiter() == Delimiter::Bracket =>
-                {
+                [Punct(hash), rest @ ..] if hash.as_char() == '#' => {
+                    let Some(attribute) = attribute_group(rest) else {
+                        continue;
+                    };
                     let mut parts = attribute.stream().into_iter();
                     if let (Some(Ident(name)), Some(Punct(eq)), Some(path @ Literal(_))) =
                         (parts.next(), parts.next(), parts.next())
-                        && name.unraw() == "path"
-                        && eq.as_char() == '='
+                        && is_path_assignment(&name, &eq)
                         && let Ok(path) = syn::parse2::<LitStr>(path.into())
                     {
                         let value = path.value();
@@ -220,13 +220,15 @@ impl SourceRules<'_> {
     }
 }
 
+fn is_path_assignment(name: &proc_macro2::Ident, eq: &proc_macro2::Punct) -> bool {
+    name.unraw() == "path" && eq.as_char() == '=' && eq.spacing() == Spacing::Alone
+}
+
 fn contains_path_assignment(tokens: TokenStream) -> bool {
     let mut tokens = tokens.into_iter().peekable();
     while let Some(token) = tokens.next() {
         match token {
-            Ident(name)
-                if name.unraw() == "path"
-                    && matches!(tokens.peek(), Some(Punct(eq)) if eq.as_char() == '=') =>
+            Ident(name) if matches!(tokens.peek(), Some(Punct(eq)) if is_path_assignment(&name, eq)) =>
             {
                 return true;
             }
@@ -527,6 +529,28 @@ macro_rules! helper { () => { "mod" } }"#;
                 "{errors:?}"
             );
         }
+    }
+
+    #[test]
+    fn checks_inner_module_path_attributes() {
+        let source = r#"mod fixtures { #![path = "helpers.inc"] }
+mod conditional { #![cfg_attr(all(), path = "helpers.rs")] }"#;
+        let mut errors = Vec::new();
+        assert!(check_source("lib.rs", source, &mut errors), "{errors:?}");
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].starts_with("[module-path-extension] lib.rs:1:"));
+        assert!(errors[1].starts_with("[conditional-module-path] lib.rs:2:"));
+    }
+
+    #[test]
+    fn allows_path_tokens_in_documentation_attributes() {
+        let source = r#"#[cfg_attr(all(), doc = stringify!(path == expected))]
+mod equality {}
+#[cfg_attr(all(), doc = stringify!(path => expected))]
+mod mapping {}"#;
+        let mut errors = Vec::new();
+        assert!(check_source("lib.rs", source, &mut errors), "{errors:?}");
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]

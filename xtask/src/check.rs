@@ -15,7 +15,7 @@ mod test_thread_observations;
 mod workflows;
 
 use crate::{Result, ci::PROFILES, project_root};
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 use quote::ToTokens as _;
 use std::collections::BTreeSet;
 use std::fs;
@@ -173,6 +173,19 @@ fn macro_arguments(invocation: &Macro) -> syn::Result<Punctuated<Expr, Token![,]
     Punctuated::parse_terminated.parse2(invocation.tokens.clone())
 }
 
+fn attribute_group(tokens: &[TokenTree]) -> Option<&Group> {
+    let tokens = match tokens {
+        [TokenTree::Punct(bang), rest @ ..] if bang.as_char() == '!' => rest,
+        _ => tokens,
+    };
+    match tokens {
+        [TokenTree::Group(attribute), ..] if attribute.delimiter() == Delimiter::Bracket => {
+            Some(attribute)
+        }
+        _ => None,
+    }
+}
+
 fn visit_macro_attributes(tokens: TokenStream, visit: &mut impl FnMut(TokenStream, usize)) {
     let mut tokens = tokens.into_iter().peekable();
     while let Some(token) = tokens.next() {
@@ -259,16 +272,10 @@ fn check_shared_test_tokens(path: &str, tokens: TokenStream, errors: &mut Vec<St
     for (index, token) in tokens.iter().enumerate() {
         let restriction = match &tokens[index..] {
             [TokenTree::Punct(hash), rest @ ..] if hash.as_char() == '#' => {
-                let rest = match rest {
-                    [TokenTree::Punct(bang), rest @ ..] if bang.as_char() == '!' => rest,
-                    _ => rest,
-                };
-                let [TokenTree::Group(attribute), ..] = rest else {
+                let Some(attribute) = attribute_group(rest) else {
                     continue;
                 };
-                if attribute.delimiter() != Delimiter::Bracket
-                    || !contains_ident(attribute.stream(), "test")
-                {
+                if !contains_ident(attribute.stream(), "test") {
                     continue;
                 }
                 "属性中禁止出现 test 标识符"
