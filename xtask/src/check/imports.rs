@@ -1,84 +1,216 @@
-//! 为 lint 识别常规写法中的失误。`use` 限于同一文件，别名按声明作用域展开至不动点。
-//! 规则处理带初始化式的 `let` 和简单赋值 `x = …`。有意规避、局部遮蔽分析、
-//! 跨函数或跨文件的数据流和宏生成的名字超出适用范围。
-
 use std::collections::{BTreeMap, BTreeSet};
-use syn::{Item, ItemUse, Path, Stmt, UseTree, ext::IdentExt};
+use syn::{Item, ItemMod, Path, Stmt, UseTree, ext::IdentExt};
 
-#[derive(Default)]
-pub(super) struct Imports(Vec<BTreeMap<String, Import>>);
-
-struct Import {
-    absolute: bool,
-    segments: Vec<String>,
+pub(super) struct Imports<'source> {
+    scopes: Vec<Scope>,
+    modules: BTreeMap<(usize, usize), usize>,
+    file_module: Option<Vec<&'source str>>,
+    current: usize,
 }
 
-impl Imports {
-    pub(super) fn module(items: &[Item]) -> Self {
-        let mut imports = Self::default();
-        imports.enter(items.iter().filter_map(item_import));
+struct Scope {
+    bindings: BTreeMap<String, Binding>,
+    parent: Option<usize>,
+    module: usize,
+}
+
+enum Binding {
+    Import {
+        absolute: bool,
+        segments: Vec<String>,
+    },
+    Constant(usize),
+    Module(usize),
+}
+
+impl<'source> Imports<'source> {
+    pub(super) fn file(path: &'source str, items: &[Item]) -> Self {
+        let mut imports = Self {
+            scopes: Vec::new(),
+            modules: BTreeMap::new(),
+            file_module: file_module(path),
+            current: 0,
+        };
+        imports.add_scope(None, true, items.iter());
         imports
     }
 
-    pub(super) fn enter_block(&mut self, block: &syn::Block) {
-        self.enter(block.stmts.iter().filter_map(|stmt| match stmt {
-            Stmt::Item(item) => item_import(item),
-            _ => None,
-        }));
+    pub(super) fn enter_module(&mut self, module: &ItemMod) {
+        let start = module.ident.span().start();
+        self.current = self.modules[&(start.line, start.column)];
     }
 
-    pub(super) fn leave_block(&mut self) {
-        self.0.pop();
+    pub(super) fn enter_block(&mut self, block: &syn::Block) {
+        self.current = self.add_scope(
+            Some(self.current),
+            false,
+            block.stmts.iter().filter_map(|stmt| match stmt {
+                Stmt::Item(item) => Some(item),
+                _ => None,
+            }),
+        );
+    }
+
+    pub(super) fn leave_scope(&mut self) {
+        self.current = self.scopes[self.current].parent.expect("nested scope");
     }
 
     pub(super) fn resolve(&self, path: &Path) -> Vec<String> {
+        self.resolve_definition(path).0
+    }
+
+    pub(super) fn resolve_definition(&self, path: &Path) -> (Vec<String>, Option<usize>) {
         let mut segments: Vec<_> = path
             .segments
             .iter()
             .map(|segment| segment.ident.unraw().to_string())
             .collect();
         if path.leading_colon.is_some() {
-            return segments;
+            return (segments, None);
         }
-        let mut scopes = &self.0[..];
+        let mut scope = self.current;
         let mut visited = BTreeSet::new();
-        while let Some((index, name, import)) =
-            scopes.iter().enumerate().rev().find_map(|(index, scope)| {
-                let (name, import) = scope.get_key_value(segments.first()?)?;
-                Some((index, name, import))
-            })
-        {
-            if !visited.insert((index, name)) {
-                break;
+        while let Some((index, declared_in, binding)) = self.binding(&segments, scope) {
+            match binding {
+                Binding::Constant(line) if index + 1 == segments.len() => {
+                    return (segments, Some(*line));
+                }
+                Binding::Import {
+                    absolute,
+                    segments: target,
+                } => {
+                    let name = &segments[index];
+                    if !visited.insert((declared_in, name.clone())) {
+                        break;
+                    }
+                    let terminal = *absolute || (index == 0 && target.first() == Some(name));
+                    segments.splice(..=index, target.iter().cloned());
+                    if terminal {
+                        break;
+                    }
+                    scope = declared_in;
+                }
+                _ => break,
             }
-            let terminal = import.absolute || import.segments.first() == Some(name);
-            segments.splice(..1, import.segments.iter().cloned());
-            if terminal {
-                break;
-            }
-            scopes = &scopes[..=index];
         }
-        segments
+        (segments, None)
     }
 
-    fn enter<'ast>(&mut self, items: impl Iterator<Item = &'ast ItemUse>) {
-        let mut scope = BTreeMap::new();
-        for item in items {
-            add_import(
-                &item.tree,
-                &mut Vec::new(),
-                item.leading_colon.is_some(),
-                &mut scope,
-            );
+    fn binding(&self, segments: &[String], scope: usize) -> Option<(usize, usize, &Binding)> {
+        let mut module = self.scopes[scope].module;
+        let (mut index, mut declared_in) = match segments.first()?.as_str() {
+            "self" => (1, module),
+            "super" => {
+                let parents = segments.iter().take_while(|name| *name == "super").count();
+                for _ in 0..parents {
+                    module = self.scopes[self.scopes[module].parent?].module;
+                }
+                (parents, module)
+            }
+            "crate" => {
+                let file_module = self.file_module.as_ref()?;
+                let offset = 1 + file_module.len();
+                if segments.get(1..offset)? != file_module.as_slice() {
+                    return None;
+                }
+                (offset, 0)
+            }
+            _ => (0, scope),
+        };
+        let mut binding = loop {
+            let scope = &self.scopes[declared_in];
+            if let Some(binding) = scope.bindings.get(segments.get(index)?) {
+                break binding;
+            }
+            if declared_in == scope.module {
+                return None;
+            }
+            declared_in = scope.parent?;
+        };
+        while let Binding::Module(module) = binding {
+            declared_in = *module;
+            index += 1;
+            binding = self.scopes[declared_in]
+                .bindings
+                .get(segments.get(index)?)?;
         }
-        self.0.push(scope);
+        Some((index, declared_in, binding))
+    }
+
+    fn add_scope<'ast>(
+        &mut self,
+        parent: Option<usize>,
+        module_scope: bool,
+        items: impl Iterator<Item = &'ast Item>,
+    ) -> usize {
+        let index = self.scopes.len();
+        let module = if module_scope {
+            index
+        } else {
+            self.scopes[parent.expect("block scope parent")].module
+        };
+        self.scopes.push(Scope {
+            bindings: BTreeMap::new(),
+            parent,
+            module,
+        });
+        let mut bindings = BTreeMap::new();
+        for item in items {
+            let (ident, binding) = match item {
+                Item::Use(item) => {
+                    add_import(
+                        &item.tree,
+                        &mut Vec::new(),
+                        item.leading_colon.is_some(),
+                        &mut bindings,
+                    );
+                    continue;
+                }
+                Item::Const(item) => (
+                    &item.ident,
+                    Binding::Constant(item.ident.span().start().line),
+                ),
+                Item::Static(item) => (
+                    &item.ident,
+                    Binding::Constant(item.ident.span().start().line),
+                ),
+                Item::Mod(item) => {
+                    let Some((_, items)) = &item.content else {
+                        continue;
+                    };
+                    let child = self.add_scope(Some(index), true, items.iter());
+                    let start = item.ident.span().start();
+                    self.modules.insert((start.line, start.column), child);
+                    (&item.ident, Binding::Module(child))
+                }
+                _ => continue,
+            };
+            bindings.insert(ident.unraw().to_string(), binding);
+        }
+        self.scopes[index].bindings = bindings;
+        index
     }
 }
 
-fn item_import(item: &Item) -> Option<&ItemUse> {
-    match item {
-        Item::Use(item) => Some(item),
-        _ => None,
+fn file_module(path: &str) -> Option<Vec<&str>> {
+    let path = path.strip_suffix(".rs")?;
+    if let Some((_, relative)) = path.split_once("/src/") {
+        let mut parts: Vec<_> = relative.split('/').collect();
+        match parts.as_slice() {
+            ["lib" | "main"] | ["bin", _] | ["bin", _, "main"] => parts.clear(),
+            [.., "mod"] => {
+                parts.pop();
+            }
+            _ => {}
+        }
+        Some(parts)
+    } else if matches!(
+        path.split('/').collect::<Vec<_>>().as_slice(),
+        ["crates", _, "tests", _] | ["xtask", "tests", _] | ["tests", _]
+    ) {
+        Some(Vec::new())
+    } else {
+        None
     }
 }
 
@@ -86,46 +218,36 @@ fn add_import(
     tree: &UseTree,
     prefix: &mut Vec<String>,
     absolute: bool,
-    scope: &mut BTreeMap<String, Import>,
+    scope: &mut BTreeMap<String, Binding>,
 ) {
-    match tree {
+    let (name, target) = match tree {
         UseTree::Path(path) => {
             prefix.push(path.ident.unraw().to_string());
             add_import(&path.tree, prefix, absolute, scope);
             prefix.pop();
+            return;
         }
         UseTree::Group(group) => {
             for entry in &group.items {
                 add_import(entry, prefix, absolute, scope);
             }
+            return;
         }
         UseTree::Name(name) if name.ident == "self" => {
-            if let Some(name) = prefix.last() {
-                scope.insert(
-                    name.clone(),
-                    Import {
-                        absolute,
-                        segments: prefix.clone(),
-                    },
-                );
-            }
+            let Some(name) = prefix.last() else { return };
+            (name.clone(), None)
         }
         UseTree::Name(name) => {
             let name = name.ident.unraw().to_string();
-            let mut segments = prefix.clone();
-            segments.push(name.clone());
-            scope.insert(name, Import { absolute, segments });
+            (name.clone(), Some(name))
         }
-        UseTree::Rename(rename) => {
-            let mut segments = prefix.clone();
-            if rename.ident != "self" {
-                segments.push(rename.ident.unraw().to_string());
-            }
-            scope.insert(
-                rename.rename.unraw().to_string(),
-                Import { absolute, segments },
-            );
-        }
-        UseTree::Glob(_) => {}
-    }
+        UseTree::Rename(rename) => (
+            rename.rename.unraw().to_string(),
+            (rename.ident != "self").then(|| rename.ident.unraw().to_string()),
+        ),
+        UseTree::Glob(_) => return,
+    };
+    let mut segments = prefix.clone();
+    segments.extend(target);
+    scope.insert(name, Binding::Import { absolute, segments });
 }

@@ -15,6 +15,7 @@ use crate::{Result, project_root};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use syn::{Expr, Macro, Token, parse::Parser as _, punctuated::Punctuated};
 
 pub fn run(args: &[String]) -> Result {
     if !args.is_empty() {
@@ -81,6 +82,10 @@ fn single_http_driver(path: &str, source: &str, errors: &mut Vec<String>) {
             ));
         }
     }
+}
+
+fn macro_arguments(invocation: &Macro) -> syn::Result<Punctuated<Expr, Token![,]>> {
+    Punctuated::parse_terminated.parse2(invocation.tokens.clone())
 }
 
 fn read(root: &Path, path: &str) -> Result<String> {

@@ -1,8 +1,4 @@
-//! 检查常规测试写法中的裸期限、直接设置 socket 超时和固定产品等待。
-//! 同一文件内展开 `use` 别名至不动点，识别带初始化式的 `let` 和简单赋值 `x = …`。
-//! 有意规避、局部遮蔽分析、跨函数或跨文件的数据流和宏生成的名字超出适用范围。
-
-use super::{Path, Result, comments, imports::Imports, read};
+use super::{Path, Result, comments, imports::Imports, macro_arguments, read};
 use std::collections::BTreeMap;
 use syn::{
     Expr, Pat,
@@ -127,7 +123,7 @@ fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
         emp_app: group(path) == Some("emp-app"),
         socket_implementation: path == "crates/emp-test-support/src/lib.rs",
         scopes,
-        imports: Imports::module(&source.items),
+        imports: Imports::file(path, &source.items),
         violations: Violations::default(),
     };
     visitor.visit_file(&source);
@@ -136,16 +132,16 @@ fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
     Ok(visitor.violations)
 }
 
-struct Deadlines {
+struct Deadlines<'source> {
     test_file: bool,
     emp_app: bool,
     socket_implementation: bool,
     scopes: comments::TestScopes,
-    imports: Imports,
+    imports: Imports<'source>,
     violations: Violations,
 }
 
-impl Deadlines {
+impl Deadlines<'_> {
     fn in_test(&self, line: usize) -> bool {
         self.test_file || self.scopes.contains(line)
     }
@@ -169,8 +165,23 @@ impl Deadlines {
 
     fn inspect_product_wait(&mut self, expr: &Expr) {
         let line = expr.span().start().line;
-        if self.in_test(line) && !product_wait(expr, &self.imports) {
+        if self.in_test(line) && !self.product_wait(expr) {
             self.violations.product_waits.push(line);
+        }
+    }
+
+    fn product_wait(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Path(path) => {
+                let (segments, declaration) = self.imports.resolve_definition(&path.path);
+                segments.last().is_some_and(|name| constant_name(name))
+                    && !declaration.is_some_and(|line| self.in_test(line))
+            }
+            Expr::Index(index) => self.product_wait(&index.expr),
+            Expr::MethodCall(call) => self.product_wait(&call.receiver),
+            Expr::Paren(paren) => self.product_wait(&paren.expr),
+            Expr::Group(group) => self.product_wait(&group.expr),
+            _ => false,
         }
     }
 
@@ -209,26 +220,12 @@ fn constant_name(name: &str) -> bool {
         && !name.bytes().any(|byte| byte.is_ascii_lowercase())
 }
 
-fn product_wait(expr: &Expr, imports: &Imports) -> bool {
-    match expr {
-        Expr::Path(path) => imports
-            .resolve(&path.path)
-            .last()
-            .is_some_and(|name| constant_name(name)),
-        Expr::Index(index) => product_wait(&index.expr, imports),
-        Expr::MethodCall(call) => product_wait(&call.receiver, imports),
-        Expr::Paren(paren) => product_wait(&paren.expr, imports),
-        Expr::Group(group) => product_wait(&group.expr, imports),
-        _ => false,
-    }
-}
-
 fn bare_duration(
     expr: &Expr,
     constants: bool,
     emp_app: bool,
     arithmetic: bool,
-    imports: &Imports,
+    imports: &Imports<'_>,
 ) -> bool {
     match expr {
         Expr::Paren(paren) => bare_duration(&paren.expr, constants, emp_app, arithmetic, imports),
@@ -290,7 +287,7 @@ fn bare_duration(
     }
 }
 
-fn instant_now(expr: &Expr, imports: &Imports) -> bool {
+fn instant_now(expr: &Expr, imports: &Imports<'_>) -> bool {
     matches!(
         expr,
         Expr::Call(call)
@@ -299,7 +296,7 @@ fn instant_now(expr: &Expr, imports: &Imports) -> bool {
     )
 }
 
-fn starts_at_now(expr: &Expr, imports: &Imports) -> bool {
+fn starts_at_now(expr: &Expr, imports: &Imports<'_>) -> bool {
     match expr {
         Expr::Paren(paren) => starts_at_now(&paren.expr, imports),
         Expr::Group(group) => starts_at_now(&group.expr, imports),
@@ -316,23 +313,27 @@ fn deadline_name(name: &syn::Ident) -> bool {
         .any(|part| part.eq_ignore_ascii_case("timeout") || part.eq_ignore_ascii_case("deadline"))
 }
 
-impl<'ast> Visit<'ast> for Deadlines {
+impl<'ast> Visit<'ast> for Deadlines<'_> {
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-        if let Some((_, items)) = &module.content {
-            let outer_imports = std::mem::replace(&mut self.imports, Imports::module(items));
+        if module.content.is_some() {
+            self.imports.enter_module(module);
             visit::visit_item_mod(self, module);
-            self.imports = outer_imports;
+            self.imports.leave_scope();
         }
     }
 
     fn visit_block(&mut self, block: &'ast syn::Block) {
         self.imports.enter_block(block);
         visit::visit_block(self, block);
-        self.imports.leave_block();
+        self.imports.leave_scope();
     }
 
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        for expression in &assertion_expressions(invocation) {
+        let expressions = macro_arguments(invocation).map_or_else(
+            |_| assertion_expressions(invocation),
+            |args| args.into_iter().collect(),
+        );
+        for expression in &expressions {
             self.visit_expr(expression);
         }
     }
@@ -418,9 +419,7 @@ pub(super) fn assertion_expressions(invocation: &syn::Macro) -> Vec<Expr> {
     };
     let expressions = match name.ident.to_string().as_str() {
         "assert" | "assert_eq" | "assert_ne" | "debug_assert" | "debug_assert_eq"
-        | "debug_assert_ne" => Punctuated::<Expr, syn::Token![,]>::parse_terminated
-            .parse2(invocation.tokens.clone())
-            .map(|args| args.into_iter().collect()),
+        | "debug_assert_ne" => macro_arguments(invocation).map(|args| args.into_iter().collect()),
         "matches" | "assert_matches" | "debug_assert_matches" => {
             parse_match_arguments.parse2(invocation.tokens.clone())
         }
@@ -573,6 +572,88 @@ fn fixture(budget: TestBudget, wait: Duration) {
                 .unwrap()
                 .product_waits,
             [8, 9, 10]
+        );
+    }
+
+    #[test]
+    fn resolves_relative_deadline_aliases_at_the_import() {
+        let source = r#"
+use std::time as time;
+use self::time::Duration as Wait;
+mod nested {
+    use super::Wait as ParentWait;
+    fn fixture() {
+        use other::time;
+        use self::ParentWait as LocalWait;
+        rx.recv_timeout(LocalWait::from_secs(1));
+        rx.recv_timeout(time::OtherWait::from_secs(1));
+    }
+}
+"#;
+        assert_eq!(
+            violations("crates/example/tests/wire.rs", source).unwrap(),
+            [9]
+        );
+    }
+
+    #[test]
+    fn rejects_product_wait_from_same_file_test_declarations() {
+        let source = r#"
+const NETWORK_RETRY_BACKOFF: [Duration; 1] = [Duration::from_secs(1)];
+#[cfg(test)]
+mod tests {
+    use super::NETWORK_RETRY_BACKOFF;
+    use self::REQUEST_MARGIN as WAIT;
+    const REQUEST_MARGIN: Duration = Duration::from_secs(12);
+    mod support {
+        pub(super) static MARGINS: [Duration; 1] = [Duration::from_secs(12)];
+    }
+    fn fixture(budget: TestBudget) {
+        budget.with_product_wait(WAIT);
+        budget.with_product_wait(self::support::MARGINS[0]);
+        budget.with_product_wait(crate::tests::REQUEST_MARGIN);
+        {
+            const REQUEST_MARGIN: Duration = Duration::from_secs(12);
+            budget.with_product_wait(REQUEST_MARGIN);
+        }
+        budget.with_product_wait(NETWORK_RETRY_BACKOFF[0]);
+    }
+}
+"#;
+        assert_eq!(
+            inspect_source("crates/example/src/lib.rs", source)
+                .unwrap()
+                .product_waits,
+            [12, 13, 14, 17]
+        );
+        let source = r#"
+const REQUEST_MARGIN: Duration = Duration::from_secs(12);
+fn fixture(budget: TestBudget) {
+    budget.with_product_wait(REQUEST_MARGIN);
+    budget.with_product_wait(crate::retry::REQUEST_MARGIN);
+}
+"#;
+        assert_eq!(
+            inspect_source("crates/example/src/manager/tests/retry.rs", source)
+                .unwrap()
+                .product_waits,
+            [4]
+        );
+    }
+
+    #[test]
+    fn rejects_bare_product_wait_in_expression_macro() {
+        let source = r#"
+fn fixture(budget: TestBudget, response: Vec<u8>) {
+    let responses = vec![(budget.with_product_wait(Duration::from_secs(1)), response)];
+    let responses = vec![(budget.with_product_wait(NETWORK_RETRY_BACKOFF[0]), response)];
+}
+"#;
+        assert_eq!(
+            inspect_source("crates/emp-updater/src/manager/tests/retry.rs", source)
+                .unwrap()
+                .product_waits,
+            [3]
         );
     }
 

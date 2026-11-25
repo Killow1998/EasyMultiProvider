@@ -246,20 +246,23 @@ fn interrupt_can_collect_an_on_time_upstream_close_after_a_later_receipt() {
     )
     .unwrap();
     let upstream_budget = test_timeout(Duration::from_secs(2));
-    let io_started = Instant::now();
-    let observation_started = io_started - upstream_budget.duration();
-    let upstream_deadline = Deadline::starting_at(observation_started, upstream_budget);
-    let io_deadline = Deadline::starting_at(io_started, upstream_budget);
+    let (trigger_io, io_trigger) = mpsc::channel();
     let observation = Observation::spawn(move |probe| {
         let Some(request) = probe.next_request() else {
             return;
         };
+        let io_started: Instant = io_trigger.recv().unwrap();
+        let io_deadline = Deadline::starting_at(io_started, upstream_budget);
         assert_eq!(io_deadline.io(&http_upstream).peek(&mut [0]).unwrap(), 0);
-        let observed_at = observation_started + io_started.elapsed();
+        let observed_at = Instant::now() - upstream_budget.duration();
         request.complete_at(observed_at, true);
         eof_observed.send(()).unwrap();
     });
+    let io_started = Instant::now();
+    let observation_started = io_started - upstream_budget.duration();
+    let upstream_deadline = Deadline::starting_at(observation_started, upstream_budget);
     assert!(upstream_deadline.is_expired());
+    trigger_io.send(io_started).unwrap();
     let (receipt, closed) = interrupt_and_observe(
         &mut client,
         &json!({"type":"response.interrupt"}),
