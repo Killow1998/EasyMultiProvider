@@ -33,6 +33,12 @@ fn child_fixture() {
             eprintln!("blocked stderr");
             io::stdin().read_to_end(&mut Vec::new()).unwrap();
         }
+        "diagnostics" => {
+            println!("before diagnostics");
+            eprintln!("ready");
+            io::stdin().read_to_end(&mut Vec::new()).unwrap();
+            println!("after diagnostics");
+        }
         "large" => {
             write_fixture_output(&vec![b'O'; PIPE_PAYLOAD], &vec![b'E'; PIPE_PAYLOAD]);
             std::process::exit(0);

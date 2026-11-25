@@ -2,9 +2,11 @@ use super::super::{POLL_INTERVAL, poll_pause};
 use crate::{Deadline, fixture_root};
 use std::{
     fs::File,
-    io::{self, Read, Seek},
+    io::{self, Read},
+    path::Path,
     process::{Command, Output, Stdio},
 };
+use tempfile::NamedTempFile;
 
 const RESULT_PREFIX: &str = "EMP-ISOLATED: ";
 
@@ -23,12 +25,13 @@ pub(crate) fn report(result: Result<(), &str>) {
 
 pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
     let root = fixture_root().expect("resolve test fixture root");
-    let stdout = tempfile::tempfile_in(&root).expect("isolated test stdout file");
-    let stderr = tempfile::tempfile_in(&root).expect("isolated test stderr file");
-    command
-        .stdin(Stdio::null())
-        .stdout(stdout.try_clone().expect("redirect isolated test stdout"))
-        .stderr(stderr.try_clone().expect("redirect isolated test stderr"));
+    let (stdout, stdout_path) = NamedTempFile::new_in(&root)
+        .expect("isolated test stdout file")
+        .into_parts();
+    let (stderr, stderr_path) = NamedTempFile::new_in(&root)
+        .expect("isolated test stderr file")
+        .into_parts();
+    command.stdin(Stdio::null()).stdout(stdout).stderr(stderr);
     let mut child = command.spawn().expect("spawn isolated test");
     let status = loop {
         let remaining = match deadline.accept(deadline.remaining(), "isolated test exit") {
@@ -61,8 +64,8 @@ pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
         },
     });
 
-    let stdout = read_output(stdout);
-    let stderr = read_output(stderr);
+    let stdout = read_output(&stdout_path);
+    let stderr = read_output(&stderr_path);
     let stdout_text = String::from_utf8_lossy(&stdout);
     let stderr_text = String::from_utf8_lossy(&stderr);
     let diagnostics = || format!("{command:?}\n{stdout_text}\n{stderr_text}");
@@ -98,12 +101,44 @@ pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
     }
 }
 
-fn read_output(mut file: File) -> Vec<u8> {
+fn read_output(path: &Path) -> Vec<u8> {
+    let file = File::open(path).expect("open isolated test output");
     let length = file.metadata().expect("isolated test output length").len();
-    file.rewind().expect("rewind isolated test output");
     let mut bytes = Vec::new();
     file.take(length)
         .read_to_end(&mut bytes)
         .expect("read isolated test output");
     bytes
+}
+
+#[test]
+fn reading_diagnostics_preserves_live_child_output() {
+    use super::fixture;
+    use crate::{OwnedChild, test_timeout};
+    use std::time::Duration;
+
+    let stdout = NamedTempFile::new_in(fixture_root().unwrap()).unwrap();
+    let mut command = fixture("diagnostics");
+    command
+        .stdin(Stdio::piped())
+        .stdout(stdout.as_file().try_clone().unwrap())
+        .stderr(Stdio::piped());
+    let mut child = OwnedChild::spawn(command).unwrap();
+    let ready = Deadline::after(test_timeout(Duration::from_secs(5)));
+    assert_eq!(child.stderr_line(ready).unwrap().as_deref(), Some("ready"));
+
+    let length = stdout.as_file().metadata().unwrap().len();
+    stdout.as_file().set_len(length + 1).unwrap();
+    let snapshot = read_output(stdout.path());
+    let prefix = snapshot.strip_suffix(b"\0").unwrap();
+    assert!(prefix.ends_with(b"before diagnostics\n"));
+
+    let exit = Deadline::after(test_timeout(Duration::from_secs(5)));
+    assert!(child.wait_until(exit).unwrap().status.success());
+    let diagnostics = read_output(stdout.path());
+    assert!(
+        diagnostics.starts_with(&[prefix, b"after diagnostics\n"].concat()),
+        "{:?}",
+        String::from_utf8_lossy(&diagnostics)
+    );
 }

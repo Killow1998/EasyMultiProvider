@@ -256,6 +256,28 @@ fn helper() {}
     }
 
     #[test]
+    fn rejects_test_attributes_with_macro_conditions_in_shared_modules() {
+        let source = r#"macro_rules! cases {
+    ($platform:meta) => {
+        #[cfg_attr($platform, test)]
+        fn sync_case() {}
+        #[cfg_attr($platform, allow(dead_code), cfg_attr(all(unix, target_pointer_width = "64"), tokio::test))]
+        async fn async_case() {}
+        #[cfg_attr($platform, allow(dead_code))]
+        fn helper() {}
+    };
+}
+cases!(windows);
+"#;
+        let path = "crates/example/tests/support/cases.rs";
+        let mut errors = Vec::new();
+        shared_test_module(path, source, &mut errors).unwrap();
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].starts_with(&format!("[shared-test-module] {path}:3:")));
+        assert!(errors[1].starts_with(&format!("[shared-test-module] {path}:5:")));
+    }
+
+    #[test]
     fn test_boundary_checks_binary_and_http_access() {
         let cases: &[(&[u8], usize)] = &[
             (b"Command::new(binary); http.get(\"/api/config\");", 0),
