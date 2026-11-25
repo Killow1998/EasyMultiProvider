@@ -212,7 +212,7 @@ impl Drop for DisconnectMonitor {
     }
 }
 
-impl BodyOutput {
+impl BodyOutput<'_> {
     pub(crate) fn disconnect(&self) -> std::io::Result<DisconnectMonitor> {
         DisconnectMonitor::start(self.socket())
     }

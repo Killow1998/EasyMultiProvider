@@ -123,12 +123,13 @@ impl Delivery {
     }
 }
 
-pub(crate) struct BodyOutput {
+pub(crate) struct BodyOutput<'a> {
     socket: Arc<TcpStream>,
     delivery: Arc<Delivery>,
     response: Option<oneshot::Sender<Response>>,
     stream: Option<StreamFrames>,
     work: Option<ResponseWork>,
+    after_handoff: Option<Box<dyn FnOnce() + Send + 'a>>,
     frame_pending: bool,
     hooks: ServerHooksHandle,
 }
@@ -148,7 +149,7 @@ impl ResponseWork {
     }
 }
 
-impl BodyOutput {
+impl<'a> BodyOutput<'a> {
     pub(super) fn new(
         socket: Arc<TcpStream>,
         delivery: Arc<Delivery>,
@@ -162,6 +163,7 @@ impl BodyOutput {
             response: Some(response),
             stream: None,
             work: Some(ResponseWork::Request(business)),
+            after_handoff: None,
             frame_pending: false,
             hooks,
         }
@@ -189,11 +191,11 @@ impl BodyOutput {
         Some(key)
     }
 
-    pub(crate) fn head<'a>(
+    pub(crate) fn head<'headers>(
         &mut self,
         status: u16,
         content_type: &str,
-        headers: impl IntoIterator<Item = (&'a str, &'a str)>,
+        headers: impl IntoIterator<Item = (&'headers str, &'headers str)>,
     ) -> io::Result<()> {
         let builder = response_head(status, content_type)
             .header("cache-control", "no-cache")
@@ -243,6 +245,10 @@ impl BodyOutput {
         Ok(())
     }
 
+    pub(crate) fn after_handoff(&mut self, effect: impl FnOnce() + Send + 'a) {
+        self.after_handoff = Some(Box::new(effect));
+    }
+
     pub(super) fn finish(mut self, response: impl FnOnce() -> Response) -> io::Result<()> {
         let reply = self.response.is_some().then(response);
         self.finish_output(reply)
@@ -270,7 +276,7 @@ impl BodyOutput {
     }
 
     fn close(&mut self, reply: Option<Response>) -> Option<mpsc::Receiver<()>> {
-        let (send, confirmation) = self
+        let (mut send, confirmation) = self
             .stream
             .take()
             .map(|stream| (stream.send, stream.confirmation))
@@ -278,6 +284,7 @@ impl BodyOutput {
         let sender = self.response.take();
         let work = self.work.take();
         let stream_handoff = send.is_some() && work.is_some();
+        let after_handoff = self.after_handoff.take();
         ResponseWork::handoff(work, || {
             if let (Some(sender), Some(response)) = (sender, reply) {
                 self.hooks
@@ -286,13 +293,19 @@ impl BodyOutput {
                     });
             }
             self.hooks.stream_handoff(stream_handoff);
-            drop(send);
+            if after_handoff.is_none() {
+                drop(send.take());
+            }
         });
+        if let Some(effect) = after_handoff {
+            effect();
+        }
+        drop(send);
         confirmation
     }
 }
 
-impl Drop for BodyOutput {
+impl Drop for BodyOutput<'_> {
     fn drop(&mut self) {
         drop(self.close(None));
     }

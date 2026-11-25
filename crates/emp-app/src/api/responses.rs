@@ -25,11 +25,11 @@ use crate::util::projection_ids;
 use emp_context::HistoryError;
 use emp_domain::json_truthy;
 
-pub(crate) fn execute(
-    downstream: &mut BodyOutput,
+pub(crate) fn execute<'a>(
+    downstream: &mut BodyOutput<'a>,
     request: Request<'_>,
     body: serde_json::Value,
-    state: &ServerState,
+    state: &'a ServerState,
     observation: &mut RequestObservation,
 ) -> InferenceOutcome {
     observation.body(
@@ -364,9 +364,9 @@ pub(crate) fn execute(
     if streaming {
         let downstream = ObservedSse::new(downstream, observation, &incoming);
         let result = if native {
-            serve_native_stream(downstream, state, &route, &config, &body, &incoming, &ids)
+            serve_native_stream(downstream, state, route, &config, body, &incoming, &ids)
         } else {
-            serve_external_stream(downstream, state, &route, &body, &incoming, &ids)
+            serve_external_stream(downstream, state, &route, body, &incoming, &ids)
         };
         return result.err().map_or(InferenceOutcome::Streamed, Into::into);
     }

@@ -11,7 +11,7 @@ use crate::{
     },
 };
 use axum::body::Bytes;
-use emp_transport::{HttpMethod, HttpResponse, SseJsonParser};
+use emp_transport::{HttpMethod, HttpResponse, SseFrame, SseJsonParser};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -124,12 +124,23 @@ pub(crate) fn relay(
             .block_on(monitor.race(upstream.response.next_chunk()));
         match next {
             DisconnectRace::Ready(Ok(Some(chunk))) => {
-                let events = parser.as_mut().map_or_else(Vec::new, |parser| {
-                    parser.push(&chunk).unwrap_or_else(|_| {
-                        *parser = SseJsonParser::new();
-                        Vec::new()
-                    })
-                });
+                let mut events = Vec::new();
+                if let Some(parser) = &mut parser {
+                    let mut malformed = false;
+                    for frame in parser.push_frame_results(&chunk) {
+                        match frame {
+                            Ok(SseFrame::Json(event)) => {
+                                observation.observe_aero_terminal(&event);
+                                events.push(event);
+                            }
+                            Ok(SseFrame::Done) => {}
+                            Err(_) => malformed = true,
+                        }
+                    }
+                    if malformed {
+                        events.clear();
+                    }
+                }
                 if downstream.flush_frame().is_err() {
                     break;
                 }

@@ -407,6 +407,29 @@ impl RequestObservation {
         }
     }
 
+    pub(crate) fn observe_aero_terminal(&mut self, event: &serde_json::Map<String, Value>) {
+        if self.fields["terminal_event_observed"] == true
+            || event
+                .get("type")
+                .and_then(Value::as_str)
+                .and_then(terminal_outcome)
+                .is_none()
+        {
+            return;
+        }
+        self.fields["terminal_event_observed"] = json!(true);
+        self.delivery.diagnostics.journal.event(
+            "info",
+            "route_observation",
+            &json!({
+                "request_id": self.fields["request_id"],
+                "route": self.fields["route"],
+                "phase": "terminal_validation",
+                "terminal_event_observed": true,
+            }),
+        );
+    }
+
     pub(crate) fn aero_chunk(
         &self,
         events: Vec<serde_json::Map<String, Value>>,

@@ -107,12 +107,12 @@ impl InferenceRoute {
         Ok(())
     }
 
-    fn execute(
+    fn execute<'a>(
         self,
-        sink: &mut BodyOutput,
+        sink: &mut BodyOutput<'a>,
         request: Request<'_>,
         body: Value,
-        state: &ServerState,
+        state: &'a ServerState,
         observation: Option<&mut RequestObservation>,
     ) -> InferenceOutcome {
         let disconnect = || sink.disconnect().ok();

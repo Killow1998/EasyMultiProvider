@@ -105,6 +105,61 @@ fn long_unterminated_line_across_chunks_still_hits_limit() {
     for _ in 0..8 {
         parser.push_frames(b"data: xx").expect("under limit");
     }
+    assert_eq!(
+        parser.push_frames(b"x").unwrap_err().reason(),
+        TransportErrorReason::SseEventTooLarge
+    );
+}
+
+#[test]
+fn malformed_frame_preserves_the_next_partial_data_line() {
+    let mut parser = SseJsonParser::new();
+    assert_eq!(
+        parser
+            .push(b"data: broken\n\ndata: {\"type\":")
+            .unwrap_err()
+            .reason(),
+        TransportErrorReason::SseInvalidJson
+    );
+    assert_eq!(
+        parser.push(b"\"next\"}\n\n").unwrap(),
+        vec![json!({"type": "next"}).as_object().unwrap().clone()]
+    );
+}
+
+#[test]
+fn malformed_frame_preserves_the_next_partial_comment() {
+    let mut parser = SseJsonParser::new();
+    assert_eq!(
+        parser
+            .push(b"data: broken\r\n\r\n: comment ")
+            .unwrap_err()
+            .reason(),
+        TransportErrorReason::SseInvalidJson
+    );
+    assert!(
+        parser
+            .push(b"data: {\"type\":\"error\"}\r\n\r\n")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        parser.push(b"data: {\"type\":\"next\"}\r\n\r\n").unwrap(),
+        vec![json!({"type": "next"}).as_object().unwrap().clone()]
+    );
+}
+
+#[test]
+fn malformed_frame_spanning_chunks_reports_only_its_own_error() {
+    let mut parser = SseJsonParser::new();
+    assert!(parser.push_frame_results(b"data: bro").is_empty());
+    assert!(parser.push_frame_results(b"ken\r\n\r").is_empty());
+    let results = parser.push_frame_results(b"\ndata: {\"type\":\"next\"}\r\n\r\n");
+    let [Err(error), Ok(SseFrame::Json(event))] = results.as_slice() else {
+        panic!("expected a frame error followed by a valid event: {results:?}");
+    };
+    assert_eq!(error.reason(), TransportErrorReason::SseInvalidJson);
+    assert_eq!(event["type"], "next");
 }
 
 #[test]

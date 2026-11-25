@@ -96,8 +96,8 @@ impl std::error::Error for TransportError {}
 pub struct SseJsonParser {
     limit: usize,
     pending: Vec<u8>,
-    /// Prefix of `pending` already known to contain no newline.
-    pending_scanned: usize,
+    skip_line: bool,
+    discard_event: bool,
     data_lines: Vec<Vec<u8>>,
     data_bytes: usize,
 }
@@ -120,7 +120,8 @@ impl SseJsonParser {
         Ok(Self {
             limit,
             pending: Vec::new(),
-            pending_scanned: 0,
+            skip_line: false,
+            discard_event: false,
             data_lines: Vec::new(),
             data_bytes: 0,
         })
@@ -138,28 +139,44 @@ impl SseJsonParser {
     }
 
     pub fn push_frames(&mut self, chunk: &[u8]) -> Result<Vec<SseFrame>, TransportError> {
-        self.pending.extend_from_slice(chunk);
+        self.push_frame_results(chunk).into_iter().collect()
+    }
+
+    pub fn push_frame_results(&mut self, chunk: &[u8]) -> Vec<Result<SseFrame, TransportError>> {
         let mut output = Vec::new();
-        let mut consumed = 0;
-        let mut scan = self.pending_scanned.min(self.pending.len());
-        while let Some(relative) = self.pending[scan..].iter().position(|byte| *byte == b'\n') {
-            let end = scan + relative;
-            if end - consumed > self.limit {
-                return Err(Self::too_large());
+        for fragment in chunk.split_inclusive(|byte| *byte == b'\n') {
+            let complete = fragment.ends_with(b"\n");
+            let line = fragment.strip_suffix(b"\n").unwrap_or(fragment);
+            if self.skip_line {
+                self.skip_line = !complete;
+                continue;
             }
-            let line = self.pending[consumed..end].to_vec();
-            consumed = end + 1;
-            scan = consumed;
-            self.consume_line(&line, &mut output)?;
+            if self.pending.len().saturating_add(line.len()) > self.limit {
+                self.pending.clear();
+                self.skip_line = !complete;
+                if !self.discard_event {
+                    self.discard_event = true;
+                    self.data_lines.clear();
+                    self.data_bytes = 0;
+                    output.push(Err(Self::too_large()));
+                }
+                continue;
+            }
+            if !complete {
+                self.pending.extend_from_slice(line);
+                break;
+            }
+            if self.pending.is_empty() {
+                self.consume_line(line, &mut output);
+            } else {
+                let mut pending = std::mem::take(&mut self.pending);
+                pending.extend_from_slice(line);
+                self.consume_line(&pending, &mut output);
+                pending.clear();
+                self.pending = pending;
+            }
         }
-        if consumed != 0 {
-            self.pending.drain(..consumed);
-        }
-        self.pending_scanned = self.pending.len();
-        if self.pending.len() > self.limit {
-            return Err(Self::too_large());
-        }
-        Ok(output)
+        output
     }
 
     pub fn finish(self) -> Result<Vec<Map<String, Value>>, TransportError> {
@@ -176,32 +193,29 @@ impl SseJsonParser {
     pub fn finish_frames(mut self) -> Result<Vec<SseFrame>, TransportError> {
         let mut output = Vec::new();
         if !self.pending.is_empty() {
-            if self.pending.len() > self.limit {
-                return Err(Self::too_large());
-            }
             let line = std::mem::take(&mut self.pending);
-            self.consume_line(&line, &mut output)?;
+            self.consume_line(&line, &mut output);
         }
-        if let Some(event) = self.finish_event()? {
-            output.push(event);
+        if !self.discard_event {
+            output.extend(self.finish_event().transpose());
         }
-        Ok(output)
+        output.into_iter().collect()
     }
 
-    fn consume_line(
-        &mut self,
-        raw: &[u8],
-        output: &mut Vec<SseFrame>,
-    ) -> Result<(), TransportError> {
+    fn consume_line(&mut self, raw: &[u8], output: &mut Vec<Result<SseFrame, TransportError>>) {
         let line = raw.strip_suffix(b"\r").unwrap_or(raw);
         if line.is_empty() {
-            if let Some(event) = self.finish_event()? {
-                output.push(event);
-            }
-        } else if let Some(value) = line.strip_prefix(b"data:") {
-            self.append_data(trim_ascii_start(value))?;
+            self.discard_event = false;
+            output.extend(self.finish_event().transpose());
+        } else if !self.discard_event
+            && let Some(value) = line.strip_prefix(b"data:")
+            && let Err(error) = self.append_data(trim_ascii_start(value))
+        {
+            self.discard_event = true;
+            self.data_lines.clear();
+            self.data_bytes = 0;
+            output.push(Err(error));
         }
-        Ok(())
     }
 
     fn append_data(&mut self, value: &[u8]) -> Result<(), TransportError> {
@@ -284,4 +298,47 @@ where
     }
     output.extend(parser.finish()?);
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_frame_cannot_grow_buffers_while_waiting_for_its_blank_line() {
+        let mut parser = SseJsonParser::with_limit(32).unwrap();
+        assert!(
+            parser
+                .push_frame_results(b"data: {\"abandoned\":\n")
+                .is_empty()
+        );
+        assert!(parser.push_frame_results(b"data: ").is_empty());
+        let capacity = parser.pending.capacity();
+        assert_eq!(
+            parser
+                .push(b"abcdefghijklmnopqrstuvwxyz0123456789")
+                .unwrap_err()
+                .reason(),
+            TransportErrorReason::SseEventTooLarge
+        );
+        for _ in 0..16 {
+            assert!(parser.push_frame_results(&[b'x'; 4096]).is_empty());
+            assert!(parser.pending.is_empty());
+            assert_eq!(parser.pending.capacity(), capacity);
+            assert!(parser.data_lines.is_empty());
+            assert_eq!(parser.data_bytes, 0);
+        }
+        let events = parser
+            .push(b"\r\ndata: {\"ignored\":true}\r\n\r\ndata: {\"next\":true}\r\n\r\n")
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![
+                serde_json::json!({"next": true})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            ]
+        );
+    }
 }

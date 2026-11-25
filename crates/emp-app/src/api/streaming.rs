@@ -41,14 +41,14 @@ fn stream_headers(headers: &BTreeMap<String, String>) -> impl Iterator<Item = (&
     })
 }
 
-pub(crate) struct ObservedSse<'a> {
-    sink: &'a mut BodyOutput,
+pub(crate) struct ObservedSse<'a, 'state> {
+    sink: &'a mut BodyOutput<'state>,
     observation: &'a mut RequestObservation,
     codex: bool,
 }
-impl<'a> ObservedSse<'a> {
+impl<'a, 'state> ObservedSse<'a, 'state> {
     pub(crate) fn new(
-        sink: &'a mut BodyOutput,
+        sink: &'a mut BodyOutput<'state>,
         observation: &'a mut RequestObservation,
         incoming: &BTreeMap<String, String>,
     ) -> Self {
@@ -121,11 +121,11 @@ impl<'a> ObservedSse<'a> {
     }
 }
 
-pub(crate) fn serve_external_stream(
-    mut downstream: ObservedSse<'_>,
-    state: &ServerState,
+pub(crate) fn serve_external_stream<'a>(
+    mut downstream: ObservedSse<'_, 'a>,
+    state: &'a ServerState,
     route: &ResolvedRoute,
-    body: &Value,
+    body: Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {
@@ -133,7 +133,7 @@ pub(crate) fn serve_external_stream(
     let (upstream, candidate, usage) = match crate::services::external::open_stream(
         state,
         route,
-        body,
+        &body,
         incoming,
         ids,
         monitor.as_mut(),
@@ -147,10 +147,10 @@ pub(crate) fn serve_external_stream(
         &mut downstream,
         RelayContext {
             state,
-            route: &candidate,
+            route: candidate,
             learn_protocol: true,
             body,
-            response_headers: &BTreeMap::new(),
+            response_headers: BTreeMap::new(),
             usage,
         },
         ExternalRelay { upstream },
@@ -158,12 +158,12 @@ pub(crate) fn serve_external_stream(
     )
 }
 
-pub(crate) fn serve_native_stream(
-    mut downstream: ObservedSse<'_>,
-    state: &ServerState,
-    route: &ResolvedRoute,
+pub(crate) fn serve_native_stream<'a>(
+    mut downstream: ObservedSse<'_, 'a>,
+    state: &'a ServerState,
+    route: ResolvedRoute,
     config: &Value,
-    body: &Value,
+    body: Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {
@@ -171,9 +171,9 @@ pub(crate) fn serve_native_stream(
     let (upstream, monitor) = match monitor {
         Some(mut monitor) => match native::open_stream_cancellable(
             state,
-            route,
+            &route,
             config,
-            body,
+            &body,
             incoming,
             ids,
             &mut monitor,
@@ -184,7 +184,7 @@ pub(crate) fn serve_native_stream(
             native::CancellableNativeStreamOpen::Disconnected => return Ok(()),
         },
         None => (
-            native::open_stream_result(state, route, config, body, incoming, ids)
+            native::open_stream_result(state, &route, config, &body, incoming, ids)
                 .map_err(crate::api::native_response::error_reply)?,
             None,
         ),
@@ -198,7 +198,7 @@ pub(crate) fn serve_native_stream(
             route,
             learn_protocol: false,
             body,
-            response_headers: &response_headers,
+            response_headers,
             usage,
         },
         NativeRelay { upstream },
@@ -282,16 +282,16 @@ impl RelaySource for ExternalRelay {
 
 struct RelayContext<'a> {
     state: &'a ServerState,
-    route: &'a ResolvedRoute,
+    route: ResolvedRoute,
     learn_protocol: bool,
-    body: &'a Value,
-    response_headers: &'a BTreeMap<String, String>,
+    body: Value,
+    response_headers: BTreeMap<String, String>,
     usage: crate::services::request_outcome::RequestOutcome<'a>,
 }
 
-fn relay_stream(
-    downstream: &mut ObservedSse<'_>,
-    context: RelayContext<'_>,
+fn relay_stream<'a>(
+    downstream: &mut ObservedSse<'_, 'a>,
+    context: RelayContext<'a>,
     mut source: impl RelaySource,
     monitor: Option<DisconnectMonitor>,
 ) -> Result<(), HttpReply> {
@@ -308,7 +308,9 @@ fn relay_stream(
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
     let mut started = false;
-    loop {
+    let mut calibration = None;
+    let mut protocol_observed = false;
+    let result = loop {
         let event = source.next(runtime, monitor.as_mut());
         usage.upstream_observation(source.observation());
         match event {
@@ -317,44 +319,42 @@ fn relay_stream(
                 if started {
                     let _ = downstream.sink.finish_producing();
                 }
-                return Ok(());
+                break Ok(());
             }
             RelayEvent::Incomplete => {
                 usage.status(502, "stream_incomplete");
                 if started {
                     let _ = downstream.sink.finish_producing();
                 }
-                return Ok(());
+                break Ok(());
             }
             RelayEvent::Failure(error) => {
                 usage.router_error(&error);
                 if !started {
-                    return Err(pre_output_router_error_response_for_route(&error, route));
+                    break Err(pre_output_router_error_response_for_route(&error, &route));
                 }
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),
-                    Err(_) => return Ok(()),
+                    Err(_) => break Ok(()),
                 };
-                let failure = stream_failure_value_for_route(&error, &response_id, route, true);
+                let failure = stream_failure_value_for_route(&error, &response_id, &route, true);
                 if let Ok(frame) = sse_frame("response.failed", &failure) {
                     let _ = downstream.event(&failure, &[frame]);
                 }
-                return Ok(());
+                break Ok(());
             }
             RelayEvent::SerializationFailure => {
                 usage.status(500, "stream_error");
-                return Err(HttpReply::error(500, "internal server error", None));
+                break Err(HttpReply::error(500, "internal server error", None));
             }
             RelayEvent::Event {
                 frame,
                 body: event_body,
             } => {
                 usage.observe(&event_body);
-                crate::services::context::record_event(state, route, body, &event_body);
                 let terminal = terminal_stream_event(&event_body);
-                if learn_protocol && event_body["type"] == "response.completed" {
-                    persist_protocol_observation(state, route);
-                }
+                calibration = crate::services::context::outcome(&event_body);
+                protocol_observed = learn_protocol && event_body["type"] == "response.completed";
                 let frame = if !downstream.codex
                     && crate::services::events::codex_event(
                         event_body["type"].as_str().unwrap_or_default(),
@@ -369,15 +369,15 @@ fn relay_stream(
                 );
                 if started {
                     if downstream.upstream_event(&event_body, &[frame]).is_err() {
-                        return Ok(());
+                        break Ok(());
                     }
                     if terminal {
-                        return Ok(());
+                        break Ok(());
                     }
                     continue;
                 }
-                if failed && let Some(response) = pre_output_failure_response(&event_body, route) {
-                    return Err(response);
+                if failed && let Some(response) = pre_output_failure_response(&event_body, &route) {
+                    break Err(response);
                 }
                 let (output_emitted, tool_activity) = stream_event_activity(&event_body);
                 pending_bytes = pending_bytes.saturating_add(frame.len());
@@ -385,7 +385,7 @@ fn relay_stream(
                 if pending.len() > MAX_PRE_OUTPUT_BUFFER_EVENTS
                     || pending_bytes > MAX_PRE_OUTPUT_BUFFER_BYTES
                 {
-                    return Err(HttpReply::error(
+                    break Err(HttpReply::error(
                         502,
                         "EMP could not parse the upstream response stream.",
                         Some("pre_output_buffer_limit"),
@@ -395,24 +395,35 @@ fn relay_stream(
                     let head_ok = if response_headers.is_empty() {
                         downstream.head().is_ok()
                     } else {
-                        downstream.head_with_headers(response_headers).is_ok()
+                        downstream.head_with_headers(&response_headers).is_ok()
                     };
                     if !head_ok || downstream.upstream_event(&event_body, &pending).is_err() {
-                        return Ok(());
+                        break Ok(());
                     }
                     started = true;
                     pending.clear();
                     if terminal {
-                        return Ok(());
+                        break Ok(());
                     }
                 }
             }
         }
+    };
+    if calibration.is_some() || protocol_observed {
+        downstream.sink.after_handoff(move || {
+            if let Some(success) = calibration {
+                crate::services::context::record(state, &route, &body, success);
+            }
+            if protocol_observed {
+                persist_protocol_observation(state, &route);
+            }
+        });
     }
+    result
 }
 
 pub(crate) fn serve_generated_response(
-    mut downstream: ObservedSse<'_>,
+    mut downstream: ObservedSse<'_, '_>,
     response_value: Value,
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {
