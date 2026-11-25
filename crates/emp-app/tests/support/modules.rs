@@ -258,15 +258,17 @@ impl ModuleRelease {
             );
         }
         let mut command = workspace.command();
-        let base = format!("http://127.0.0.1:{}", self.port);
-        command
-            .env("EMP_UPDATE_TEST_REPOSITORY_URL", &base)
-            .env(
-                "EMP_UPDATE_TEST_API_URL",
-                format!("{base}/releases?per_page=100"),
-            )
-            .args(workspace.serve_arguments());
+        self.configure_command(&mut command);
+        command.args(workspace.serve_arguments());
         ModuleEmp::spawn(workspace, command)
+    }
+
+    pub fn configure_command(&self, command: &mut Command) {
+        let base = format!("http://127.0.0.1:{}", self.port);
+        command.env("EMP_UPDATE_TEST_REPOSITORY_URL", &base).env(
+            "EMP_UPDATE_TEST_API_URL",
+            format!("{base}/releases?per_page=100"),
+        );
     }
 
     pub fn finish(mut self) -> thread::Result<()> {

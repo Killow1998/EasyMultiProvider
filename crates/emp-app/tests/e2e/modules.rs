@@ -5,13 +5,13 @@ use crate::support::{
     Emp, NATIVE_TOKEN, Response, Upstream, UpstreamRequest, Workspace, http, write_file,
 };
 #[cfg(target_os = "linux")]
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::Deadline;
+#[cfg(target_os = "linux")]
+use emp_updater::worker::UPDATE_READY_WAIT;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "linux")]
-use std::fs;
-#[cfg(target_os = "linux")]
-use std::time::Duration;
+use std::{fs, path::Path, time::Duration};
 
 const OLD_DEVICE_KEY: &str = "old-device-key";
 
@@ -425,13 +425,21 @@ fn m01_k2_normal_start_requires_install_and_restores_installed_modules_with_or_w
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "needs Core with embedded transition payloads; run cargo xtask module-e2e"]
+#[ignore = "needs embedded transition payloads and current and next Team builds; run cargo xtask module-e2e"]
 fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
     let modules = built_modules();
+    let team = BuiltModule::current("team");
+    let next_team = BuiltModule::next("team");
+    let release = ModuleRelease::start(&modules);
+    release.publish(&next_team, Fault::None);
     let routes = Routes::new();
     let installation = Workspace::new();
+    let built_core = Path::new(env!("CARGO_BIN_EXE_EMP"));
     let executable = installation.root.join("EMP");
-    fs::copy(env!("CARGO_BIN_EXE_EMP"), &executable).expect("copy packaged Core");
+    fs::copy(built_core, &executable).expect("copy packaged Core");
+    let version = env!("CARGO_PKG_VERSION");
+    assert_ne!(team.version, version, "Team must have its own version");
+    assert_eq!(UPDATE_READY_WAIT.get(), Duration::from_secs(60));
 
     let cases: &[(&[&str], &[&str])] = &[
         (&[], &[]),
@@ -463,7 +471,15 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
                 &["aggregate"][..],
                 &["decision", "gateway", "aggregate"][..],
                 json!({"decision":legacy_install(true), "gateway":legacy_install(true),
-                    "aggregate":legacy_install(true), "team":legacy_install(true)}),
+                    "aggregate":legacy_install(true), "team":{"enabled":true,
+                        "versions":{"0.14.2":"0".repeat(64)},
+                        "previous":{"digest":team.digest,"version":team.version}}}),
+                false,
+            ),
+            (
+                &[][..],
+                &[][..],
+                json!({"team":{"enabled":true,"versions":{(version):team.digest}}}),
                 false,
             ),
             (
@@ -486,6 +502,14 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
         if expected_registry != json!({}) {
             write_file(&registry_path, &expected_registry.to_string());
         }
+        let has_team = expected_registry.get("team").is_some();
+        if has_team {
+            fs::copy(
+                built_core.with_file_name("empmod-team"),
+                directory.join(format!("team-{}", team.digest)),
+            )
+            .expect("stage the installed Team artifact");
+        }
         let clients = workspace.root.join("state/gateway-clients.json");
         let saved_clients = damage_gateway.then(|| {
             let saved = fs::read(&clients).unwrap();
@@ -494,7 +518,6 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
         });
         let job = installation.root.join(format!(".emp-update-m01-{index}"));
         let args = workspace.serve_arguments();
-        let version = env!("CARGO_PKG_VERSION");
         let nonce = format!("m01-{index}");
         write_file(
             &job.join("plan.json"),
@@ -505,7 +528,8 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
         let ready = job.join("ready.json");
         let mut command = workspace.command_for(&executable);
         command.args(&args).env("EMP_UPDATE_READY", &ready);
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(60)));
+        release.configure_command(&mut command);
+        let deadline = Deadline::after(UPDATE_READY_WAIT.into());
         let emp = ModuleEmp::spawn(&workspace, command);
         let expected_receipt = json!({"version":version,"nonce":nonce});
         eventually(
@@ -525,7 +549,7 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
             .collect();
         assert_eq!(
             artifacts.len(),
-            expected.len(),
+            expected.len() + usize::from(has_team),
             "settings={settings:?}: {artifacts:?}"
         );
         for module in &modules {
@@ -557,8 +581,32 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
             }
         }
         assert_eq!(registry, expected_registry, "settings={settings:?}");
-        for id in ["team", "aero"] {
-            assert_eq!(emp.status(id)["active"], false);
+        let team_status = emp.status("team");
+        assert_eq!(team_status["active"], has_team, "{team_status}");
+        assert_eq!(emp.status("aero")["active"], false);
+        if has_team {
+            let rolled_back = expected_registry["team"].get("previous").is_some();
+            let error = rolled_back.then_some("module_update_rolled_back");
+            assert_eq!(team_status["error"], json!(error), "{team_status}");
+            assert_eq!(
+                team_status["installed_version"], team.version,
+                "{team_status}"
+            );
+            assert_eq!(team_status["active_version"], team.version, "{team_status}");
+            assert_eq!(team_status["active_revision"], team.digest, "{team_status}");
+            let panel = emp.get("/assets/module-team.js");
+            assert_eq!(panel.status, 200, "{}", panel.text());
+            let updates = emp.post("/api/modules", &json!({"action":"check_updates"}));
+            assert_eq!(updates.status, 200, "{}", updates.text());
+            let updates = updates.json();
+            let offer = updates["updates"]
+                .as_array()
+                .expect("update offers")
+                .iter()
+                .find(|row| row["id"] == "team")
+                .expect("higher-version Team offer");
+            assert_eq!(offer["current_version"], team.version);
+            assert_eq!(offer["latest_version"], next_team.version);
         }
         if expected.is_empty() {
             assert_ok(
@@ -599,6 +647,9 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
         }
         emp.stop();
     }
+    release
+        .finish()
+        .expect("module release server worker panicked");
 }
 
 #[test]

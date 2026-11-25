@@ -35,9 +35,9 @@ impl Install {
         }
     }
 
-    pub(super) fn version(&self) -> Option<&str> {
-        self.artifact
-            .as_ref()
+    pub(super) fn version<'a>(&'a self, active: Option<&'a Artifact>) -> Option<&'a str> {
+        active
+            .or(self.artifact.as_ref())
             .map(|artifact| artifact.version.as_str())
             .or_else(|| {
                 let (version, _) = self

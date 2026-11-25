@@ -1,5 +1,6 @@
 //! Detached replacement worker. Failed startup restores the exact previous installation.
 use super::{Result, UpdateError, created, spawn};
+use emp_domain::FixedWait;
 use serde::Deserialize;
 use serde_json::json;
 use std::fs;
@@ -8,6 +9,7 @@ use std::time::{Duration, Instant};
 
 pub const MACOS_BUNDLE_BINARY: &str = "Contents/MacOS/EMP";
 pub const MACOS_LEGACY_BINARY: &str = "Contents/Resources/EMP";
+pub const UPDATE_READY_WAIT: FixedWait = FixedWait::new(Duration::from_secs(60));
 
 #[derive(Deserialize)]
 pub struct ProcessIdentity {
@@ -152,7 +154,7 @@ pub fn run(plan_path: &Path) -> Result<u8> {
             true,
         )?);
         phase(job, "waiting_for_startup");
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + UPDATE_READY_WAIT.get();
         while Instant::now() < deadline {
             if let Ok(raw) = fs::read(job.join("ready.json"))
                 && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw)

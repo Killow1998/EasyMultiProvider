@@ -126,24 +126,25 @@ python3 -B scripts/shadow_frontend/e2e_official_modules.py \
 
 - 通用管理入口为 `GET/POST /api/modules`，要求同源管理会话。启用、停用和换版的选择写入 `state/modules/modules.json`，同目录存放按 SHA-256 命名的制品。已启用制品在启动时校验并握手，普通启动失败时尝试上个版本。更新先验证候选再切换，卸载前须停用，卸载移除注册项及闲置制品。参见 [HTTP 管理入口](../crates/emp-app/src/server/http/modules.rs#L78)、[鉴权](../crates/emp-app/src/server/http/management.rs#L139)、[启动](../crates/emp-app/src/services/modules.rs#L124)、[生命周期操作](../crates/emp-app/src/services/modules.rs#L357)及[制品存储](../crates/emp-app/src/services/modules/packages.rs#L99)。
 - 面板脚本 `GET /assets/module-<id>.js` 要求同源且模组已运行，可用 `revision` 指定当前制品。参见 [面板路由](../crates/emp-app/src/server/http/modules.rs#L26)和[制品匹配](../crates/emp-app/src/services/modules.rs#L278)。
+- 旧版捆绑升级时，Decision、Gateway 和 Aggregate 逐个判断。旧注册表已启用该模组，或者存在对应设置，满足任一条件就安装并启用。未命中过渡条件的已停用条目原样保留。已启用的非过渡模组缺少当前制品摘要时，会尝试校验并启动注册表中的 `previous`，原样保留其注册项。参见 [过渡规则](../crates/emp-app/src/services/modules/packages.rs#L114)和[启动](../crates/emp-app/src/services/modules.rs#L124)。
 
 ### Decision API
 
 - `POST /v1/decisions` 和 `POST /v1/systemone` 走 Core 代理鉴权，可用本机密钥。`POST /api/decisions/models` 和 `GET /api/decisions/connection` 要求同源管理会话。参见 [推理路由](../crates/emp-app/src/server/http/inference.rs#L60)、[代理鉴权](../crates/emp-app/src/server/http/proxy.rs#L125)、[模型发现](../crates/emp-app/src/server/http/catalog.rs#L55)和[连接信息](../crates/emp-app/src/server/http/gateway.rs#L23)。
 - Core 读取 `decision_provider`、`providers[].decision_api` 的 `protocol` 和 `model`，从 Core 凭据库取 provider 密钥。配置和用量共用 Core 文件。参见 [配置规范化](../crates/emp-config/src/config.rs#L674)、[服务字段](../crates/emp-config/src/config/model_provider/provider.rs#L204)和[上游调用](../crates/emp-app/src/api/decisions.rs#L47)。
-- 旧版升级时，上述两处设置任一存在即安装启用，其中 `decision_provider` 须非空。停用关闭新请求入口，已发往上游的请求可完成。更新替换模组制品，卸载保留 Core 配置与用量。参见 [过渡规则](../crates/emp-app/src/services/modules/packages.rs#L113)、[入口检查](../crates/emp-app/src/server/http/proxy.rs#L268)和[上游调用](../crates/emp-app/src/api/decisions.rs#L132)。
+- 旧版升级时，`decision_provider` 非空或任一 provider 含 `decision_api` 字段即视为已有设置。停用关闭新请求入口，已发往上游的请求可完成。更新替换模组制品，卸载保留 Core 配置与用量。参见 [入口检查](../crates/emp-app/src/server/http/proxy.rs#L268)和[上游调用](../crates/emp-app/src/api/decisions.rs#L132)。
 
 ### 多设备网关
 
 - `GET /api/gateway`、`GET/POST/DELETE /api/gateway/clients` 和 `GET /api/gateway/usage` 要求同源管理会话。代理入口接受有效的设备 Bearer 密钥，调用归到相应设备。参见 [管理路由](../crates/emp-app/src/server/http/gateway.rs#L21)和[代理身份](../crates/emp-app/src/server/http/proxy.rs#L125)。
 - Core 从 `state/gateway-clients.json` 读取设备 ID、名称和密钥摘要，兼容旧明文列表，写入时使用凭据库加密。共用的本机密钥另存在 `state/gateway-key`。参见 [设备读写](../crates/emp-app/src/services/gateway_clients.rs#L95)和[本机密钥](../crates/emp-app/src/app.rs#L217)。
-- 旧版升级时，设备列表至少有一台才安装启用。停用关闭设备管理与设备密钥鉴权。更新保留设备身份，卸载保留设备文件和本机密钥。参见 [过渡规则](../crates/emp-app/src/services/modules/packages.rs#L113)、[入口检查](../crates/emp-app/src/server/http/proxy.rs#L268)和[生命周期操作](../crates/emp-app/src/services/modules.rs#L357)。
+- 旧版升级时，设备列表非空或设备文件无法读取均视为已有设置。停用关闭设备管理与设备密钥鉴权。更新保留设备身份，卸载保留设备文件和本机密钥。参见 [入口检查](../crates/emp-app/src/server/http/proxy.rs#L268)和[生命周期操作](../crates/emp-app/src/services/modules.rs#L354)。
 
 ### 聚合路由
 
 - 分组使用 Core 的 `/v1/models` 与 Responses HTTP/WebSocket 入口，继承目录访问及代理鉴权。参见 [目录访问](../crates/emp-app/src/server/http/proxy.rs#L213)、[HTTP 推理](../crates/emp-app/src/server/http/inference.rs#L84)和[WebSocket 鉴权](../crates/emp-app/src/server/http/websocket.rs#L51)。
 - Core 解释 `model_groups` 的来源、名称和选源策略。会话绑定与轮转游标以事务写入 `state/usage.sqlite3`。参见 [分组配置](../crates/emp-config/src/config/aggregates.rs#L20)、[选源](../crates/emp-app/src/services/aggregate_routing.rs#L11)、[账本路径](../crates/emp-app/src/services/usage.rs#L43)和[绑定事务](../crates/emp-storage/src/usage/ledger/affinity.rs#L5)。
-- 旧版升级时，至少有一组才安装启用。停用隐藏分组目录并拒绝分组请求。更新和卸载保留分组设置及既有绑定。参见 [过渡规则](../crates/emp-app/src/services/modules/packages.rs#L113)、[目录过滤](../crates/emp-app/src/services/catalog.rs#L76)、[请求门禁](../crates/emp-app/src/services/aggregate_routing.rs#L17)和[生命周期操作](../crates/emp-app/src/services/modules.rs#L357)。
+- 旧版升级时，`model_groups` 非空即视为已有设置。停用隐藏分组目录并拒绝分组请求。更新和卸载保留分组设置及既有绑定。参见 [目录过滤](../crates/emp-app/src/services/catalog.rs#L76)、[请求门禁](../crates/emp-app/src/services/aggregate_routing.rs#L17)和[生命周期操作](../crates/emp-app/src/services/modules.rs#L354)。
 
 ### 团队空间
 

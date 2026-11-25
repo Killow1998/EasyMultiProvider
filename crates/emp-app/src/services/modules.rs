@@ -163,11 +163,10 @@ impl Modules {
                     if update && (!bundled_transition || selected.is_some()) {
                         return Err(error.into());
                     }
-                    if !update
-                        && let Some(active) = install
-                            .previous
-                            .as_ref()
-                            .and_then(|artifact| start(&artifact.digest).ok())
+                    if let Some(active) = install
+                        .previous
+                        .as_ref()
+                        .and_then(|artifact| start(&artifact.digest).ok())
                     {
                         (active, Some("module_update_rolled_back"))
                     } else {
@@ -293,7 +292,7 @@ impl Modules {
                     "id":module,
                     "ui":ui::entry(module),
                     "version":module.version(),
-                    "installed_version":current.and_then(Install::version),
+                    "installed_version":current.and_then(|install| install.version(artifact)),
                     "active_version": artifact.map(|artifact| &artifact.version),
                     "active_revision": artifact.map(|artifact| &artifact.digest),
                     "enabled":enabled,
@@ -317,7 +316,11 @@ impl Modules {
             .lock()
             .map_err(|_| "module_unavailable")?
             .iter()
-            .filter_map(|(&module, install)| Some((module, install.version()?.to_owned())))
+            .filter_map(|(&module, install)| {
+                let worker = self.worker(module);
+                let version = install.version(worker.as_ref().map(|worker| &worker.artifact))?;
+                Some((module, version.to_owned()))
+            })
             .collect();
         let targets: Vec<_> = installed
             .iter()

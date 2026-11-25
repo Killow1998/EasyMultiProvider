@@ -88,6 +88,12 @@ impl TestBudget {
     }
 }
 
+impl From<FixedWait> for TestBudget {
+    fn from(wait: FixedWait) -> Self {
+        Self::capped(wait.get())
+    }
+}
+
 impl Add for TestBudget {
     type Output = Self;
 
