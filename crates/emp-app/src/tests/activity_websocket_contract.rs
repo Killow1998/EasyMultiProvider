@@ -110,7 +110,7 @@ fn next_activity_snapshot(reader: &mut SseReader, in_flight: u64) -> Value {
     }
 }
 
-fn send_turn(socket: &mut emp_transport::ClientWebSocket, input: &str) {
+fn send_turn(socket: &mut emp_transport::test_support::ClientWebSocket, input: &str) {
     socket
         .send_json(&json!({
             "type":"response.create",
@@ -120,7 +120,10 @@ fn send_turn(socket: &mut emp_transport::ClientWebSocket, input: &str) {
         .expect("send WebSocket response.create");
 }
 
-fn receive_completed_turn(socket: &mut emp_transport::ClientWebSocket, deadline: &Deadline) {
+fn receive_completed_turn(
+    socket: &mut emp_transport::test_support::ClientWebSocket,
+    deadline: &Deadline,
+) {
     for _ in 0..16 {
         let event = websocket_event_before(socket, deadline);
         if event["type"] == "response.completed" {
@@ -162,9 +165,12 @@ fn websocket_idle_connection_is_inactive_and_each_turn_has_its_own_activity() {
         "x-emp-session".to_owned(),
         session.trim_start_matches("X-EMP-Session: ").to_owned(),
     )]);
-    let mut socket =
-        emp_transport::ClientWebSocket::connect(&url, &headers, Duration::from_secs(5))
-            .expect("connect idle WebSocket");
+    let mut socket = emp_transport::test_support::ClientWebSocket::connect(
+        &url,
+        &headers,
+        Duration::from_secs(5),
+    )
+    .expect("connect idle WebSocket");
     let mut activity = open_quota_events(&server, &session);
 
     for input in ["first activity turn", "second activity turn"] {

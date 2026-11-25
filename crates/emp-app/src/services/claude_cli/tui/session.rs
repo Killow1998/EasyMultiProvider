@@ -1,12 +1,12 @@
 use super::super::{Cancellation, ClaudeCliError, media, projection};
-use super::{protocol, terminal::Terminal, transcript::Metrics};
+use super::{terminal::Terminal, transcript::Metrics};
 use crate::app::ServerState;
+use crate::server::claude_relay::{self, RelayListener, RelayStream};
 use emp_domain::ResolvedRoute;
 use portable_pty::CommandBuilder;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    net::{TcpListener, TcpStream},
     path::PathBuf,
     sync::{
         Arc,
@@ -19,7 +19,7 @@ use std::{
 pub(super) struct Context {
     _root: tempfile::TempDir,
     command: CommandBuilder,
-    listener: TcpListener,
+    listener: RelayListener,
     token: String,
     context: Option<Vec<Value>>,
     attachments: PathBuf,
@@ -60,7 +60,7 @@ pub(super) fn run(
     })
     .map_err(ClaudeCliError::Failure)?;
     let mut terminal = Terminal::spawn(context.command.clone())?;
-    let mut pending: Option<(TcpStream, Value)> = None;
+    let mut pending: Option<(RelayStream, Value)> = None;
     let mut deadline = Instant::now() + Duration::from_secs(300);
     let mut prompt_listed = false;
     let mut submitted = false;
@@ -107,7 +107,7 @@ pub(super) fn run(
                     context.local,
                     &context.attachments,
                 )?;
-                protocol::reply(
+                claude_relay::reply(
                     &mut stream,
                     200,
                     &json!({"jsonrpc":"2.0","id":id,"result":{"content":result,"isError":false}}),
@@ -122,19 +122,15 @@ pub(super) fn run(
             Err(mpsc::TryRecvError::Disconnected) => return Err(ClaudeCliError::Disconnected),
             Err(mpsc::TryRecvError::Empty) => {}
         }
-        let (mut stream, _) = match context.listener.accept() {
-            Ok(accepted) => accepted,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "非阻塞中继监听器按固定间隔轮询，并检查消息和会话截止时间"
-                )]
-                std::thread::sleep(Duration::from_millis(20));
-                continue;
-            }
-            Err(_) => return Err(ClaudeCliError::Failure("claude_cli_relay_unavailable")),
+        let Some(mut stream) = context.listener.accept()? else {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "非阻塞中继监听器按固定间隔轮询，并检查消息和会话截止时间"
+            )]
+            std::thread::sleep(Duration::from_millis(20));
+            continue;
         };
-        let (path, mut request, headers) = protocol::read(&mut stream, &context.token)?;
+        let (path, mut request, headers) = claude_relay::read(&mut stream, &context.token)?;
         if path == "/v1/messages" && !context.local {
             super::attachments::restore(&mut request, &context.attachments)?;
             output
@@ -177,26 +173,14 @@ pub(super) fn run(
             metrics
                 .response(&routed.body)
                 .map_err(ClaudeCliError::Router)?;
-            use std::io::Write;
-            stream
-                .write_all(&crate::http::response::response(
-                    &format!(
-                        "HTTP/1.1 {} {}",
-                        routed.status,
-                        crate::http::response::status_text(routed.status)
-                    ),
-                    &routed.content_type,
-                    &routed.body,
-                    &[],
-                ))
-                .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_write_failed"))?;
+            stream.reply(routed.status, &routed.content_type, &routed.body)?;
             if super::super::output_budget::exhausted(&routed.body) {
                 return Err(ClaudeCliError::Failure(super::super::output_budget::ERROR));
             }
             continue;
         }
         if path != "/mcp" {
-            protocol::reply(
+            claude_relay::reply(
                 &mut stream,
                 if path == "/api/hello" { 200 } else { 404 },
                 &json!({}),
@@ -251,7 +235,7 @@ pub(super) fn run(
             }
             _ => json!({}),
         };
-        protocol::reply(
+        claude_relay::reply(
             &mut stream,
             if id.is_null() { 202 } else { 200 },
             &json!({"jsonrpc":"2.0","id":id,"result":result}),

@@ -64,13 +64,6 @@ fn allocation_capacity_error(limit: usize) -> BodyError {
     })
 }
 
-fn reserve_body_capacity(
-    body: &mut Vec<u8>,
-    target_length: usize,
-) -> Result<(), std::collections::TryReserveError> {
-    body.try_reserve_exact(target_length.saturating_sub(body.len()))
-}
-
 struct JsonRead {
     length: usize,
     limit: usize,
@@ -186,37 +179,43 @@ impl JsonBody {
         limits: &Arc<RequestLimits>,
     ) -> Result<Self, EntryError> {
         let raw = raw_head(request.extensions())?;
-        let config = prepare_json(raw.request(), limits)?;
+        let mut config = prepare_json(raw.request(), limits)?;
         let encoding = raw
             .request()
             .header("Content-Encoding")
             .unwrap_or_default()
             .to_owned();
-        raw.allow_body();
-        let mut config = config;
-        let body = read_body(request.into_body(), config.length, |bytes, chunk| {
-            let projected = bytes.len() + chunk.len();
-            if projected > config.length {
-                config.ensure(projected)?;
-                return Err(BodyError::incomplete());
-            }
-            if projected > bytes.capacity() {
-                let target = (bytes.capacity().saturating_mul(2))
-                    .max(projected)
-                    .min(config.length);
-                config.ensure(target)?;
-                reserve_body_capacity(bytes, target)
-                    .map_err(|_| allocation_capacity_error(target))?;
-            }
-            bytes.extend_from_slice(chunk);
-            Ok(())
-        })
-        .await?;
+        let raw = raw.clone();
+        let mut body = Vec::new();
+        read_json_body(request.into_body(), &raw, &mut config, &mut body).await?;
         let value = run_blocking(move || decode_json(body, &encoding, config))
             .await
             .map_err(|_| EntryError::internal())??;
         Ok(Self(value))
     }
+}
+
+async fn read_json_body(
+    body: axum::body::Body,
+    raw: &crate::server::head::RawRequestHead,
+    config: &mut JsonRead,
+    bytes: &mut Vec<u8>,
+) -> Result<(), BodyError> {
+    let length = config.length;
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| allocation_capacity_error(length))?;
+    raw.allow_body();
+    read_body(body, length, bytes, |bytes, chunk| {
+        let projected = bytes.len() + chunk.len();
+        if projected > length {
+            config.ensure(projected)?;
+            return Err(BodyError::incomplete());
+        }
+        bytes.extend_from_slice(chunk);
+        Ok(())
+    })
+    .await
 }
 
 pub(crate) struct RealtimeBody(pub(crate) RealtimeCall);
@@ -233,9 +232,11 @@ impl FromRequest<Arc<ServerState>> for RealtimeBody {
         validate_headers(head)?;
         let input = RealtimeRead::prepare(&head.incoming())?;
         raw.allow_body();
-        let bytes = read_body(
+        let mut bytes = Vec::new();
+        read_body(
             request.into_body(),
             input.length,
+            &mut bytes,
             |bytes, chunk| -> Result<(), RealtimeError> {
                 input.reserve(bytes, bytes.len() + chunk.len())?;
                 bytes.extend_from_slice(chunk);
@@ -262,10 +263,10 @@ impl From<BodyError> for RealtimeError {
 async fn read_body<E: From<BodyError>>(
     mut body: axum::body::Body,
     length: usize,
+    bytes: &mut Vec<u8>,
     mut append: impl FnMut(&mut Vec<u8>, &[u8]) -> Result<(), E>,
-) -> Result<Vec<u8>, E> {
+) -> Result<(), E> {
     let deadline = Instant::now() + request_body_timeout(length);
-    let mut bytes = Vec::new();
     while bytes.len() < length || !body.is_end_stream() {
         let until = deadline.min(Instant::now() + REQUEST_READ_TIMEOUT);
         let frame = timeout_at(until, poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)))
@@ -279,52 +280,72 @@ async fn read_body<E: From<BodyError>>(
         };
         let frame = frame.map_err(|_| BodyError::incomplete())?;
         if let Ok(chunk) = frame.into_data() {
-            append(&mut bytes, &chunk)?;
+            append(bytes, &chunk)?;
         }
     }
     if bytes.len() != length {
         return Err(BodyError::incomplete().into());
     }
-    Ok(bytes)
+    Ok(())
 }
 
 #[cfg(test)]
 mod body_capacity_tests {
-    use super::{
-        BodyError, REQUEST_GROWTH_QUANTUM, allocation_capacity_error, reserve_body_capacity,
-    };
+    use super::*;
+    use crate::server::head::{GuardedHead, RawRequestHead};
+    use emp_test_support::test_timeout;
     use emp_transport::RequestCapacityReason;
 
-    #[test]
-    fn reserves_wire_content_length_without_geometric_growth() {
-        let target_length = 1024 * 1024 + 269;
-        let mut body = Vec::with_capacity(1024);
-        body.extend_from_slice(&[0_u8; 1024]);
-
-        reserve_body_capacity(&mut body, target_length).expect("reserve validated wire size");
-        assert!(body.capacity() >= target_length);
-        let reserved_capacity = body.capacity();
-        let reserved_pointer = body.as_ptr();
-
-        let chunk = [7_u8; 64 * 1024];
-        while body.len() + chunk.len() <= target_length {
-            body.extend_from_slice(&chunk);
-        }
-        let remainder = target_length - body.len();
-        body.extend_from_slice(&chunk[..remainder]);
-        assert_eq!(body.len(), target_length);
-        assert_eq!(body.capacity(), reserved_capacity);
-        assert_eq!(body.as_ptr(), reserved_pointer);
-        assert!(body.iter().all(|byte| *byte == 0 || *byte == 7));
+    async fn json_head(length: usize) -> RawRequestHead {
+        let head = format!(
+            "POST /api/config HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n"
+        );
+        let deadline = Instant::now() + test_timeout(REQUEST_READ_TIMEOUT);
+        GuardedHead::read(&mut head.as_bytes(), deadline)
+            .await
+            .ok()
+            .expect("valid request head")
+            .raw
     }
 
-    #[test]
-    fn allocation_failure_maps_to_safe_memory_capacity_error() {
-        let BodyError::Capacity(error) = allocation_capacity_error(1024) else {
+    #[tokio::test]
+    async fn reserves_wire_content_length_without_geometric_growth() {
+        let target_length = 1024 * 1024 + 269;
+        let raw = json_head(target_length).await;
+        let limits =
+            RequestLimits::new(RequestLimitsConfig::default(), || None, || 0, "body-test").unwrap();
+        let mut config = prepare_json(raw.request(), &limits)
+            .ok()
+            .expect("valid declared length");
+        let mut body = Vec::new();
+        let result = read_json_body(
+            axum::body::Body::from(vec![7_u8; 1024]),
+            &raw,
+            &mut config,
+            &mut body,
+        )
+        .await;
+        assert!(matches!(result, Err(BodyError::Invalid(_))));
+        assert_eq!(body, vec![7_u8; 1024]);
+        assert_eq!(body.capacity(), target_length);
+    }
+
+    #[tokio::test]
+    async fn allocation_failure_maps_to_safe_memory_capacity_error() {
+        let length = usize::MAX;
+        let raw = json_head(length).await;
+        let mut config = JsonRead {
+            length,
+            limit: length,
+            budget: None,
+        };
+        let mut bytes = Vec::new();
+        let result = read_json_body(axum::body::Body::empty(), &raw, &mut config, &mut bytes).await;
+        let Err(BodyError::Capacity(error)) = result else {
             panic!("allocation failure must map to capacity error");
         };
         assert_eq!(error.reason, RequestCapacityReason::MemoryLimit);
         assert_eq!(error.http_status(), 503);
-        assert_eq!(error.limit, REQUEST_GROWTH_QUANTUM);
+        assert_eq!(error.limit, length);
     }
 }

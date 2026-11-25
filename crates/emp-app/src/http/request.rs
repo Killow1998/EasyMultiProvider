@@ -1,9 +1,6 @@
 use crate::http::auth::session_header_value;
 use crate::server::http::body::BodyError;
-use std::io::Read;
-use std::net::TcpStream;
 use std::time::Duration;
-use std::time::Instant;
 
 pub(crate) const MAX_HEADER_BYTES: usize = 8 * 1024;
 
@@ -139,39 +136,6 @@ pub(crate) fn request_body_timeout(length: usize) -> Duration {
     REQUEST_BODY_DEADLINE + Duration::from_secs(grace)
 }
 
-/// Read once, bounded by both the per-read idle timeout and `deadline`, so a
-/// peer trickling bytes cannot hold the request thread indefinitely.
-pub(crate) fn read_before(
-    stream: &mut TcpStream,
-    buffer: &mut [u8],
-    deadline: Instant,
-) -> std::io::Result<usize> {
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(std::io::ErrorKind::TimedOut.into());
-        }
-        stream.set_read_timeout(Some(remaining.min(REQUEST_READ_TIMEOUT)))?;
-        match stream.read(buffer) {
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                return Err(std::io::ErrorKind::TimedOut.into());
-            }
-            result => return result,
-        }
-    }
-}
-
-pub(crate) fn restore_read_timeout(stream: &TcpStream) {
-    let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
-}
-
-pub(crate) fn read_request_head(stream: &mut TcpStream) -> Option<RequestHead> {
-    let head = read_request_head_before(stream, Instant::now() + REQUEST_HEAD_DEADLINE);
-    restore_read_timeout(stream);
-    head
-}
-
 pub(crate) fn request_head_end(request: &[u8], previous_len: usize) -> Result<Option<usize>, ()> {
     let search_start = previous_len.saturating_sub(3);
     match request[search_start..]
@@ -184,27 +148,6 @@ pub(crate) fn request_head_end(request: &[u8], previous_len: usize) -> Result<Op
         _ if request.len() <= MAX_HEADER_BYTES + 3 => Ok(None),
         _ => Err(()),
     }
-}
-
-fn read_request_head_before(stream: &mut TcpStream, deadline: Instant) -> Option<RequestHead> {
-    let mut buffer = [0_u8; 1024];
-    let mut request = Vec::new();
-    loop {
-        let count = read_before(stream, &mut buffer, deadline).ok()?;
-        if count == 0 {
-            break;
-        }
-        let previous_len = request.len();
-        request.extend_from_slice(&buffer[..count]);
-        if let Some(end) = request_head_end(&request, previous_len).ok()? {
-            let body_prefix = request.split_off(end);
-            return Some(RequestHead {
-                head: String::from_utf8(request).ok()?,
-                body_prefix,
-            });
-        }
-    }
-    None
 }
 
 fn request_line(request: &str) -> Option<(RequestMethod, &str)> {
@@ -306,8 +249,10 @@ mod tests {
         });
         let (mut stream, _) = listener.accept().expect("accept");
         let started = Instant::now();
-        let head =
-            super::read_request_head_before(&mut stream, started + Duration::from_millis(400));
+        let head = crate::server::transport::read_request_head_before(
+            &mut stream,
+            started + Duration::from_millis(400),
+        );
         assert!(head.is_none());
         let elapsed = started.elapsed();
         assert!(elapsed >= Duration::from_millis(400), "{elapsed:?}");

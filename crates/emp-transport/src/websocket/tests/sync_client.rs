@@ -1,4 +1,5 @@
-use emp_transport::{ClientWebSocket, WebSocketConnection, websocket_accept};
+use crate::test_support::{ClientWebSocket, WebSocketConnection};
+use crate::websocket_accept;
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress};
 use serde_json::json;
 use std::io::{Read, Write};

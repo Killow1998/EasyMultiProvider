@@ -3,6 +3,7 @@ use crate::{RequestBudget, RequestLimits, TransportKind};
 use std::{fmt, io, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, PartialEq, Eq)]
 pub enum WebSocketPoll<T> {
     Pending,
@@ -11,6 +12,7 @@ pub enum WebSocketPoll<T> {
     Closed { code: Option<u16> },
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl<T> fmt::Debug for WebSocketPoll<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

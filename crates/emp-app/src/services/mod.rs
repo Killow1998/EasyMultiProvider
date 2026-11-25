@@ -32,7 +32,7 @@ pub(crate) mod team;
 pub(crate) mod native_connections;
 
 pub(crate) mod context;
-pub(crate) mod disconnect;
+pub(crate) use crate::server::disconnect;
 pub(crate) mod error_origin;
 
 pub(crate) mod startup;

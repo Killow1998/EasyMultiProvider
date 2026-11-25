@@ -187,7 +187,7 @@ async fn read_report(
                     return;
                 }
             };
-            let Ok(mut monitor) = DisconnectMonitor::start(output.socket()) else {
+            let Ok(mut monitor) = output.disconnect() else {
                 output.finish(no_response);
                 return;
             };

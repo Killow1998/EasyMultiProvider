@@ -2,7 +2,8 @@
 use super::support::*;
 use super::*;
 use emp_test_support::{Deadline, test_timeout};
-use emp_transport::{ClientWebSocket, WebSocketPoll};
+use emp_transport::test_support::ClientWebSocket;
+use emp_transport::test_support::WebSocketPoll;
 
 fn event(client: &mut ClientWebSocket, kind: &str) -> Value {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));

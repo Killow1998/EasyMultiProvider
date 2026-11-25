@@ -91,8 +91,7 @@ pub(crate) fn execute(
     };
     observation.phase(Phase::PrepareDestination);
     let destination_context = {
-        let mut monitor =
-            crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
+        let mut monitor = downstream.disconnect().ok();
         prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
     };
     body = match destination_context {
@@ -118,8 +117,7 @@ pub(crate) fn execute(
     let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state, &route, &body, &incoming, None, "compact",
     );
-    let mut monitor =
-        crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
+    let mut monitor = downstream.disconnect().ok();
     let (compacted, candidate) = match external_compaction_response(
         state,
         &route,

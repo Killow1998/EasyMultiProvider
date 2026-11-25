@@ -12,9 +12,8 @@ fn codes_require_a_private_endpoint_and_exact_ascii_nonce() {
 
 #[test]
 fn authenticated_receiver_requires_consent_and_consumes_code_once() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let code = Code::new(Ipv4Addr::LOCALHOST, listener.local_addr().unwrap().port()).unwrap();
+    let (listener, port) = Listener::bind(Ipv4Addr::LOCALHOST).ok().unwrap();
+    let code = Code::new(Ipv4Addr::LOCALHOST, port).unwrap();
     let delivery = Arc::new(Mutex::new(Delivery {
         status: "waiting",
         receiver: None,
@@ -47,9 +46,8 @@ fn authenticated_receiver_requires_consent_and_consumes_code_once() {
 
 #[test]
 fn expiry_closes_listener_and_drops_encrypted_payload() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let code = Code::new(Ipv4Addr::LOCALHOST, listener.local_addr().unwrap().port()).unwrap();
+    let (listener, port) = Listener::bind(Ipv4Addr::LOCALHOST).ok().unwrap();
+    let code = Code::new(Ipv4Addr::LOCALHOST, port).unwrap();
     let delivery = Arc::new(Mutex::new(Delivery {
         status: "waiting",
         receiver: None,

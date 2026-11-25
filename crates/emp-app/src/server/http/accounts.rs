@@ -26,7 +26,6 @@ use axum::{
 };
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::time::timeout;
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
@@ -57,33 +56,22 @@ async fn events(
             .header("x-accel-buffering", "no"),
         stream.delivery.clone(),
     );
-    let worker = tokio::spawn({
-        let stream = stream.clone();
-        async move {
-            let mut subscription = subscription;
-            let result = timeout(quota::EVENT_WRITE_TIMEOUT, output.flushed()).await;
-            if result.is_err() {
-                stream.write_timed_out.notify_one();
-            }
-            if !matches!(result, Ok(Ok(()))) {
-                return;
-            }
-            loop {
-                let next = tokio::select! {
-                    biased;
-                    () = output.closed() => break,
-                    frame = quota::next_frame(&mut subscription, &session, &state) => frame,
-                };
-                let Some((frame, quit)) = next else {
-                    break;
-                };
-                let result = timeout(quota::EVENT_WRITE_TIMEOUT, output.frame(frame)).await;
-                if result.is_err() {
-                    stream.write_timed_out.notify_one();
-                }
-                if !matches!(result, Ok(Ok(()))) || quit {
-                    break;
-                }
+    let worker = tokio::spawn(async move {
+        let mut subscription = subscription;
+        if output.flushed().await.is_err() {
+            return;
+        }
+        loop {
+            let next = tokio::select! {
+                biased;
+                () = output.closed() => break,
+                frame = quota::next_frame(&mut subscription, &session, &state) => frame,
+            };
+            let Some((frame, quit)) = next else {
+                break;
+            };
+            if output.frame(frame).await.is_err() || quit {
+                break;
             }
         }
     });

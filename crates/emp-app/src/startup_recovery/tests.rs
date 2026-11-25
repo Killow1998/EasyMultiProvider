@@ -281,7 +281,7 @@ fn recovery_wire_contract_before_reset_or_exit() {
         ServerControl,
         http::tests::{
             exchange_wire, request,
-            wire_contract::{assert_reply, asset_head, json_head},
+            wire_contract::{assert_json_reply, assert_reply, asset_head, json_head},
         },
     };
     use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
@@ -310,7 +310,7 @@ fn recovery_wire_contract_before_reset_or_exit() {
             let address = listener.local_addr().unwrap();
             let worker_config = config.clone();
             let worker = std::thread::spawn(move || {
-                server::serve(
+                crate::server::recovery::serve(
                     listener,
                     &worker_config,
                     false,
@@ -329,6 +329,15 @@ fn recovery_wire_contract_before_reset_or_exit() {
                 .block_on(async {
                     let auth = "X-EMP-Recovery: recovery-fixture";
                     let empty = "Content-Length: 0";
+                    let malformed =
+                        request(address.port(), "GET", "/", &["Invalid Header: x"], b"");
+                    let rejection = exchange_wire(address, &malformed, false).await;
+                    assert_json_reply(
+                        "recovery invalid HTTP head",
+                        &rejection,
+                        "400 Bad Request",
+                        &serde_json::json!({"error":{"message":"invalid HTTP request"}}),
+                    );
                     let page = include_bytes!("../../web/recovery.html").as_slice();
                     let script = include_bytes!("../../web/i18n.js").as_slice();
                     let copy = include_bytes!("../../web/copy-recovery.js").as_slice();

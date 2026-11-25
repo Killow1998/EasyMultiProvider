@@ -9,6 +9,9 @@ description = "持久化凭据、用量账本与价格、额度历史和签名"
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 emp-domain = { path = "../emp-domain" }
 emp-files = { path = "../emp-files" }

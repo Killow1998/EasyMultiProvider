@@ -176,7 +176,7 @@ pub(crate) async fn run_responses(
     connection_id: Option<&str>,
     io: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
     prefix: &[u8],
-    monitor: Option<Arc<tokio::net::TcpStream>>,
+    monitor: Option<crate::server::disconnect::WebSocketDisconnect>,
     permit: Option<Arc<crate::services::connection_admission::ConnectionSlot>>,
 ) {
     let Ok(websocket) = Downstream::new(
@@ -222,7 +222,7 @@ async fn responses_turns(
     request: Request<'_>,
     connection_id: Option<&str>,
     websocket: &Downstream,
-    monitor: Option<&Arc<tokio::net::TcpStream>>,
+    monitor: Option<&crate::server::disconnect::WebSocketDisconnect>,
     (native_session, permit): (
         &mut NativeSession,
         &Arc<crate::services::connection_admission::ConnectionSlot>,
@@ -304,17 +304,27 @@ async fn responses_turns(
             }
             continue;
         }
-        let mut observation = RequestObservation::new(
-            std::sync::Arc::clone(&state.backend.diagnostics),
-            random_hex(8).ok(),
-            connection_id,
-            "websocket",
-            "responses",
-        )
-        .with_ledger(
-            std::sync::Arc::clone(&state.backend.usage.ledger),
-            std::sync::Arc::clone(&state.backend.management_events),
-        );
+        let Ok(mut observation) = crate::server::run_blocking({
+            let state = Arc::clone(state);
+            let connection_id = connection_id.map(str::to_owned);
+            move || {
+                RequestObservation::new(
+                    Arc::clone(&state.backend.diagnostics),
+                    random_hex(8).ok(),
+                    connection_id.as_deref(),
+                    "websocket",
+                    "responses",
+                )
+                .with_ledger(
+                    Arc::clone(&state.backend.usage.ledger),
+                    Arc::clone(&state.backend.management_events),
+                )
+            }
+        })
+        .await
+        else {
+            return;
+        };
         let mut presentation = crate::services::error_presentation::ErrorPresentation::new(state);
         presentation.thread(incoming.get("thread-id").map(String::as_str));
         observation = observation.with_errors(presentation);
@@ -564,30 +574,18 @@ async fn responses_turns(
                 }
             };
         websocket.observation.phase(Phase::PrepareDestination);
-        let destination_context = if let Some(socket) = monitor {
-            let socket = Arc::clone(socket);
-            let (sender, receiver) = tokio::sync::oneshot::channel();
-            let mut monitor =
-                crate::services::disconnect::DisconnectMonitor::from_signal(receiver, None);
-            let watcher = tokio::spawn(async move {
-                if socket.peek(&mut [0]).await.unwrap_or(0) == 0 {
-                    let _ = sender.send(crate::services::disconnect::DisconnectReason::Client);
-                } else {
-                    std::future::pending::<()>().await;
-                }
-            });
-            let result = block_in_place(|| {
-                prepare_destination_context(
-                    state,
-                    &route,
-                    request_body,
-                    &request_headers,
-                    Some(&mut monitor),
-                )
-            });
-            watcher.abort();
-            let _ = watcher.await;
-            result
+        let destination_context = if let Some(disconnect) = monitor {
+            disconnect
+                .watch(|monitor| {
+                    prepare_destination_context(
+                        state,
+                        &route,
+                        request_body,
+                        &request_headers,
+                        Some(monitor),
+                    )
+                })
+                .await
         } else {
             block_in_place(|| {
                 prepare_destination_context(state, &route, request_body, &request_headers, None)

@@ -4,19 +4,27 @@ use std::fmt;
 
 mod client;
 mod compression;
+#[cfg(any(test, feature = "test-support"))]
 mod downstream;
 mod frame;
+mod local;
 mod network;
 mod server;
+#[cfg(any(test, feature = "test-support"))]
 mod sync_client;
 #[cfg(test)]
 mod tests;
 
 pub use client::AsyncClientWebSocket;
-pub use downstream::WebSocketConnection;
-pub use frame::{WebSocketEvent, WebSocketPoll};
+pub use frame::WebSocketEvent;
+pub use local::LocalWebSocket;
 pub use server::{WebSocketReader, WebSocketWriter, split_websocket};
-pub use sync_client::{ClientWebSocket, LocalWebSocket};
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    pub use super::{
+        downstream::WebSocketConnection, frame::WebSocketPoll, sync_client::ClientWebSocket,
+    };
+}
 pub const DEFAULT_WEBSOCKET_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 
 const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

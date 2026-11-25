@@ -1,19 +1,28 @@
-use super::*;
+use crate::services::migration::{MigrationError, lan::Delivery};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::{
+    net::{IpAddr, Ipv4Addr, TcpListener, UdpSocket},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::JoinHandle,
+    time::{Duration, Instant},
+};
 
-pub(super) const MAX_BUNDLE: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_BUNDLE: usize = 32 * 1024 * 1024;
 const MAGIC: &[u8; 10] = b"EMP-LAN-1\n";
 #[derive(Clone)]
-pub(super) struct Code([u8; 36]);
-pub(super) fn local_address(ip: Ipv4Addr) -> bool {
+pub(crate) struct Code([u8; 36]);
+pub(crate) fn local_address(ip: Ipv4Addr) -> bool {
     ip.is_private() || ip.is_loopback()
 }
 impl Code {
-    pub(super) fn new(ip: Ipv4Addr, port: u16) -> Result<Self, &'static str> {
+    pub(crate) fn new(ip: Ipv4Addr, port: u16) -> Result<Self, &'static str> {
         let mut bytes = [0; 36];
         getrandom::getrandom(&mut bytes).map_err(|_| "lan_random_failed")?;
         bytes[0] = 1;
@@ -21,7 +30,7 @@ impl Code {
         bytes[5..7].copy_from_slice(&port.to_be_bytes());
         Ok(Self(bytes))
     }
-    pub(super) fn parse(text: &str) -> Result<Self, &'static str> {
+    pub(crate) fn parse(text: &str) -> Result<Self, &'static str> {
         if text.len() != 49 || !text.starts_with('E') {
             return Err("lan_invalid_code");
         }
@@ -42,10 +51,10 @@ impl Code {
     fn port(&self) -> u16 {
         u16::from_be_bytes([self.0[5], self.0[6]])
     }
-    pub(super) fn encode(&self) -> String {
+    pub(crate) fn encode(&self) -> String {
         format!("E{}", URL_SAFE_NO_PAD.encode(self.0))
     }
-    pub(super) fn password(&self) -> String {
+    pub(crate) fn password(&self) -> String {
         URL_SAFE_NO_PAD.encode(&self.0[7..])
     }
     fn proof(&self, nonce: &[u8; 32]) -> Hmac<Sha256> {
@@ -56,7 +65,7 @@ impl Code {
         mac
     }
 }
-pub(super) fn nonce(value: &str) -> Result<[u8; 32], &'static str> {
+pub(crate) fn nonce(value: &str) -> Result<[u8; 32], &'static str> {
     if value.len() != 64 || !value.is_ascii() {
         return Err("lan_invalid_receiver");
     }
@@ -68,7 +77,7 @@ pub(super) fn nonce(value: &str) -> Result<[u8; 32], &'static str> {
     Ok(bytes)
 }
 
-pub(super) fn receive(code: &Code, nonce: &[u8; 32]) -> Result<Option<Vec<u8>>, &'static str> {
+pub(crate) fn receive(code: &Code, nonce: &[u8; 32]) -> Result<Option<Vec<u8>>, &'static str> {
     let mut stream = TcpStream::connect_timeout(
         &SocketAddr::from((code.ip(), code.port())),
         Duration::from_secs(3),
@@ -118,8 +127,34 @@ pub(super) fn receive(code: &Code, nonce: &[u8; 32]) -> Result<Option<Vec<u8>>, 
     Ok(Some(data))
 }
 
-pub(super) fn serve(
-    listener: TcpListener,
+pub(crate) struct Listener(TcpListener);
+
+impl Listener {
+    pub(crate) fn bind(address: Ipv4Addr) -> Result<(Self, u16), MigrationError> {
+        let listener = TcpListener::bind((address, 0))
+            .map_err(|_| MigrationError::invalid("lan_cannot_listen"))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|_| MigrationError::Internal)?;
+        let port = listener
+            .local_addr()
+            .map_err(|_| MigrationError::Internal)?
+            .port();
+        Ok((Self(listener), port))
+    }
+}
+
+pub(crate) fn route_address() -> Option<Ipv4Addr> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(ip) => Some(ip),
+        _ => None,
+    }
+}
+
+pub(crate) fn serve(
+    Listener(listener): Listener,
     code: Code,
     expires: Instant,
     shared: Arc<Mutex<Delivery>>,

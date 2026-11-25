@@ -1,4 +1,4 @@
-use super::*;
+use crate::error::AppError;
 use crate::http::request::RequestMethod;
 use crate::server::http::management::{RecoveryMutation, recovery_mutation, recovery_session};
 use crate::server::{
@@ -12,7 +12,10 @@ use crate::server::{
     run_blocking,
 };
 use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
+use crate::startup_recovery::{issue, reset};
 use axum::{Extension, extract::State};
+use serde_json::Value;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{net::TcpListener, sync::Arc};
 
@@ -121,7 +124,7 @@ fn reset_reply(config: &Path, keep_backup: bool, external_key: bool) -> (HttpRep
     }
 }
 
-pub(super) fn serve(
+pub(crate) fn serve(
     listener: TcpListener,
     config: &Path,
     external_key: bool,

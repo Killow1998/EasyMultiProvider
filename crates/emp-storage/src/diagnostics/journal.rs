@@ -135,11 +135,17 @@ struct Writer {
     sequence: u64,
     managed: u64,
 }
+
+#[cfg(feature = "test-support")]
+type EventGate = (&'static str, Box<dyn FnOnce() + Send>);
+
 pub struct Journal {
     directory: PathBuf,
     run_id: String,
     basename: String,
     writer: Mutex<Writer>,
+    #[cfg(feature = "test-support")]
+    event_gate: Mutex<Option<EventGate>>,
 }
 impl Journal {
     pub fn new(directory: PathBuf) -> Self {
@@ -159,6 +165,8 @@ impl Journal {
             directory,
             run_id,
             basename,
+            #[cfg(feature = "test-support")]
+            event_gate: Mutex::default(),
             writer: Mutex::new(Writer {
                 file: None,
                 part: 1,
@@ -255,7 +263,32 @@ impl Journal {
             }
         }
     }
+    #[cfg(feature = "test-support")]
+    pub fn gate_next_event(&self, name: &'static str, gate: impl FnOnce() + Send + 'static) {
+        assert!(
+            self.event_gate
+                .lock()
+                .unwrap()
+                .replace((name, Box::new(gate)))
+                .is_none()
+        );
+    }
+
     pub fn event(&self, level: &str, name: &str, fields: &Value) {
+        #[cfg(feature = "test-support")]
+        {
+            let gate = {
+                let mut armed = self.event_gate.lock().unwrap();
+                if armed.as_ref().is_some_and(|(event, _)| *event == name) {
+                    armed.take()
+                } else {
+                    None
+                }
+            };
+            if let Some((_, wait)) = gate {
+                wait();
+            }
+        }
         let Ok(mut writer) = self.writer.lock() else {
             return;
         };

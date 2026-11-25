@@ -22,7 +22,7 @@ pub(crate) enum MigrationError {
     Internal,
 }
 impl MigrationError {
-    pub(super) fn invalid(error: impl std::fmt::Display) -> Self {
+    pub(crate) fn invalid(error: impl std::fmt::Display) -> Self {
         Self::Invalid {
             message: error.to_string(),
             code: None,

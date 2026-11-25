@@ -6,7 +6,7 @@ use emp_state::filesystem::{
 use std::fs;
 
 /// Caller holds state/service.lock throughout recovery and this transaction.
-pub(super) fn rebuild(
+pub(crate) fn rebuild(
     config: &Path,
     keep_backup: bool,
     external_key: bool,

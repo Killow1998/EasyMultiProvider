@@ -10,9 +10,9 @@ use crate::cli::parse_cli;
 use crate::http::auth::valid_caller_authorization;
 use crate::http::request::RequestHead;
 use crate::http::request::parse_request;
-use crate::http::request::read_request_head;
 use crate::http::response::status_text;
 use crate::lifecycle::ServerHandle;
+use crate::server::transport::read_request_head;
 use crate::services::accounts::notify_quota_update;
 use crate::services::compaction::COMPACTION_PROMPT;
 use crate::services::events::sse_frame;
@@ -28,7 +28,7 @@ use emp_state::WEB_SESSION_TOKEN_LENGTH;
 use emp_state::load_configuration;
 use emp_state::provider_api_key;
 use emp_state::save_configuration;
-use emp_transport::WebSocketConnection;
+use emp_transport::test_support::WebSocketConnection;
 use emp_transport::websocket_accept;
 use serde_json::Value;
 use serde_json::json;
@@ -488,7 +488,7 @@ fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
 }
 
 fn websocket_event_before(
-    socket: &mut emp_transport::ClientWebSocket,
+    socket: &mut emp_transport::test_support::ClientWebSocket,
     deadline: &Deadline,
 ) -> Value {
     loop {
@@ -496,13 +496,15 @@ fn websocket_event_before(
             .accept(deadline.remaining(), "WebSocket response event")
             .unwrap();
         match socket.poll_receive_text_with_timeout(remaining).unwrap() {
-            emp_transport::WebSocketPoll::Text(text) => {
+            emp_transport::test_support::WebSocketPoll::Text(text) => {
                 if let Ok(value @ Value::Object(_)) = serde_json::from_str(&text) {
                     return deadline.accept(value, "WebSocket response event").unwrap();
                 }
             }
-            emp_transport::WebSocketPoll::Ping(payload) => socket.send_pong(&payload).unwrap(),
-            emp_transport::WebSocketPoll::Pending => {}
+            emp_transport::test_support::WebSocketPoll::Ping(payload) => {
+                socket.send_pong(&payload).unwrap()
+            }
+            emp_transport::test_support::WebSocketPoll::Pending => {}
             other => panic!("WebSocket ended before response event: {other:?}"),
         }
     }

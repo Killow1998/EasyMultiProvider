@@ -8,8 +8,12 @@ fn collaboration_websocket_rejects_disabled_and_unowned_tasks_without_forwarding
         ("X-EMP-Session".into(), server.session_token().to_owned()),
         ("x-openai-subagent".into(), "collab_spawn".into()),
     ]);
-    let mut socket =
-        emp_transport::ClientWebSocket::connect(&url, &headers, Duration::from_secs(5)).unwrap();
+    let mut socket = emp_transport::test_support::ClientWebSocket::connect(
+        &url,
+        &headers,
+        Duration::from_secs(5),
+    )
+    .unwrap();
     let task = json!({"type":"agent_message","author":"/root","recipient":"/root/bench","content":[
         {"type":"input_text","text":"Message Type: NEW_TASK\nTask name: /root/bench\nSender: /root\nPayload:\n"},
         {"type":"encrypted_content","encrypted_content":format!("gAAAA{}", "A".repeat(100))}

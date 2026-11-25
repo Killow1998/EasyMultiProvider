@@ -1,13 +1,12 @@
 //! Startup recovery is available without decrypting the normal application state.
-mod reset;
-mod server;
+pub(crate) mod reset;
 #[cfg(test)]
 mod tests;
 
 use crate::error::AppError;
+pub(crate) use crate::server::recovery::run;
 use emp_state::{FilesystemError, VaultStore};
 use serde_json::Value;
-pub(crate) use server::run;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn external_key() -> bool {
@@ -94,7 +93,7 @@ pub(crate) fn recoverable(error: &AppError) -> bool {
     )
 }
 
-fn issue(error: &AppError) -> &'static str {
+pub(crate) fn issue(error: &AppError) -> &'static str {
     match error {
         AppError::Config(_) => "config_invalid",
         AppError::CredentialKeyMissing => "key_missing",

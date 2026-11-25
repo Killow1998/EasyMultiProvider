@@ -115,7 +115,7 @@ pub(crate) fn serve_external_stream(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {
-    let mut monitor = DisconnectMonitor::start(downstream.sink.socket()).ok();
+    let mut monitor = downstream.sink.disconnect().ok();
     let (upstream, candidate, usage) = match crate::services::external::open_stream(
         state,
         route,
@@ -156,7 +156,7 @@ pub(crate) fn serve_native_stream(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {
-    let monitor = DisconnectMonitor::start(downstream.sink.socket()).ok();
+    let monitor = downstream.sink.disconnect().ok();
     let (upstream, monitor) = match monitor {
         Some(mut monitor) => match native::open_stream_cancellable(
             state,
@@ -291,7 +291,7 @@ fn relay_stream(
         response_headers,
         mut usage,
     } = context;
-    let mut monitor = monitor.or_else(|| DisconnectMonitor::start(downstream.sink.socket()).ok());
+    let mut monitor = monitor.or_else(|| downstream.sink.disconnect().ok());
     let runtime = &state.backend.transport.runtime;
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;

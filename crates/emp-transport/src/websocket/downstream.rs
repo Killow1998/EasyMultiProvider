@@ -1,7 +1,10 @@
-use super::{MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError, frame_length_prefix};
+use super::{
+    MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError, frame_length_prefix,
+    server::map_downstream_frame_error,
+};
 use crate::{
     MAX_PROXY_REQUEST_BYTES,
-    websocket::frame::{FrameDecodeError, FrameDecoder, FramePoll, WebSocketPoll},
+    websocket::frame::{FrameDecoder, FramePoll, WebSocketPoll},
 };
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -135,27 +138,21 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
         let _ = self.send_frame(8, &payload);
         self.closed = true;
     }
+}
 
+impl<S: Read + Write + polling::AsSource> WebSocketConnection<'_, S> {
     pub fn receive_text(&mut self) -> Result<Option<String>, WebSocketError> {
         loop {
             match self.poll_text()? {
-                WebSocketPoll::Pending => {}
+                WebSocketPoll::Pending => {
+                    wait_readable(self.stream)
+                        .map_err(|_| WebSocketError::new(1006, "websocket closed"))?;
+                }
                 WebSocketPoll::Text(text) => return Ok(Some(text)),
                 WebSocketPoll::Ping(payload) => self.send_pong(&payload)?,
                 WebSocketPoll::Closed { .. } => return Ok(None),
             }
         }
-    }
-}
-
-pub(super) fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
-    match error {
-        FrameDecodeError::Protocol => WebSocketError::new(1002, "invalid websocket frame"),
-        FrameDecodeError::TooLarge => WebSocketError::new(1009, "websocket message is too large"),
-        FrameDecodeError::AtCapacity => {
-            WebSocketError::new(1013, "not enough memory for websocket message")
-        }
-        FrameDecodeError::Io => WebSocketError::new(1006, "websocket closed"),
     }
 }
 
@@ -175,4 +172,21 @@ impl WebSocketConnection<'_, TcpStream> {
             .map_err(|_| WebSocketError::new(1006, "websocket closed"))?;
         self.finish_poll(result.map_err(map_downstream_frame_error)?)
     }
+}
+
+fn wait_readable(stream: &impl polling::AsSource) -> std::io::Result<()> {
+    let socket = socket2::SockRef::from(stream);
+    let poller = polling::Poller::new()?;
+    // SAFETY: The socket remains borrowed until it is deregistered and the poller is dropped.
+    unsafe { poller.add(&*socket, polling::Event::readable(0))? };
+    let mut events = polling::Events::new();
+    let ready = loop {
+        match poller.wait(&mut events, None) {
+            Ok(0) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => break result,
+        }
+    };
+    poller.delete(&*socket)?;
+    ready.map(|_| ())
 }

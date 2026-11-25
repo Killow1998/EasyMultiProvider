@@ -1,12 +1,12 @@
-use super::super::ClaudeCliError;
+use crate::services::claude_cli::ClaudeCliError;
 use serde_json::Value;
 use std::{
     io::{Read, Write},
-    net::TcpStream,
+    net::{Ipv4Addr, TcpListener, TcpStream},
 };
 
-pub(super) fn read(
-    stream: &mut TcpStream,
+pub(crate) fn read(
+    RelayStream(stream): &mut RelayStream,
     token: &str,
 ) -> Result<(String, Value, std::collections::BTreeMap<String, String>), ClaudeCliError> {
     stream
@@ -15,7 +15,7 @@ pub(super) fn read(
     stream
         .set_write_timeout(Some(std::time::Duration::from_secs(5)))
         .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_write_failed"))?;
-    let head = crate::http::request::read_request_head(stream)
+    let head = crate::server::transport::read_request_head(stream)
         .ok_or(ClaudeCliError::Failure("claude_cli_relay_invalid_headers"))?;
     let request = crate::http::request::parse_request(&head.head)
         .ok_or(ClaudeCliError::Failure("claude_cli_relay_invalid_headers"))?;
@@ -65,20 +65,56 @@ pub(super) fn read(
     Ok((path, body, headers))
 }
 
-pub(super) fn reply(
-    stream: &mut TcpStream,
+pub(crate) fn reply(
+    stream: &mut RelayStream,
     status: u16,
     value: &Value,
 ) -> Result<(), ClaudeCliError> {
-    stream
-        .write_all(&crate::http::response::response(
-            &format!(
-                "HTTP/1.1 {status} {}",
-                crate::http::response::status_text(status)
-            ),
-            "application/json",
-            &serde_json::to_vec(value).expect("MCP response"),
-            &[],
-        ))
-        .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_write_failed"))
+    stream.reply(
+        status,
+        "application/json",
+        &serde_json::to_vec(value).expect("MCP response"),
+    )
+}
+
+pub(crate) struct RelayListener(TcpListener);
+pub(crate) struct RelayStream(TcpStream);
+
+impl RelayListener {
+    pub(crate) fn bind() -> Result<(Self, u16), ClaudeCliError> {
+        let unavailable = |_| ClaudeCliError::Failure("claude_cli_relay_unavailable");
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(unavailable)?;
+        listener.set_nonblocking(true).map_err(unavailable)?;
+        let port = listener.local_addr().map_err(unavailable)?.port();
+        Ok((Self(listener), port))
+    }
+
+    pub(crate) fn accept(&self) -> Result<Option<RelayStream>, ClaudeCliError> {
+        match self.0.accept() {
+            Ok((stream, _)) => Ok(Some(RelayStream(stream))),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(_) => Err(ClaudeCliError::Failure("claude_cli_relay_unavailable")),
+        }
+    }
+}
+
+impl RelayStream {
+    pub(crate) fn reply(
+        &mut self,
+        status: u16,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<(), ClaudeCliError> {
+        self.0
+            .write_all(&crate::http::response::response(
+                &format!(
+                    "HTTP/1.1 {status} {}",
+                    crate::http::response::status_text(status)
+                ),
+                content_type,
+                body,
+                &[],
+            ))
+            .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_write_failed"))
+    }
 }

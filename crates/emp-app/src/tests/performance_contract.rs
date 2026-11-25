@@ -18,8 +18,8 @@ impl TimedUsageUpstream {
         let address = listener.local_addr().expect("usage upstream address");
         let worker = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept usage request");
-            let raw =
-                crate::http::request::read_request_head(&mut stream).expect("usage request head");
+            let raw = crate::server::transport::read_request_head(&mut stream)
+                .expect("usage request head");
             let parsed = crate::http::request::parse_request(&raw.head).expect("usage request");
             let length = parsed
                 .header("Content-Length")

@@ -67,7 +67,8 @@ pub(crate) fn relay(
     observation: &mut RequestObservation,
     compact: bool,
 ) -> InferenceOutcome {
-    let upstream = DisconnectMonitor::start(downstream.socket())
+    let upstream = downstream
+        .disconnect()
         .map_err(|_| RelayError::unavailable())
         .and_then(|mut monitor| {
             state

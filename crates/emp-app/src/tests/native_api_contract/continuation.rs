@@ -36,8 +36,8 @@ fn native_websocket_accepts_a_full_128_mib_message_without_http_replay() {
             .remaining()
             .min(test_timeout(Duration::from_secs(30)));
         let text = match client.poll_receive_text_with_timeout(remaining).unwrap() {
-            emp_transport::WebSocketPoll::Text(text) => text,
-            emp_transport::WebSocketPoll::Pending => continue,
+            emp_transport::test_support::WebSocketPoll::Text(text) => text,
+            emp_transport::test_support::WebSocketPoll::Pending => continue,
             other => panic!("unexpected large WebSocket frame: {other:?}"),
         };
         let event: Value = serde_json::from_str(&text).unwrap();

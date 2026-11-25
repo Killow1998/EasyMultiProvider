@@ -1,3 +1,4 @@
+use super::http::stream::BodyOutput;
 use polling::{Event, Events, Poller};
 use std::future::Future;
 use std::net::TcpStream;
@@ -208,6 +209,45 @@ impl Drop for DisconnectMonitor {
             worker.thread().unpark();
             let _ = worker.join();
         }
+    }
+}
+
+impl BodyOutput {
+    pub(crate) fn disconnect(&self) -> std::io::Result<DisconnectMonitor> {
+        DisconnectMonitor::start(self.socket())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct WebSocketDisconnect(Arc<tokio::net::TcpStream>);
+
+impl WebSocketDisconnect {
+    pub(super) fn new(socket: TcpStream) -> Option<Self> {
+        tokio::net::TcpStream::from_std(socket)
+            .ok()
+            .map(|socket| Self(Arc::new(socket)))
+    }
+
+    pub(crate) async fn watch<T>(&self, work: impl FnOnce(&mut DisconnectMonitor) -> T) -> T {
+        let (mut sender, receiver) = tokio::sync::oneshot::channel();
+        let mut monitor = DisconnectMonitor::from_signal(receiver, None);
+        let socket = Arc::clone(&self.0);
+        let watcher = tokio::spawn(async move {
+            let mut byte = [0];
+            let disconnected = tokio::select! {
+                _ = sender.closed() => return,
+                result = socket.peek(&mut byte) => result.unwrap_or(0) == 0,
+            };
+            if disconnected {
+                let _ = sender.send(DisconnectReason::Client);
+            } else {
+                let _ = sender.closed().await;
+            }
+        });
+        let result = tokio::task::block_in_place(|| work(&mut monitor));
+        drop(monitor);
+        let _ = watcher.await;
+        result
     }
 }
 

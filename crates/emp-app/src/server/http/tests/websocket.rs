@@ -44,6 +44,90 @@ fn assert_upgrade(client: &RawClient) {
     assert_eq!(client.head, SWITCHING_PROTOCOLS);
 }
 
+#[test]
+fn slow_model_journal_leaves_other_connections_responsive_and_cancellable() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    Fixture::new().run_wire(async |fixture, _| {
+        let listener = AsyncListener::bind(LOOPBACK).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let listener = listener.into_std().unwrap();
+        let state = fixture.server.state.clone();
+        let server = runtime.spawn(async move {
+            crate::server::serve_http(AsyncListener::from_std(listener).unwrap(), state).await
+        });
+        let state = &fixture.server.state;
+        let port = fixture.port();
+        let session = fixture.session();
+        for transport in ["responses", "compact", "websocket"] {
+            let (entered, writing) = tokio::sync::oneshot::channel();
+            let (resume, release) = tokio::sync::oneshot::channel();
+            state
+                .backend
+                .diagnostics
+                .journal
+                .gate_next_event("request_started", move || {
+                    let _ = entered.send(());
+                    let _ = release.blocking_recv();
+                });
+            let socket = if transport == "websocket" {
+                let mut client = RawClient::request(
+                    address,
+                    &upgrade(port, "/v1/responses", &session, &[], &[]),
+                )
+                .await;
+                assert_upgrade(&client);
+                client
+                    .io
+                    .write_all(&websocket_frame(0x81, MASK, b"{}"))
+                    .await
+                    .unwrap();
+                client.io
+            } else {
+                let path = if transport == "compact" {
+                    "/v1/responses/compact"
+                } else {
+                    "/v1/responses"
+                };
+                let mut client = AsyncStream::connect(address).await.unwrap();
+                client
+                    .write_all(&json_request(port, path, &[&session], b"{}"))
+                    .await
+                    .unwrap();
+                client
+            };
+            timeout(wire_timeout(), writing).await.unwrap().unwrap();
+            let health = request(port, "GET", "/healthz", &[], b"");
+            assert_wire(address, &health, false, 200).await;
+
+            let subscribe = request(port, "GET", "/api/accounts/events", &[&session], b"");
+            let stream = RawClient::request(address, &subscribe).await;
+            assert!(stream.head.starts_with("HTTP/1.1 200"));
+            assert_eq!(state.backend.management_events.subscriber_count(), 1);
+            drop(stream);
+            let state = state.clone();
+            tokio::task::spawn_blocking(move || {
+                wait_for(&Deadline::after(wire_timeout()), || {
+                    state.backend.management_events.subscriber_count() == 0
+                });
+            })
+            .await
+            .unwrap();
+            resume.send(()).unwrap();
+            drop(socket);
+        }
+        state.request_shutdown();
+        timeout(wire_timeout(), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    });
+}
+
 fn close_payload(code: u16, reason: &str) -> Vec<u8> {
     [code.to_be_bytes().as_slice(), reason.as_bytes()].concat()
 }

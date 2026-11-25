@@ -1,6 +1,9 @@
 use super::compression::{DecompressionError, PerMessageDeflate};
 use super::frame::{FrameDecoder, FramePoll};
-use super::*;
+use super::{
+    test_support::{WebSocketConnection, WebSocketPoll},
+    *,
+};
 use crate::MAX_PROXY_REQUEST_BYTES;
 use flate2::{Compress, Compression, FlushCompress};
 use std::future::Future;
@@ -8,6 +11,8 @@ use std::io::Cursor;
 use std::time::Duration;
 use tokio::io::{AsyncWriteExt, duplex};
 use tokio::time::timeout;
+
+mod sync_client;
 
 fn client_socket() -> AsyncClientWebSocket {
     AsyncClientWebSocket::new(
@@ -487,4 +492,71 @@ async fn write_receipt_waits_for_flush_and_reports_flush_failure() {
             .unwrap();
         assert_eq!(write.await.is_err(), fail);
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn idle_nonblocking_websocket_waits_for_the_socket_to_be_readable() {
+    use emp_test_support::test_timeout;
+    use std::io::{self, Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::os::fd::{AsFd, BorrowedFd};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct CountReads {
+        socket: TcpStream,
+        attempts: Arc<AtomicUsize>,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    }
+    impl Read for CountReads {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let result = self.socket.read(buffer);
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            if let Some(started) = self.started.take() {
+                let _ = started.send(());
+            }
+            result
+        }
+    }
+    impl Write for CountReads {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.socket.write(bytes)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.socket.flush()
+        }
+    }
+    impl AsFd for CountReads {
+        fn as_fd(&self) -> BorrowedFd<'_> {
+            self.socket.as_fd()
+        }
+    }
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (socket, _) = listener.accept().unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let (started, reading) = tokio::sync::oneshot::channel();
+    let mut counted = CountReads {
+        socket,
+        attempts: attempts.clone(),
+        started: Some(started),
+    };
+    let receiver =
+        tokio::task::spawn_blocking(move || WebSocketConnection::new(&mut counted).receive_text());
+    reading.await.unwrap();
+    tokio::time::sleep(test_timeout(Duration::from_secs(1))).await;
+    let idle_reads = attempts.load(Ordering::Relaxed);
+    client.write_all(b"\x81\x82\x00\x00\x00\x00{}").unwrap();
+    let text = timeout(test_timeout(Duration::from_secs(2)), receiver)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(text.as_deref(), Some("{}"));
+    assert!(idle_reads <= 4, "{idle_reads} calls to read while idle");
 }

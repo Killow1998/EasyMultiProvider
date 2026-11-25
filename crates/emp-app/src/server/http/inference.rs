@@ -115,6 +115,7 @@ impl InferenceRoute {
         state: &ServerState,
         observation: Option<&mut RequestObservation>,
     ) -> InferenceOutcome {
+        let disconnect = || sink.disconnect().ok();
         match self {
             Self::Responses => responses::execute(
                 sink,
@@ -130,9 +131,9 @@ impl InferenceRoute {
                 state,
                 observation.expect("model observation"),
             ),
-            Self::Decisions => decisions::execute(sink.socket(), request, body, state).into(),
+            Self::Decisions => decisions::execute(disconnect, request, body, state).into(),
             Self::Images(operation) => {
-                images::execute(sink.socket(), request, body, state, operation).into()
+                images::execute(disconnect, request, body, state, operation).into()
             }
             Self::Search => search::execute(request, body, state).into(),
         }

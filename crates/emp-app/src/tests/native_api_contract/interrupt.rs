@@ -2,7 +2,7 @@
 use super::support::*;
 use super::*;
 use emp_test_support::{Deadline, DeadlineIo, test_timeout};
-use emp_transport::ClientWebSocket;
+use emp_transport::test_support::ClientWebSocket;
 
 fn accept_upstream(listener: TcpListener) -> TcpStream {
     complete_upgrade(listener.accept().unwrap().0)
@@ -40,7 +40,7 @@ fn event(client: &mut ClientWebSocket, kind: &str) -> Value {
             .poll_receive_text_with_timeout(deadline.remaining())
             .unwrap()
         {
-            emp_transport::WebSocketPoll::Text(text) => {
+            emp_transport::test_support::WebSocketPoll::Text(text) => {
                 let value: Value = serde_json::from_str(&text).unwrap();
                 if value["type"] == kind {
                     return deadline.accept(value, kind).unwrap();
@@ -48,7 +48,7 @@ fn event(client: &mut ClientWebSocket, kind: &str) -> Value {
                 assert_ne!(value["type"], "error", "{value}");
                 assert_ne!(value["type"], "response.failed", "{value}");
             }
-            emp_transport::WebSocketPoll::Pending => {}
+            emp_transport::test_support::WebSocketPoll::Pending => {}
             other => panic!("unexpected frame: {other:?}"),
         }
     }
@@ -328,7 +328,7 @@ fn disconnect_cancels_a_native_websocket_while_its_upstream_is_silent() {
             ws.get_mut().set_deadline(deadline);
             matches!(
                 ws.poll_text(),
-                Ok(emp_transport::WebSocketPoll::Closed { .. })
+                Ok(emp_transport::test_support::WebSocketPoll::Closed { .. })
             )
         });
     });

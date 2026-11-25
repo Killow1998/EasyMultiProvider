@@ -30,10 +30,9 @@ pub use http_policy::{
 };
 pub use system_memory::system_memory_status;
 pub use websocket::{
-    AsyncClientWebSocket, ClientWebSocket, ClientWebSocketError, DEFAULT_WEBSOCKET_MESSAGE_BYTES,
-    LocalWebSocket, MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketConnection, WebSocketError,
-    WebSocketEvent, WebSocketPoll, WebSocketReader, WebSocketTraffic, WebSocketWriter,
-    split_websocket, websocket_accept,
+    AsyncClientWebSocket, ClientWebSocketError, DEFAULT_WEBSOCKET_MESSAGE_BYTES, LocalWebSocket,
+    MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError, WebSocketEvent, WebSocketReader,
+    WebSocketTraffic, WebSocketWriter, split_websocket, websocket_accept,
 };
 
 pub const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
@@ -284,3 +283,6 @@ where
     output.extend(parser.finish()?);
     Ok(output)
 }
+
+#[cfg(any(test, feature = "test-support"))]
+pub use websocket::test_support;

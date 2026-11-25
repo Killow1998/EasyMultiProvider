@@ -134,8 +134,7 @@ pub(crate) fn execute(
     };
     observation.phase(Phase::PrepareDestination);
     let destination_context = {
-        let mut monitor =
-            crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
+        let mut monitor = downstream.disconnect().ok();
         prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
     };
     body = match destination_context {
@@ -168,8 +167,7 @@ pub(crate) fn execute(
         .started_at(started);
         let (compacted, candidate) = if crate::services::claude_cli::selected(&route) {
             let summary_body = crate::services::compaction::compaction_summary_body(&body);
-            let mut monitor =
-                crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
+            let mut monitor = downstream.disconnect().ok();
             let _activity_guard = state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(&route),
             );
@@ -227,8 +225,7 @@ pub(crate) fn execute(
                 }
             }
         } else {
-            let mut monitor =
-                crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
+            let mut monitor = downstream.disconnect().ok();
             match external_compaction_response(
                 state,
                 &route,
@@ -267,8 +264,7 @@ pub(crate) fn execute(
     }
     if crate::services::claude_cli::selected(&route) {
         let started = std::time::Instant::now();
-        let mut monitor =
-            crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
+        let mut monitor = downstream.disconnect().ok();
         let _activity_guard =
             state
                 .backend

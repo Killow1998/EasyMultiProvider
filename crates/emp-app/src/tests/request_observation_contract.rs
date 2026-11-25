@@ -396,7 +396,7 @@ fn websocket_rejection_and_success_have_separate_turn_ids_on_the_same_connection
         "x-emp-session".into(),
         session.trim_start_matches("X-EMP-Session: ").into(),
     )]);
-    let mut socket = emp_transport::ClientWebSocket::connect(
+    let mut socket = emp_transport::test_support::ClientWebSocket::connect(
         &format!("ws://{}/v1/responses", server.local_addr()),
         &headers,
         Duration::from_secs(3),

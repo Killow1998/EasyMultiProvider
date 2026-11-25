@@ -113,7 +113,7 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
     assert_eq!(listed["clients"][0]["created_at"], 1.0);
 
     let timeout = Duration::from_secs(5);
-    let mut websocket = emp_transport::ClientWebSocket::connect(
+    let mut websocket = emp_transport::test_support::ClientWebSocket::connect(
         &format!("ws://{}/v1/responses", server.local_addr()),
         &BTreeMap::from([("Authorization".into(), format!("Bearer {replacement}"))]),
         timeout,
@@ -134,7 +134,7 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
         .unwrap();
     assert_eq!(
         websocket.poll_receive_text_with_timeout(timeout).unwrap(),
-        emp_transport::WebSocketPoll::Closed { code: Some(1008) }
+        emp_transport::test_support::WebSocketPoll::Closed { code: Some(1008) }
     );
     assert!(
         server

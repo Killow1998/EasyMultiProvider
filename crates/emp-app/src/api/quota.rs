@@ -7,7 +7,6 @@ use std::{sync::atomic::Ordering, time::Duration};
 #[cfg(test)]
 pub(crate) use crate::services::management_events::SUBSCRIBER_LIMIT as QUOTA_EVENT_SLOT_LIMIT;
 
-pub(crate) const EVENT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const QUOTA_EVENT_KEEP_ALIVE: Duration = Duration::from_secs(15);
 
 pub(crate) fn subscriber_limit() -> JsonReply {

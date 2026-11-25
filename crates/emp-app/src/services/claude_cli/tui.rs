@@ -1,6 +1,5 @@
 //! A temporary real TUI per user turn. Codex owns history and tool execution.
 mod attachments;
-mod protocol;
 mod session;
 mod terminal;
 mod transcript;

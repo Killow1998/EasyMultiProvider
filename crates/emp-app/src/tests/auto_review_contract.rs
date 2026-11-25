@@ -1,6 +1,7 @@
 use super::{OneShotUpstream, credential_root, post, session_header};
-use crate::http::request::{parse_request, read_request_head};
+use crate::http::request::parse_request;
 use crate::lifecycle::ServerHandle;
+use crate::server::transport::read_request_head;
 use crate::services::auto_review::{automatic_review_candidates, resolve_auto_review_route};
 use crate::services::request_outcome::RequestOutcome;
 use emp_codex::{account_auth_headers, native_catalog_owner};
@@ -629,9 +630,12 @@ fn websocket_auto_review_excludes_free_and_go_in_the_shared_route() {
             .trim_start_matches("X-EMP-Session: ")
             .to_owned(),
     )]);
-    let mut socket =
-        emp_transport::ClientWebSocket::connect(&url, &headers, Duration::from_secs(5))
-            .expect("connect local Responses websocket");
+    let mut socket = emp_transport::test_support::ClientWebSocket::connect(
+        &url,
+        &headers,
+        Duration::from_secs(5),
+    )
+    .expect("connect local Responses websocket");
     socket.send_json(&json!({"type":"response.create","model":"stale/ws-prefix/codex-auto-review","input":"review"})).expect("send auto-review WS request");
     let mut completed = false;
     for _ in 0..12 {

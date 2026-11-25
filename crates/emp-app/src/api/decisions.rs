@@ -10,7 +10,7 @@ use emp_modules::{Command, Module};
 use emp_router::discovery::discover_decision_models_with_plan;
 use emp_transport::HttpMethod;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, net::TcpStream};
+use std::collections::BTreeMap;
 use url::Url;
 
 pub(crate) fn validate_headers(request: Request<'_>) -> Result<(), HttpReply> {
@@ -25,7 +25,7 @@ pub(crate) fn validate_headers(request: Request<'_>) -> Result<(), HttpReply> {
 }
 
 pub(crate) fn execute(
-    socket: &TcpStream,
+    disconnect: impl FnOnce() -> Option<crate::services::disconnect::DisconnectMonitor>,
     request: Request<'_>,
     mut body: Value,
     state: &ServerState,
@@ -137,8 +137,8 @@ pub(crate) fn execute(
         }
     }
     let transport = &state.backend.transport;
-    use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, raced};
-    let mut monitor = DisconnectMonitor::start(socket).ok();
+    use crate::services::disconnect::{DisconnectRace, raced};
+    let mut monitor = disconnect();
     let upstream = match raced(
         &transport.runtime,
         monitor.as_mut(),

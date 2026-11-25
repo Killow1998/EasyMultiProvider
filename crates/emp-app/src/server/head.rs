@@ -161,6 +161,7 @@ impl GuardedHead {
             mode,
             written: 0,
             recovery_write_deadline: None,
+            stream_deadline: self.account_events.then(WriteDeadline::default),
             delivery,
         }
     }
@@ -175,6 +176,7 @@ pub(super) struct Prefixed<I> {
     mode: ServerMode,
     written: usize,
     recovery_write_deadline: Option<Pin<Box<Sleep>>>,
+    stream_deadline: Option<WriteDeadline>,
     delivery: Option<Arc<Delivery>>,
 }
 
@@ -228,12 +230,9 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
         bytes: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let response = this.response.get_or_init(|| {
-            Some(match this.mode {
-                ServerMode::Http => Bytes::from(EntryError::InvalidHead.reply().encode()),
-                ServerMode::Recovery => Bytes::new(),
-            })
-        });
+        let response = this
+            .response
+            .get_or_init(|| Some(Bytes::from(EntryError::InvalidHead.reply().encode())));
         if let Some(response) = response {
             while this.written < response.len() {
                 if matches!(this.mode, ServerMode::Recovery) {
@@ -254,7 +253,11 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
             }
             return Poll::Ready(Ok(bytes.len()));
         }
-        let count = ready!(Pin::new(&mut this.io).poll_write(cx, bytes))?;
+        let result = Pin::new(&mut this.io).poll_write(cx, bytes);
+        let count = ready!(match &mut this.stream_deadline {
+            Some(deadline) => deadline.check(cx, result, |&count| count > 0),
+            None => result,
+        })?;
         if let Some(delivery) = &this.delivery {
             delivery.written(count);
         }
@@ -262,7 +265,11 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        ready!(Pin::new(&mut self.io).poll_flush(cx))?;
+        let result = Pin::new(&mut self.io).poll_flush(cx);
+        ready!(match &mut self.stream_deadline {
+            Some(deadline) => deadline.check(cx, result, |()| true),
+            None => result,
+        })?;
         if let Some(delivery) = &self.delivery {
             delivery.flushed();
         }
@@ -271,5 +278,91 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.io).poll_shutdown(cx)
+    }
+}
+
+#[derive(Default)]
+struct WriteDeadline(Option<Pin<Box<Sleep>>>);
+
+impl WriteDeadline {
+    fn check<T>(
+        &mut self,
+        cx: &mut Context<'_>,
+        result: Poll<io::Result<T>>,
+        progressed: impl FnOnce(&T) -> bool,
+    ) -> Poll<io::Result<T>> {
+        match &result {
+            Poll::Ready(Ok(value)) if progressed(value) => self.0 = None,
+            Poll::Pending => {
+                let deadline = self
+                    .0
+                    .get_or_insert_with(|| Box::pin(sleep(Duration::from_secs(5))));
+                if deadline.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
+                }
+            }
+            _ => {}
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::tests::poll_once;
+    use emp_test_support::test_timeout;
+    use std::pin::pin;
+    use tokio::{
+        io::{AsyncWriteExt, duplex},
+        time::{advance, pause},
+    };
+
+    #[tokio::test]
+    async fn account_event_write_allows_progress_but_times_out_when_stalled() {
+        pause();
+        let event = b"event: quota-updated\ndata: {}\n\n";
+        let request = b"GET /api/accounts/events HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let head = GuardedHead::read(
+            &mut request.as_slice(),
+            Instant::now() + test_timeout(REQUEST_READ_TIMEOUT),
+        )
+        .await
+        .ok()
+        .unwrap();
+        let (io, mut client) = duplex(5);
+        let mut stream = head.replay(
+            io,
+            "/",
+            Arc::new(OnceLock::from(None)),
+            ServerMode::Http,
+            None,
+        );
+        {
+            let mut write = pin!(stream.write_all(event));
+            let mut bytes = Vec::new();
+            for expected in event.chunks(5) {
+                let progress = poll_once(write.as_mut()).await;
+                if bytes.len() + expected.len() == event.len() {
+                    assert!(matches!(progress, Poll::Ready(Ok(()))));
+                } else {
+                    assert!(progress.is_pending());
+                }
+                let mut chunk = vec![0; expected.len()];
+                client.read_exact(&mut chunk).await.unwrap();
+                bytes.extend_from_slice(&chunk);
+                advance(Duration::from_secs(1)).await;
+            }
+            assert_eq!(bytes, event);
+        }
+        let mut stalled = pin!(stream.write_all(event));
+        assert!(poll_once(stalled.as_mut()).await.is_pending());
+        advance(Duration::from_millis(4_999)).await;
+        assert!(poll_once(stalled.as_mut()).await.is_pending());
+        advance(Duration::from_millis(2)).await;
+        assert!(matches!(
+            poll_once(stalled.as_mut()).await,
+            Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::TimedOut
+        ));
     }
 }

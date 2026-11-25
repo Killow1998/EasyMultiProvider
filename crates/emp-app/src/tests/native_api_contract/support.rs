@@ -4,12 +4,12 @@ use super::*;
 fn upstream_websocket_poll(
     ws: &mut WebSocketConnection<'_, emp_test_support::DeadlineIo<&TcpStream>>,
     deadline: &Deadline,
-) -> Result<emp_transport::WebSocketPoll<String>, emp_transport::WebSocketError> {
+) -> Result<emp_transport::test_support::WebSocketPoll<String>, emp_transport::WebSocketError> {
     ws.get_mut().set_deadline(deadline);
     loop {
         deadline.accept((), "upstream WebSocket frame").unwrap();
         let event = ws.poll_text()?;
-        if !matches!(event, emp_transport::WebSocketPoll::Pending) {
+        if !matches!(event, emp_transport::test_support::WebSocketPoll::Pending) {
             return Ok(deadline.accept(event, "upstream WebSocket frame").unwrap());
         }
     }
@@ -20,7 +20,7 @@ pub(super) fn upstream_websocket_request(
     deadline: &Deadline,
 ) -> Value {
     match upstream_websocket_poll(ws, deadline).unwrap() {
-        emp_transport::WebSocketPoll::Text(text) => {
+        emp_transport::test_support::WebSocketPoll::Text(text) => {
             let value = serde_json::from_str(&text).unwrap();
             deadline
                 .accept(value, "upstream WebSocket request")
@@ -36,10 +36,12 @@ pub(super) fn receive_upstream_websocket_text(
 ) -> Result<Option<String>, emp_transport::WebSocketError> {
     loop {
         match upstream_websocket_poll(ws, deadline)? {
-            emp_transport::WebSocketPoll::Text(text) => return Ok(Some(text)),
-            emp_transport::WebSocketPoll::Ping(payload) => ws.send_pong(&payload)?,
-            emp_transport::WebSocketPoll::Closed { .. } => return Ok(None),
-            emp_transport::WebSocketPoll::Pending => unreachable!("poll waits for a frame"),
+            emp_transport::test_support::WebSocketPoll::Text(text) => return Ok(Some(text)),
+            emp_transport::test_support::WebSocketPoll::Ping(payload) => ws.send_pong(&payload)?,
+            emp_transport::test_support::WebSocketPoll::Closed { .. } => return Ok(None),
+            emp_transport::test_support::WebSocketPoll::Pending => {
+                unreachable!("poll waits for a frame")
+            }
         }
     }
 }

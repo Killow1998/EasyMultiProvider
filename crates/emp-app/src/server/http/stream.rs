@@ -30,13 +30,12 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::{
-    sync::{Notify, mpsc, oneshot},
+    sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 
 pub(in crate::server) struct StreamConnection {
     pub(in crate::server) delivery: Arc<Delivery>,
-    pub(in crate::server) write_timed_out: Notify,
     pub(in crate::server) worker: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -47,7 +46,6 @@ impl StreamConnection {
                 write_hook,
                 ..Delivery::default()
             }),
-            write_timed_out: Notify::new(),
             worker: Mutex::default(),
         }
     }

@@ -1,10 +1,15 @@
 mod accept;
+pub(crate) mod claude_relay;
 pub(crate) mod connection;
+pub(crate) mod disconnect;
 pub(crate) mod head;
 pub(crate) mod http;
+pub(crate) mod lan;
+pub(crate) mod recovery;
+pub(crate) mod team_discovery;
 mod test_hooks;
 pub(crate) use test_hooks::ServerHooks;
-mod transport;
+pub(crate) mod transport;
 
 use crate::app::ServerState;
 use crate::services::{

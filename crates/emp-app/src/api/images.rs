@@ -4,7 +4,6 @@ use crate::http::request::Request;
 use crate::server::http::error::HttpReply;
 use crate::services::native::images;
 use serde_json::Value;
-use std::net::TcpStream;
 
 pub(crate) fn credit_status(state: &ServerState) -> HttpReply {
     match images::credit_status(state) {
@@ -15,7 +14,7 @@ pub(crate) fn credit_status(state: &ServerState) -> HttpReply {
 }
 
 pub(crate) fn execute(
-    socket: &TcpStream,
+    disconnect: impl FnOnce() -> Option<crate::services::disconnect::DisconnectMonitor>,
     request: Request<'_>,
     body: Value,
     state: &ServerState,
@@ -25,7 +24,7 @@ pub(crate) fn execute(
     if let Some(id) = request.observation_id {
         incoming.insert("X-EMP-Request-ID".into(), id.into());
     }
-    let mut monitor = crate::services::disconnect::DisconnectMonitor::start(socket).ok();
+    let mut monitor = disconnect();
     crate::api::native_response::complete_response(images::execute(
         state,
         operation,

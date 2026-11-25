@@ -1,5 +1,7 @@
 use super::{
-    BUSINESS_TOKEN, ServerControl, ServerMode, ShutdownReason, ShutdownSignal, handoff_response,
+    BUSINESS_TOKEN, ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
+    disconnect::WebSocketDisconnect,
+    handoff_response,
     head::GuardedHead,
     http::{
         accounts::AccountWriteRoute,
@@ -54,7 +56,7 @@ struct HttpRequestContext {
     write_hook: WriteHook,
     delegation: Option<AdmittedCallback>,
     report_socket: Option<Arc<TcpStream>>,
-    websocket_probe: Option<Arc<tokio::net::TcpStream>>,
+    websocket_probe: Option<WebSocketDisconnect>,
     inference: Option<Arc<InferenceConnection>>,
     stream: Option<Arc<StreamConnection>>,
     account_write: Option<AccountWriteRoute>,
@@ -202,7 +204,17 @@ pub(super) async fn drive_http(
     let streaming =
         inference || head.account_events || report.is_some_and(|report| report.is_stream(request));
     let watch_report = report.is_some();
-    observation.received(request);
+    let Ok(mut observation) = run_blocking({
+        let raw = head.raw.clone();
+        move || {
+            observation.received(raw.request());
+            observation
+        }
+    })
+    .await
+    else {
+        return;
+    };
     state
         .lifecycle
         .test_hooks
@@ -233,10 +245,7 @@ pub(super) async fn drive_http(
             None,
         )
     } else if responses_upgrade {
-        let probe = socket
-            .and_then(|socket| tokio::net::TcpStream::from_std(socket).ok())
-            .map(Arc::new);
-        (None, None, probe)
+        (None, None, socket.and_then(WebSocketDisconnect::new))
     } else {
         (None, socket.map(Arc::new), None)
     };
@@ -399,7 +408,7 @@ async fn drive_connection(
                 request.extensions_mut().insert(Arc::clone(socket));
             }
             if let Some(probe) = websocket_probe {
-                request.extensions_mut().insert(Arc::clone(probe));
+                request.extensions_mut().insert(probe.clone());
             }
             if let Some(inference) = inference {
                 request.extensions_mut().insert(inference.clone());
@@ -478,15 +487,7 @@ async fn drive_connection(
             TowerToHyperService::new(service),
         )
         .with_upgrades();
-    let result = tokio::select! {
-        result = connection => result.map_err(std::io::Error::other),
-        () = async {
-            match stream {
-                Some(stream) => stream.write_timed_out.notified().await,
-                None => std::future::pending().await,
-            }
-        } => Err(std::io::ErrorKind::TimedOut.into()),
-    };
+    let result = connection.await.map_err(std::io::Error::other);
     let written = result.is_ok();
     let upgrade = context
         .0

@@ -1,15 +1,7 @@
 //! Detect usable local networks without opening a shell or sending discovery traffic.
+use crate::server::lan::route_address;
 use if_addrs::{IfOperStatus, Interface};
-use std::net::{IpAddr, Ipv4Addr, UdpSocket};
-
-fn route_address() -> Option<Ipv4Addr> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
-    socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
-    match socket.local_addr().ok()?.ip() {
-        IpAddr::V4(ip) => Some(ip),
-        _ => None,
-    }
-}
+use std::net::{IpAddr, Ipv4Addr};
 
 fn select(interfaces: Vec<Interface>, route: Option<Ipv4Addr>) -> Option<Ipv4Addr> {
     interfaces

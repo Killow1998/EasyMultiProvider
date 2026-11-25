@@ -1,11 +1,11 @@
 //! One-use LAN delivery of an existing encrypted migration package. The code
 //! carries the endpoint and secret; the wire carries a proof, never that secret.
 mod network;
-mod wire;
 use super::{ExportOptions, MigrationError};
 use crate::app::ServerState;
+use crate::server::lan as wire;
 use serde_json::{Value, json};
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::Ipv4Addr;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -32,11 +32,11 @@ struct Sender {
     shared: Arc<Mutex<Delivery>>,
     worker: Option<JoinHandle<()>>,
 }
-struct Delivery {
-    status: &'static str,
-    receiver: Option<(std::net::IpAddr, [u8; 32])>,
-    approved: bool,
-    bundle: Option<Vec<u8>>,
+pub(crate) struct Delivery {
+    pub(crate) status: &'static str,
+    pub(crate) receiver: Option<(std::net::IpAddr, [u8; 32])>,
+    pub(crate) approved: bool,
+    pub(crate) bundle: Option<Vec<u8>>,
 }
 impl Drop for Sender {
     fn drop(&mut self) {
@@ -107,19 +107,8 @@ pub(crate) fn send(state: &ServerState, command: SenderCommand) -> Result<Value,
             if !wire::local_address(address) {
                 return Err(MigrationError::invalid("lan_address_required"));
             }
-            let listener = TcpListener::bind((address, 0))
-                .map_err(|_| MigrationError::invalid("lan_cannot_listen"))?;
-            listener
-                .set_nonblocking(true)
-                .map_err(|_| MigrationError::Internal)?;
-            let code = wire::Code::new(
-                address,
-                listener
-                    .local_addr()
-                    .map_err(|_| MigrationError::Internal)?
-                    .port(),
-            )
-            .map_err(MigrationError::invalid)?;
+            let (listener, port) = wire::Listener::bind(address)?;
+            let code = wire::Code::new(address, port).map_err(MigrationError::invalid)?;
             let exported = super::export(None, state, &code.password(), &options)?;
             if exported.bundle.len() > wire::MAX_BUNDLE {
                 return Err(MigrationError::invalid("lan_package_too_large"));

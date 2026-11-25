@@ -37,15 +37,7 @@ impl Context {
             local,
             &attachments,
         )?;
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_unavailable"))?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_unavailable"))?;
-        let port = listener
-            .local_addr()
-            .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_unavailable"))?
-            .port();
+        let (listener, port) = RelayListener::bind()?;
         let token = crate::util::random_hex(32)
             .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_unavailable"))?;
         let mcp = root.path().join("mcp.json");

@@ -1,4 +1,4 @@
-use super::downstream::map_downstream_frame_error;
+use super::frame::FrameDecodeError;
 use super::frame::{FrameDecoder, FramePoll, close_payload, write_frame};
 use super::{MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError, WebSocketEvent};
 use crate::{RequestBudget, RequestLimits};
@@ -131,5 +131,16 @@ impl<W: AsyncWrite + Unpin> WebSocketWriter<W> {
 
     pub async fn close(&self, code: u16, reason: &str) {
         self.reply_close(&close_payload(code, reason)).await;
+    }
+}
+
+pub(super) fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
+    match error {
+        FrameDecodeError::Protocol => WebSocketError::new(1002, "invalid websocket frame"),
+        FrameDecodeError::TooLarge => WebSocketError::new(1009, "websocket message is too large"),
+        FrameDecodeError::AtCapacity => {
+            WebSocketError::new(1013, "not enough memory for websocket message")
+        }
+        FrameDecodeError::Io => WebSocketError::new(1006, "websocket closed"),
     }
 }

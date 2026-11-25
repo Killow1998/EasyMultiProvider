@@ -3,6 +3,7 @@ mod cfg_test;
 mod comments;
 mod module_paths;
 mod modules;
+mod production_sockets;
 mod prose;
 mod test_deadlines;
 mod test_fixture_root;
@@ -42,6 +43,7 @@ pub fn run(args: &[String]) -> Result {
         let bytes = fs::read(root.join(&path)).map_err(|error| format!("{path}: {error}"))?;
         if let Ok(source) = std::str::from_utf8(&bytes) {
             single_http_driver(&path, source, &mut errors);
+            production_sockets::check(&path, source, &mut errors)?;
         }
         if path.starts_with("crates/") && path.split('/').nth(2) == Some("tests") {
             test_boundary(&path, &bytes, &mut errors);
@@ -53,7 +55,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations passed"
+            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations passed"
         );
         Ok(())
     } else {

@@ -3,13 +3,14 @@ use crate::app::{BackendSources, BackendState, ServerState};
 use crate::cli::is_loopback;
 use crate::error::AppError;
 use crate::http::auth::{BOOTSTRAP_LIFETIME_SECONDS, BootstrapToken, SessionStore};
+use crate::server::transport::HttpListener;
 use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
 use crate::services::observation::diagnostics::Diagnostics;
 use crate::util::system_now;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use emp_state::{WEB_SESSION_TOKEN_BYTES, load_or_create_web_session, web_session_path};
-use std::net::{IpAddr, TcpListener};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -321,8 +322,7 @@ impl ServerHandle {
                 official_models,
             },
         )?;
-        let listener = TcpListener::bind((host, port))?;
-        let local_addr = listener.local_addr()?;
+        let (listener, local_addr) = HttpListener::bind(host, port)?;
         let sessions = Arc::new(SessionStore::new(session, session_path));
         let mut random = [0_u8; WEB_SESSION_TOKEN_BYTES];
         getrandom::getrandom(&mut random).map_err(|_| AppError::RandomUnavailable)?;
@@ -383,10 +383,9 @@ impl ServerHandle {
             _service_owner: service_owner,
         };
         let started = (|| {
-            listener.set_nonblocking(true)?;
             let listener = {
                 let _entered = handle.state.backend.transport.runtime.enter();
-                tokio::net::TcpListener::from_std(listener)?
+                listener.into_async()?
             };
             let state = handle.state.clone();
             handle.listener = Some(

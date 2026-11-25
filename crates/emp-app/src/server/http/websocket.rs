@@ -11,7 +11,7 @@ use crate::{
     },
     app::ServerState,
     http::request::{Request, RequestMethod, percent_decode},
-    server::{connection::ConnectionContext, run_blocking},
+    server::{connection::ConnectionContext, disconnect::WebSocketDisconnect, run_blocking},
     util::system_now,
 };
 use axum::{
@@ -60,9 +60,7 @@ async fn responses(
     if !is_responses_upgrade(raw.request()) {
         return Err(EntryError::NotFound.reply());
     }
-    let probe = request
-        .extensions_mut()
-        .remove::<Arc<tokio::net::TcpStream>>();
+    let probe = request.extensions_mut().remove::<WebSocketDisconnect>();
     let prepare_state = Arc::clone(&state);
     let (source, accept) = run_blocking({
         let raw = raw.clone();
