@@ -1,6 +1,9 @@
 use super::*;
 use emp_test_support::{Deadline, Observation, test_timeout};
 use std::io::{self, Read, Write};
+use std::net::SocketAddr;
+use std::process::Command;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -79,7 +82,87 @@ fn contender_leaves_the_owners_journal_parts_unchanged() {
 }
 
 #[test]
+fn worker_start_failure_closes_admission_and_signals_usage_before_the_journal_receipt() {
+    let directory = emp_test_support::fixture_dir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let config_path = root.join("config.json");
+    let (entered, writing) = mpsc::channel();
+    let (resume, release) = mpsc::channel();
+    let startup = Observation::spawn(move |probe| {
+        probe.observe(|_| {
+            ServerHandle::start_with_workers(
+                StartupContext {
+                    host: "127.0.0.1".parse().unwrap(),
+                    port: 0,
+                    config_path: &config_path,
+                    codex_binary: "missing-test-codex",
+                    native_auth_path: config_path.with_file_name("codex").join("auth.json"),
+                    open_browser: false,
+                    markers: UpdateStartupMarkers::default(),
+                    http_client_override: None,
+                    admission: ConnectionAdmissionConfig::default(),
+                    enable_catalog_refresh_worker: false,
+                    external_key: false,
+                    official_models: emp_state::official_registry::bundled_snapshot,
+                },
+                |server, _| {
+                    let state = Arc::clone(&server.state);
+                    let address = server.local_addr;
+                    server.state.backend.diagnostics.journal.gate_next_event(
+                        "startup_failure",
+                        move || {
+                            let _ = entered.send((address, state));
+                            let _ = release.recv();
+                        },
+                    );
+                    Err(AppError::Io(io::ErrorKind::WouldBlock.into()))
+                },
+            )
+            .err()
+        });
+    });
+    let release_receipt = resume;
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let result = startup.begin(deadline, "worker startup failure returns after shutdown");
+    let (address, state) = writing
+        .recv_timeout(deadline.remaining())
+        .expect("startup_failure reached the journal writer");
+    assert_admission_closed_and_usage_signaled(&state, address, deadline);
+    release_receipt.send(()).unwrap();
+    assert!(
+        matches!(result.wait().unwrap(), Some(AppError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock)
+    );
+    let records = crate::tests::live_journal(&root);
+    assert!(
+        records
+            .iter()
+            .any(|record| record["event"] == "startup_failure")
+    );
+    assert_eq!(records.last().unwrap()["event"], "shutdown_complete");
+    assert!(ServiceOwner::acquire(&root.join("state")).is_ok());
+}
+
+#[test]
 fn price_worker_start_failure_closes_admission_and_signals_usage_before_the_journal_receipt() {
+    const CHILD_FLAG: &str = "EMP_TEST_PRICE_WORKER_START_FAILURE_CHILD";
+    const CHILD_PASSED: &str = "EMP_TEST_PRICE_WORKER_START_FAILURE_PASSED";
+    const TEST_NAME: &str = "lifecycle::startup::tests::price_worker_start_failure_closes_admission_and_signals_usage_before_the_journal_receipt";
+    if std::env::var_os(CHILD_FLAG).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
+            .env(CHILD_FLAG, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && stdout.lines().any(|line| line == CHILD_PASSED),
+            "price worker startup child exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status
+        );
+        return;
+    }
+
     let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config_path = root.join("config.json");
@@ -110,7 +193,7 @@ fn price_worker_start_failure_closes_admission_and_signals_usage_before_the_jour
             super::super::run_started_server(server, false, UpdateStartupMarkers::default())
         });
     });
-    let resume = resume;
+    let release_receipt = resume;
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     let result = startup.begin(
         deadline,
@@ -121,16 +204,31 @@ fn price_worker_start_failure_closes_admission_and_signals_usage_before_the_jour
         state.request_shutdown();
     }
     receipt.expect("startup_failure reached the journal writer");
-    assert!(journal.flush_pending_for_test());
-    assert!(state.lifecycle.admission.acquire_request().is_none());
+    assert_admission_closed_and_usage_signaled(&state, address, deadline);
+    release_receipt.send(()).unwrap();
     assert!(
-        state
-            .backend
-            .usage
-            .history
-            .stop
-            .load(std::sync::atomic::Ordering::Acquire)
+        matches!(result.wait().unwrap(), Err(AppError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock)
     );
+    let records = crate::tests::live_journal(&root);
+    assert!(
+        records
+            .iter()
+            .any(|record| record["event"] == "startup_failure"
+                && record["fields"]["stage"] == "background_workers")
+    );
+    assert_eq!(records.last().unwrap()["event"], "shutdown_complete");
+    assert!(ServiceOwner::acquire(&root.join("state")).is_ok());
+    println!("\n{CHILD_PASSED}");
+}
+
+fn assert_admission_closed_and_usage_signaled(
+    state: &ServerState,
+    address: SocketAddr,
+    deadline: Deadline,
+) {
+    assert!(state.backend.diagnostics.journal.flush_pending_for_test());
+    assert!(state.lifecycle.admission.acquire_request().is_none());
+    assert!(state.backend.usage.history.stop.load(Ordering::Acquire));
     let mut reply = Vec::new();
     let request = (|| -> io::Result<()> {
         let mut stream = deadline.io(deadline.connect(address)?);
@@ -154,17 +252,4 @@ fn price_worker_start_failure_closes_admission_and_signals_usage_before_the_jour
             "{error}"
         ),
     }
-    resume.send(()).unwrap();
-    assert!(
-        matches!(result.wait().unwrap(), Err(AppError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock)
-    );
-    let records = crate::tests::live_journal(&root);
-    assert!(
-        records
-            .iter()
-            .any(|record| record["event"] == "startup_failure"
-                && record["fields"]["stage"] == "background_workers")
-    );
-    assert_eq!(records.last().unwrap()["event"], "shutdown_complete");
-    assert!(ServiceOwner::acquire(&root.join("state")).is_ok());
 }
