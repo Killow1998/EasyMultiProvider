@@ -3,7 +3,7 @@ use std::{
     io,
     sync::mpsc::{self, Receiver, Sender},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Owns a probe's trigger channel and its worker. Call `begin` with the
@@ -38,13 +38,7 @@ impl<T, W> Observation<T, W> {
     pub fn begin(&self, deadline: Deadline, context: &'static str) -> ObservationResult<T> {
         let (send, receive) = mpsc::channel();
         assert!(
-            self.trigger
-                .send(ProbeRequest {
-                    deadline,
-                    context,
-                    send
-                })
-                .is_ok(),
+            self.trigger.send(ProbeRequest { deadline, send }).is_ok(),
             "{context}: observation worker disconnected"
         );
         ObservationResult {
@@ -85,8 +79,7 @@ impl<T> Probe<T> {
 
 pub struct ProbeRequest<T> {
     deadline: Deadline,
-    context: &'static str,
-    send: Sender<io::Result<T>>,
+    send: Sender<(Instant, T)>,
 }
 
 impl<T> ProbeRequest<T> {
@@ -95,38 +88,64 @@ impl<T> ProbeRequest<T> {
     }
 
     pub fn complete(self, value: T) {
-        let _ = self.send.send(self.deadline.accept(value, self.context));
+        let _ = self.send.send((Instant::now(), value));
     }
 }
 
 pub struct ObservationResult<T> {
     deadline: Deadline,
     context: &'static str,
-    receive: Receiver<io::Result<T>>,
+    receive: Receiver<(Instant, T)>,
 }
 
 impl<T> ObservationResult<T> {
     pub fn wait(self) -> io::Result<T> {
-        self.receive
-            .recv_timeout(self.deadline.remaining())
-            .map_err(|error| {
-                let kind = match error {
-                    mpsc::RecvTimeoutError::Timeout => io::ErrorKind::TimedOut,
-                    mpsc::RecvTimeoutError::Disconnected => io::ErrorKind::BrokenPipe,
-                };
-                io::Error::new(kind, format!("{}: {error}", self.context))
-            })?
+        let deadline = self.deadline;
+        self.wait_until(deadline)
     }
 
-    pub fn wait_for(mut self, timeout: Duration) -> io::Result<T> {
-        self.deadline = self.deadline.capped(timeout);
-        self.wait()
+    pub fn wait_for(self, timeout: Duration) -> io::Result<T> {
+        let deadline = self.deadline.capped(timeout);
+        self.wait_until(deadline)
+    }
+
+    fn wait_until(self, deadline: Deadline) -> io::Result<T> {
+        let (completed_at, value) =
+            self.receive
+                .recv_timeout(deadline.remaining())
+                .map_err(|error| {
+                    let kind = match error {
+                        mpsc::RecvTimeoutError::Timeout => io::ErrorKind::TimedOut,
+                        mpsc::RecvTimeoutError::Disconnected => io::ErrorKind::BrokenPipe,
+                    };
+                    io::Error::new(kind, format!("{}: {error}", self.context))
+                })?;
+        deadline.accept_at(completed_at, value, self.context)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_observation_is_accepted_at_completion_against_the_tighter_deadline() {
+        let observation = Observation::with_worker(|probe| probe);
+        let timeout = crate::test_timeout(Duration::from_millis(250));
+        let late = Instant::now();
+        let early = late - timeout;
+        let tightened = Deadline(early + timeout / 2);
+        let original = Deadline::after(timeout);
+        for (completed_at, expected) in [(early, Ok(7)), (late, Err(io::ErrorKind::TimedOut))] {
+            let result = observation.begin(original, "first sideband command");
+            let request = observation.worker().next_request().unwrap();
+            request.send.send((completed_at, 7)).unwrap();
+            assert_eq!(
+                result.wait_until(tightened).map_err(|error| error.kind()),
+                expected
+            );
+        }
+    }
 
     #[test]
     #[should_panic(expected = "panic while the probe awaits its trigger")]

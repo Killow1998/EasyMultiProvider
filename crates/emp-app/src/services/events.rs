@@ -70,40 +70,82 @@ pub(crate) fn stream_event_activity(event: &Value) -> (bool, bool) {
     (output_emitted, tool_activity)
 }
 
-pub(crate) fn terminal_stream_event(event: &Value) -> bool {
-    terminal_sse_event(None, event["type"].as_str())
+#[derive(Clone, Copy)]
+pub(crate) enum TerminalEvent {
+    Completed,
+    Incomplete,
+    Failed,
+    Error,
+    ReportResult,
 }
 
-pub(crate) fn terminal_sse_event(name: Option<&[u8]>, data_type: Option<&str>) -> bool {
-    matches!(
-        name.or_else(|| data_type.map(str::as_bytes)),
-        Some(b"response.completed" | b"response.incomplete" | b"response.failed" | b"error")
-    )
-}
+impl TerminalEvent {
+    pub(crate) fn response(name: &[u8]) -> Option<Self> {
+        match name {
+            b"response.completed" => Some(Self::Completed),
+            b"response.incomplete" => Some(Self::Incomplete),
+            b"response.failed" => Some(Self::Failed),
+            b"error" => Some(Self::Error),
+            _ => None,
+        }
+    }
 
-pub(crate) struct SseEvents {
-    line: Vec<u8>,
-    name: Vec<u8>,
-    has_name: bool,
-    json: Option<SseJsonParser>,
-}
-
-impl Default for SseEvents {
-    fn default() -> Self {
-        Self {
-            line: Vec::new(),
-            name: Vec::new(),
-            has_name: false,
-            json: Some(SseJsonParser::new()),
+    pub(crate) fn response_outcome(self) -> Option<&'static str> {
+        match self {
+            Self::Completed => Some("completed"),
+            Self::Incomplete => Some("incomplete"),
+            Self::Failed => Some("failed"),
+            Self::Error => Some("error"),
+            Self::ReportResult => None,
         }
     }
 }
 
-impl SseEvents {
-    pub(crate) fn push(&mut self, chunk: &[u8]) -> (bool, Vec<Map<String, Value>>) {
+pub(crate) fn terminal_stream_event(event: &Value) -> bool {
+    event["type"]
+        .as_str()
+        .and_then(|name| TerminalEvent::response(name.as_bytes()))
+        .is_some()
+}
+
+fn terminal_sse_event(frame: &SseFrame) -> Option<TerminalEvent> {
+    if frame.has_name {
+        if frame.name == b"result" {
+            return Some(TerminalEvent::ReportResult);
+        }
+        return TerminalEvent::response(&frame.name);
+    }
+    let name = frame.data.as_ref()?.get("type")?.as_str()?;
+    TerminalEvent::response(name.as_bytes())
+}
+
+pub(crate) struct SseFrame {
+    observe_json: bool,
+    line: Vec<u8>,
+    name: Vec<u8>,
+    has_name: bool,
+    json: Option<SseJsonParser>,
+    data: Option<Map<String, Value>>,
+}
+
+impl SseFrame {
+    pub(crate) fn new(observe_json: bool) -> Self {
+        Self {
+            observe_json,
+            line: Vec::new(),
+            name: Vec::new(),
+            has_name: false,
+            json: Some(SseJsonParser::new()),
+            data: None,
+        }
+    }
+
+    pub(crate) fn push(
+        &mut self,
+        chunk: &[u8],
+        mut completed: impl FnMut(Option<TerminalEvent>, Option<Map<String, Value>>),
+    ) {
         const LINE_PREFIX_LIMIT: usize = b"event: response.incomplete\r".len() + 1;
-        let mut terminal = false;
-        let mut events = Vec::new();
         let mut start = 0;
         let mut end = 0;
         for segment in chunk.split_inclusive(|&byte| byte == b'\n') {
@@ -117,12 +159,10 @@ impl SseEvents {
             }
             let line = self.line.strip_suffix(b"\r").unwrap_or(&self.line);
             if line.is_empty() {
-                let event = self.push_json(&chunk[start..end]).pop();
-                terminal |= terminal_sse_event(
-                    self.has_name.then_some(self.name.as_slice()),
-                    event.as_ref().and_then(|event| event.get("type")?.as_str()),
-                );
-                events.extend(event);
+                if self.observe_json || !self.has_name {
+                    self.data = self.push_json(&chunk[start..end]).pop();
+                }
+                completed(terminal_sse_event(self), self.data.take());
                 self.has_name = false;
                 self.json.get_or_insert_with(SseJsonParser::new);
                 start = end;
@@ -134,10 +174,9 @@ impl SseEvents {
             }
             self.line.clear();
         }
-        if start < end {
+        if start < end && (self.observe_json || !self.has_name) {
             self.push_json(&chunk[start..]);
         }
-        (terminal, events)
     }
 
     fn push_json(&mut self, chunk: &[u8]) -> Vec<Map<String, Value>> {

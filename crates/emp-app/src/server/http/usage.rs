@@ -15,7 +15,6 @@ use crate::{
 };
 use axum::{
     Extension, Router,
-    body::Bytes,
     extract::State,
     response::{IntoResponse, Response},
     routing::get,
@@ -168,7 +167,7 @@ async fn read_report(
                     )
                     .into_response();
                 handoff_response(Some(business), || {
-                    hooks.publish_output(None, || {
+                    hooks.publish_output(None, None, || {
                         let _ = sender.send(response);
                     });
                 });
@@ -204,7 +203,7 @@ async fn read_report(
                     let _ = output
                         .lock()
                         .expect("report output")
-                        .finish_frame(Bytes::from(terminal), None);
+                        .report_terminal(terminal);
                 }
             }
         }

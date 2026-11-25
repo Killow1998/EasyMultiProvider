@@ -1,14 +1,12 @@
-use crate::server::{
-    handoff_response,
-    test_hooks::{ServerHooks, WriteHook},
-};
+use crate::server::test_hooks::{ServerHooks, WriteHook};
 use crate::{
     http::response::status_text,
     server::http::error::response_head,
     services::{
         connection_admission::BusinessToken,
-        events::{sse_frame, terminal_sse_event},
-        modules::aero::Call,
+        events::{SseFrame, TerminalEvent, sse_frame},
+        gateway_clients::Caller,
+        modules::aero::{Call, CallLease, CallParent, Callers},
     },
 };
 use axum::{
@@ -91,8 +89,23 @@ pub(crate) struct BodyOutput {
     delivery: Arc<Delivery>,
     response: Option<oneshot::Sender<Response>>,
     stream: Option<StreamFrames>,
-    business: Option<BusinessToken>,
+    work: Option<ResponseWork>,
     hooks: Arc<ServerHooks>,
+}
+
+enum ResponseWork {
+    Request(BusinessToken),
+    Aero(Call),
+}
+
+impl ResponseWork {
+    fn handoff(work: Option<Self>, publish: impl FnOnce()) {
+        match work {
+            Some(Self::Aero(mut call)) => call.finish_with(publish),
+            Some(Self::Request(business)) => business.finish_with(publish),
+            None => publish(),
+        }
+    }
 }
 
 impl BodyOutput {
@@ -108,13 +121,31 @@ impl BodyOutput {
             delivery,
             response: Some(response),
             stream: None,
-            business: Some(business),
+            work: Some(ResponseWork::Request(business)),
             hooks,
         }
     }
 
     pub(crate) fn socket(&self) -> &TcpStream {
         &self.socket
+    }
+
+    pub(crate) fn delegate(
+        &mut self,
+        callers: &Callers,
+        caller: Caller,
+        authorization: Option<String>,
+        lease: Option<CallLease>,
+    ) -> Option<String> {
+        let call = callers.delegate(caller, authorization, lease, || {
+            let Some(ResponseWork::Request(business)) = self.work.take() else {
+                unreachable!("Aero delegates an active inference request once");
+            };
+            CallParent::Request(business)
+        })?;
+        let key = call.key.clone();
+        self.work = Some(ResponseWork::Aero(call));
+        Some(key)
     }
 
     pub(crate) fn head<'a>(
@@ -131,33 +162,55 @@ impl BodyOutput {
         let builder = headers.into_iter().fold(builder, |builder, (name, value)| {
             builder.header(name, value)
         });
-        let (response, mut stream) = StreamFrames::start(builder, self.delivery.clone());
+        let (response, stream) = StreamFrames::start(builder, self.delivery.clone());
+        self.stream = Some(stream);
         self.response
             .take()
             .expect("response head is sent once")
             .send(response)
             .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        stream
-            .confirmation
-            .blocking_recv()
-            .ok_or(io::ErrorKind::BrokenPipe)?;
-        self.stream = Some(stream);
-        Ok(())
+        self.stream
+            .as_mut()
+            .expect("response stream")
+            .wait_for_flush()
     }
 
-    pub(crate) fn response_event(&mut self, kind: &str, frames: &[Vec<u8>]) -> io::Result<()> {
-        if let Some((last, preceding)) = frames.split_last() {
-            for frame in preceding {
-                self.write_frame(Bytes::copy_from_slice(frame))?;
-            }
-            let bytes = Bytes::copy_from_slice(last);
-            if terminal_sse_event(Some(kind.as_bytes()), None) {
-                self.finish_frame(bytes, None)?;
-            } else {
-                self.write_frame(bytes)?;
+    pub(crate) fn response_event(
+        &mut self,
+        frames: &[Vec<u8>],
+    ) -> (io::Result<()>, Option<TerminalEvent>) {
+        let mut terminal = None;
+        for frame in frames {
+            let (result, event) = self.write_sse_frame(Bytes::copy_from_slice(frame), false);
+            terminal = event.or(terminal);
+            if result.is_err() {
+                return (result, terminal);
             }
         }
-        Ok(())
+        (Ok(()), terminal)
+    }
+
+    pub(super) fn report_terminal(&mut self, frame: Vec<u8>) -> io::Result<()> {
+        self.write_sse_frame(Bytes::from(frame), true).0
+    }
+
+    fn write_sse_frame(
+        &mut self,
+        bytes: Bytes,
+        report: bool,
+    ) -> (io::Result<()>, Option<TerminalEvent>) {
+        let mut terminal = None;
+        SseFrame::new(false).push(&bytes, |event, _| {
+            terminal = event
+                .filter(|event| report || event.response_outcome().is_some())
+                .or(terminal);
+        });
+        let result = if terminal.is_some() {
+            self.finish_frame(bytes)
+        } else {
+            self.write_frame(bytes)
+        };
+        (result, terminal)
     }
 
     pub(super) fn report_progress(&mut self, completed: i64, total: i64) -> io::Result<()> {
@@ -174,39 +227,50 @@ impl BodyOutput {
         stream.wait_for_flush()
     }
 
-    pub(crate) fn finish_frame(
-        &mut self,
-        bytes: Bytes,
-        caller: Option<&mut Call<'_>>,
-    ) -> io::Result<()> {
+    pub(crate) fn finish_frame(&mut self, bytes: Bytes) -> io::Result<()> {
         let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
         let permit = tokio::runtime::Handle::current()
             .block_on(stream.send.reserve())
             .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        let publish = || {
+        ResponseWork::handoff(self.work.take(), || {
             self.hooks
-                .publish_output(Some(&self.delivery.write_hook), || {
-                    permit.send(bytes);
-                })
-        };
-        match (self.business.take(), caller) {
-            (Some(business), Some(caller)) => caller.finish_with(business, publish),
-            (business, _) => handoff_response(business, publish),
-        }
+                .publish_output(Some(&self.delivery.write_hook), Some(&bytes), || {
+                    permit.send(bytes.clone());
+                });
+        });
         stream.wait_for_flush()
     }
 
-    pub(super) fn finish(self, response: impl FnOnce() -> Response) {
-        let reply = self.response.map(|sender| (sender, response()));
-        handoff_response(self.business, || {
-            if let Some((sender, response)) = reply {
+    pub(super) fn finish(mut self, response: impl FnOnce() -> Response) {
+        let reply = self.response.is_some().then(response);
+        self.close(reply);
+    }
+
+    fn close(&mut self, reply: Option<Response>) {
+        let stream = self.stream.take();
+        let sender = self.response.take();
+        let work = self.work.take();
+        let aero_eof = matches!(work, Some(ResponseWork::Aero(_))) && stream.is_some();
+        ResponseWork::handoff(work, || {
+            if let (Some(sender), Some(response)) = (sender, reply) {
                 self.hooks
-                    .publish_output(Some(&self.delivery.write_hook), || {
+                    .publish_output(Some(&self.delivery.write_hook), None, || {
                         let _ = sender.send(response);
                     });
             }
-            drop(self.stream);
+            if aero_eof {
+                self.hooks
+                    .publish_output(Some(&self.delivery.write_hook), None, || drop(stream));
+            } else {
+                drop(stream);
+            }
         });
+    }
+}
+
+impl Drop for BodyOutput {
+    fn drop(&mut self) {
+        self.close(None);
     }
 }
 

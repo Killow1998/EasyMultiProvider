@@ -428,7 +428,7 @@ async fn drive_connection(
                         .0
                         .control
                         .test_hooks
-                        .publish_output(write_hook, || response)
+                        .publish_output(write_hook, None, || response)
                 }))
             } else {
                 *business.lock().expect("request work") = token;

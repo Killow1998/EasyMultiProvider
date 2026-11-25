@@ -48,7 +48,16 @@ impl Deadline {
     }
 
     pub fn accept<T>(&self, value: T, context: impl Display) -> io::Result<T> {
-        if self.is_expired() {
+        self.accept_at(Instant::now(), value, context)
+    }
+
+    fn accept_at<T>(
+        &self,
+        completed_at: Instant,
+        value: T,
+        context: impl Display,
+    ) -> io::Result<T> {
+        if completed_at >= self.0 {
             return Err(io::Error::new(io::ErrorKind::TimedOut, context.to_string()));
         }
         Ok(value)

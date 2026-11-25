@@ -25,6 +25,7 @@ mod implementation {
         pub(in crate::server) fn publish_output<T>(
             &self,
             _: Option<&WriteHook>,
+            _: Option<&[u8]>,
             publish: impl FnOnce() -> T,
         ) -> T {
             publish()
@@ -70,7 +71,7 @@ mod implementation {
 
     pub(in crate::server) struct WriteProbe {
         pub(in crate::server) trigger: WriteTrigger,
-        pub(in crate::server) reached: Option<oneshot::Sender<()>>,
+        pub(in crate::server) reached: Option<oneshot::Sender<Option<Vec<u8>>>>,
         pub(in crate::server) release: oneshot::Receiver<()>,
     }
 
@@ -81,13 +82,13 @@ mod implementation {
     }
 
     type HandlerProbe = (oneshot::Sender<()>, oneshot::Receiver<()>);
-    type OutputProbe = Box<dyn FnOnce() + Send>;
+    type OutputProbe = Box<dyn FnOnce(Option<&[u8]>) + Send>;
 
     #[derive(Default)]
     pub(crate) struct ServerHooks {
         pub(in crate::server) request: Mutex<Option<RequestProbe>>,
         pub(in crate::server) health_handler: Mutex<Option<HandlerProbe>>,
-        pub(in crate::server) before_output_publish: Mutex<Option<OutputProbe>>,
+        pub(in crate::server) before_output_publish: Mutex<Option<Box<dyn FnOnce() + Send>>>,
         pub(in crate::server) output_queued: Mutex<Option<OutputProbe>>,
         pub(in crate::server) response_receive: Mutex<Option<HandlerProbe>>,
         pub(in crate::server) callback_lock_contended: Mutex<Option<oneshot::Sender<bool>>>,
@@ -131,6 +132,7 @@ mod implementation {
         pub(in crate::server) fn publish_output<T>(
             &self,
             write: Option<&WriteHook>,
+            frame: Option<&[u8]>,
             publish: impl FnOnce() -> T,
         ) -> T {
             let queued = write.and_then(WriteHook::pause_for_output);
@@ -143,10 +145,10 @@ mod implementation {
             let result = publish();
             let probe = self.output_queued.lock().unwrap().take();
             if let Some(probe) = probe {
-                probe();
+                probe(frame);
             }
             if let Some(queued) = queued {
-                let _ = queued.send(());
+                let _ = queued.send(frame.map(<[u8]>::to_vec));
             }
             result
         }
@@ -178,7 +180,7 @@ mod implementation {
     pub(in crate::server) struct WriteHook(Arc<Mutex<Option<WriteProbe>>>);
 
     impl WriteHook {
-        fn pause_for_output(&self) -> Option<oneshot::Sender<()>> {
+        fn pause_for_output(&self) -> Option<oneshot::Sender<Option<Vec<u8>>>> {
             let mut armed = self.0.lock().unwrap();
             let probe = armed.as_mut()?;
             if matches!(probe.trigger, WriteTrigger::Output) {
@@ -199,7 +201,7 @@ mod implementation {
                     })
             {
                 if let Some(reached) = probe.reached.take() {
-                    let _ = reached.send(());
+                    let _ = reached.send(None);
                 }
                 let _ = ready!(Pin::new(&mut probe.release).poll(cx));
                 armed.take();

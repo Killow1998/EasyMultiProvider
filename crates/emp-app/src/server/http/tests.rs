@@ -1679,6 +1679,8 @@ fn proxy_identity_rebuilds_headers_and_requires_live_delegation() {
         }
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 0);
 
+        let admission = &fixture.server.state.lifecycle.admission;
+        let parent = admission.acquire_request().unwrap();
         let delegation = fixture
             .server
             .state
@@ -1691,8 +1693,10 @@ fn proxy_identity_rebuilds_headers_and_requires_live_delegation() {
                 },
                 Some("Bearer restored".into()),
                 None,
+                || crate::services::modules::aero::CallParent::Connection(parent.slot().clone()),
             )
             .unwrap();
+        drop(parent);
         let auth = format!("Authorization: Bearer {}", delegation.key);
         let headers = [spoof.as_slice(), &[auth.as_str()]].concat();
         let wire = json_request(port, "/v1/responses", &headers, br#"{"new_field":1}"#);

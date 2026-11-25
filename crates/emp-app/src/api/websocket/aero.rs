@@ -5,7 +5,7 @@ use crate::api::history_response::history_stream_error;
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::services::disconnect::{DisconnectMonitor, DisconnectRace};
-use crate::services::events::terminal_stream_event;
+use crate::services::{events::terminal_stream_event, modules::aero::CallParent};
 use emp_transport::SseJsonParser;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -18,13 +18,30 @@ pub(super) async fn serve(
     websocket: &mut ObservedWebSocket<'_>,
     monitor: &mut DisconnectMonitor,
 ) -> TurnResult {
+    let mut call = None;
     let mut upstream = match open(
         state,
         config,
         body,
         request,
         websocket.observation,
-        false,
+        (false, |caller, authorization, lease| {
+            let slot = lease
+                .as_ref()
+                .expect("Aero WebSocket lease")
+                .connection
+                .clone();
+            let delegation =
+                state
+                    .backend
+                    .aero_callers
+                    .delegate(caller, authorization, lease, || {
+                        CallParent::Connection(slot)
+                    })?;
+            let key = delegation.key.clone();
+            call = Some(delegation);
+            Some(key)
+        }),
         monitor,
     )
     .await
@@ -32,9 +49,11 @@ pub(super) async fn serve(
         Ok(upstream) => upstream,
         Err(RelayError::Disconnected) => return TurnResult::Closed,
         Err(RelayError::Request(status, code, message)) => {
+            drop(call.take());
             return send(websocket, &emp_websocket_error(status, code, message)).await;
         }
         Err(RelayError::History(error)) => {
+            drop(call.take());
             let event = history_stream_error(&error, websocket.observation);
             return send(websocket, &event).await;
         }

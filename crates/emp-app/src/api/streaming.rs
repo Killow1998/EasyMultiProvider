@@ -8,7 +8,7 @@ use crate::services::disconnect::DisconnectMonitor;
 use crate::services::disconnect::DisconnectRace;
 use crate::services::events::sse_frame;
 use crate::services::events::stream_event_activity;
-use crate::services::events::terminal_stream_event;
+use crate::services::events::{TerminalEvent, terminal_stream_event};
 use crate::services::native;
 use crate::services::observation::request::RequestObservation;
 use crate::services::providers::persist_protocol_observation;
@@ -71,18 +71,23 @@ impl<'a> ObservedSse<'a> {
         )
     }
     pub(crate) fn frames(&mut self, frames: &[Vec<u8>], last_event: &str) -> std::io::Result<()> {
-        let result = self.write_frames(frames, last_event, false);
-        self.observation.event_type_written(last_event, result)
+        let (result, terminal) = self.write_frames(frames, last_event, false);
+        self.observation
+            .sse_event_written(None, false, terminal, result)
     }
 
     pub(crate) fn event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
-        let result = self.write_frames(frames, event["type"].as_str().unwrap_or_default(), false);
-        self.observation.event_written(event, result)
+        let (result, terminal) =
+            self.write_frames(frames, event["type"].as_str().unwrap_or_default(), false);
+        self.observation
+            .sse_event_written(Some(event), false, terminal, result)
     }
 
     fn upstream_event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
-        let result = self.write_frames(frames, event["type"].as_str().unwrap_or_default(), true);
-        self.observation.upstream_event_written(event, result)
+        let (result, terminal) =
+            self.write_frames(frames, event["type"].as_str().unwrap_or_default(), true);
+        self.observation
+            .sse_event_written(Some(event), true, terminal, result)
     }
 
     fn write_frames(
@@ -90,9 +95,9 @@ impl<'a> ObservedSse<'a> {
         frames: &[Vec<u8>],
         event_type: &str,
         upstream: bool,
-    ) -> std::io::Result<()> {
+    ) -> (std::io::Result<()>, Option<TerminalEvent>) {
         if !matches!(event_type, "response.failed" | "error") {
-            return self.sink.response_event(event_type, frames);
+            return self.sink.response_event(frames);
         }
         let formatted = frames
             .iter()
@@ -103,7 +108,7 @@ impl<'a> ObservedSse<'a> {
                     .unwrap_or_else(|| frame.clone())
             })
             .collect::<Vec<_>>();
-        self.sink.response_event(event_type, &formatted)
+        self.sink.response_event(&formatted)
     }
 }
 

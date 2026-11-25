@@ -1,5 +1,6 @@
 //! Passive receipts end at the downstream boundary and cannot access routing, retries,
 //! accounts or accounting; model outcomes retain their separate upstream boundary.
+use crate::services::events::TerminalEvent;
 use crate::services::observation::diagnostics::{Diagnostics, schema};
 use crate::services::request_facts::reasoning_effort;
 use emp_context::HistoryError;
@@ -250,6 +251,19 @@ impl RequestObservation {
         self.event_type_written(event["type"].as_str().unwrap_or_default(), result)
     }
 
+    pub(crate) fn sse_event_written<T, E>(
+        &mut self,
+        event: Option<&Value>,
+        upstream: bool,
+        terminal: Option<TerminalEvent>,
+        result: Result<T, E>,
+    ) -> Result<T, E> {
+        if let Some(event) = event {
+            self.record_event_error(event, result.is_ok(), upstream.then_some("upstream"));
+        }
+        self.record_event_delivery(terminal.and_then(TerminalEvent::response_outcome), result)
+    }
+
     fn record_event_error(&mut self, event: &Value, delivered: bool, boundary: Option<&str>) {
         let error = event.get("error").or_else(|| {
             event
@@ -291,13 +305,18 @@ impl RequestObservation {
         event_type: &str,
         result: Result<T, E>,
     ) -> Result<T, E> {
-        let terminal = match event_type {
-            "response.completed" => Some("completed"),
-            "response.incomplete" => Some("incomplete"),
-            "response.failed" => Some("failed"),
-            "error" => Some("error"),
-            _ => None,
-        };
+        self.record_event_delivery(
+            TerminalEvent::response(event_type.as_bytes())
+                .and_then(TerminalEvent::response_outcome),
+            result,
+        )
+    }
+
+    fn record_event_delivery<T, E>(
+        &mut self,
+        terminal: Option<&'static str>,
+        result: Result<T, E>,
+    ) -> Result<T, E> {
         if result.is_ok()
             && let Some(kind) = terminal
         {

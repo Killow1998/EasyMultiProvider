@@ -25,9 +25,15 @@ use Phase::*;
 
 const ACTIVE: &[Phase] = &[Finishes, BusyAtDeadline, Sending];
 
+type WritePause = (
+    oneshot::Receiver<Option<Vec<u8>>>,
+    oneshot::Sender<()>,
+    WriteTrigger,
+);
+
 struct Probe {
     id: oneshot::Receiver<String>,
-    write: Option<(oneshot::Receiver<()>, oneshot::Sender<()>)>,
+    write: Option<WritePause>,
 }
 
 impl Probe {
@@ -37,7 +43,7 @@ impl Probe {
             let (reached, writing) = oneshot::channel();
             let (resume, release) = oneshot::channel();
             (
-                Some((writing, resume)),
+                Some((writing, resume, trigger)),
                 Some(WriteProbe {
                     trigger,
                     reached: Some(reached),
@@ -73,9 +79,10 @@ struct Work {
     id: String,
     client: TcpStream,
     release: Option<oneshot::Sender<()>>,
-    write: Option<(oneshot::Receiver<()>, oneshot::Sender<()>)>,
+    write: Option<WritePause>,
     status: u16,
     completed: &'static str,
+    expects_frame: bool,
 }
 
 impl Work {
@@ -93,7 +100,14 @@ impl Work {
             write: probe.write,
             status,
             completed,
+            expects_frame: false,
         }
+    }
+
+    #[cfg(unix)]
+    fn expect_frame(mut self) -> Self {
+        self.expects_frame = true;
+        self
     }
 
     fn finish_business(&mut self) {
@@ -103,8 +117,30 @@ impl Work {
     }
 
     async fn writing(&mut self) {
-        if let Some((reached, _)) = &mut self.write {
-            receive(reached, "paused response write").await;
+        if let Some((reached, _, trigger)) = &mut self.write {
+            let frame = receive(reached, "paused response write").await;
+            if matches!(trigger, WriteTrigger::Output) {
+                self.assert_queued_event(frame.as_deref());
+            }
+        }
+    }
+
+    fn assert_queued_event(&self, frame: Option<&[u8]>) {
+        if self.expects_frame {
+            assert!(
+                frame.is_some_and(|frame| !frame.is_empty()),
+                "handoff queues body bytes"
+            );
+        }
+        if let Some(expected) = self.completed.strip_prefix("event: ") {
+            let name = frame
+                .and_then(|frame| str::from_utf8(frame).ok())
+                .and_then(|frame| frame.lines().find_map(|line| line.strip_prefix("event: ")));
+            assert_eq!(
+                name,
+                Some(expected),
+                "event in the frame queued for delivery"
+            );
         }
     }
 
@@ -181,9 +217,9 @@ async fn exercise(
     let terminal = (phase == TerminalFrameAtDeadline).then(|| {
         let (queued, observed) = oneshot::channel();
         let clock = clock.clone();
-        *control.test_hooks.output_queued.lock().unwrap() = Some(Box::new(move || {
+        *control.test_hooks.output_queued.lock().unwrap() = Some(Box::new(move |frame| {
             clock.expire();
-            let _ = queued.send(());
+            let _ = queued.send(frame.map(<[u8]>::to_vec));
         }));
         observed
     });
@@ -277,7 +313,8 @@ async fn exercise(
         work.finish_business();
     }
     if let Some(terminal) = terminal {
-        receive(terminal, "report terminal frame queued and cutoff fired").await;
+        let frame = receive(terminal, "report terminal frame queued and cutoff fired").await;
+        work.assert_queued_event(frame.as_deref());
     }
     if phase == FinishesAfterDeadline {
         clock.pass_deadline();
@@ -638,7 +675,7 @@ fn drain_buffered_handoff(fixture: Fixture, wire: impl FnOnce(&Fixture) -> Vec<u
         let (resume, resumed) = oneshot::channel();
         *control.test_hooks.response_receive.lock().unwrap() = Some((paused, resumed));
         let (queued, response_queued) = oneshot::channel();
-        *control.test_hooks.output_queued.lock().unwrap() = Some(Box::new(move || {
+        *control.test_hooks.output_queued.lock().unwrap() = Some(Box::new(move |_| {
             let _ = queued.send(());
         }));
 
@@ -695,7 +732,7 @@ fn drain_inference_history_failure_at_terminal_write() {
             )
             .await;
             assert!(client.head.starts_with("HTTP/1.1 200 OK\r\n"));
-            Work::new(probe, client.io, None, 200, "response.failed").await
+            Work::new(probe, client.io, None, 200, "event: response.failed").await
         },
     );
 }
@@ -824,14 +861,81 @@ fn aero_terminal_case(content_type: &'static str, prefix: Vec<u8>, last: &'stati
             .await
             .expect("the prefix reaches the client before the final chunk");
             assert!(fixture.server.state.lifecycle.admission.has_business_work());
-            Work::new(probe, client.io, Some(release), 200, "aero-terminal").await
+            Work::new(probe, client.io, Some(release), 200, "aero-terminal")
+                .await
+                .expect_frame()
         },
     );
 }
 
 #[cfg(unix)]
 #[test]
+fn drain_native_and_aero_handoff_on_the_wire_event_name() {
+    use super::inference::{fixture_directory, upstream_reply};
+    use crate::tests::OneShotUpstream;
+
+    let terminal = b"event: response.completed\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n";
+    for model in ["native/alias", "aero/fixture"] {
+        let (release, wait) = oneshot::channel();
+        let mut wait = Some(wait);
+        let upstream = OneShotUpstream::serve(1, move |socket| {
+            upstream_reply(socket, 200, "text/event-stream", terminal.len(), "");
+            if wait.take().unwrap().blocking_recv().is_ok() {
+                socket.write_all(terminal).unwrap();
+            }
+        });
+        let directory = fixture_directory(&upstream.base_url());
+        if model == "aero/fixture" {
+            install_aero_fixture(directory.path(), &upstream.base_url());
+        }
+        run_case(
+            Fixture::with_directory(directory),
+            model,
+            Sending,
+            false,
+            async |fixture| {
+                let path = "/v1/responses";
+                let probe = Probe::arm(fixture, path, Some(WriteTrigger::Output));
+                let wire = json_request(
+                    fixture.port(),
+                    path,
+                    &[
+                        &fixture.session(),
+                        "session_id: fixture",
+                        "Authorization: Bearer caller",
+                    ],
+                    &serde_json::to_vec(&json!({"model":model,"stream":true,"input":"fixture"}))
+                        .unwrap(),
+                );
+                let client = submit(fixture.server.local_addr(), &wire).await;
+                assert_eq!(upstream.observed().0, path);
+                let marker = if model == "native/alias" {
+                    "event: response.completed"
+                } else {
+                    "response.completed"
+                };
+                Work::new(probe, client, Some(release), 200, marker)
+                    .await
+                    .expect_frame()
+            },
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn drain_aero_revokes_delegation_at_terminal_handoff() {
+    aero_delegation_handoff(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_aero_revokes_delegation_at_eof_handoff() {
+    aero_delegation_handoff(true);
+}
+
+#[cfg(unix)]
+fn aero_delegation_handoff(eof: bool) {
     use super::inference::{STREAM_REQUEST, fixture_directory, upstream_reply};
     use crate::{
         http::request::parse_request, server::http::proxy::ConnectionIntake, tests::OneShotUpstream,
@@ -842,8 +946,15 @@ fn drain_aero_revokes_delegation_at_terminal_handoff() {
     let (terminal_ready, wait_for_terminal) = oneshot::channel();
     let mut wait_for_terminal = Some(wait_for_terminal);
     let aero = OneShotUpstream::serve(1, move |socket| {
-        upstream_reply(socket, 200, "text/event-stream", terminal.len(), "");
-        if wait_for_terminal.take().unwrap().blocking_recv().is_ok() {
+        if eof {
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n").unwrap();
+            socket
+                .write_all(br#"{"id":"resp_aero_fixture","output":[]}"#)
+                .unwrap();
+        } else {
+            upstream_reply(socket, 200, "text/event-stream", terminal.len(), "");
+        }
+        if wait_for_terminal.take().unwrap().blocking_recv().is_ok() && !eof {
             socket.write_all(terminal).unwrap();
         }
     });
@@ -860,8 +971,8 @@ fn drain_aero_revokes_delegation_at_terminal_handoff() {
         let state = &fixture.server.state;
         let control = &state.lifecycle;
         let parent = Probe::arm(fixture, "/v1/responses", Some(WriteTrigger::Output));
-        let _parent_client = RawClient::request(address, &aero_request(fixture, true)).await;
-        let (paused, resume_parent) = parent.write.unwrap();
+        let _parent_client = RawClient::request(address, &aero_request(fixture, !eof)).await;
+        let (paused, resume_parent, _) = parent.write.unwrap();
         let (_, headers, _) = aero.observed();
         let key = &headers["x-aero-caller-key"];
         let authorization = format!("Authorization: Bearer {key}");
@@ -881,11 +992,7 @@ fn drain_aero_revokes_delegation_at_terminal_handoff() {
             let _ = wait_for_publish.blocking_recv();
         }));
         terminal_ready.send(()).unwrap();
-        receive(
-            before_publish,
-            "Aero key revoked before terminal publication",
-        )
-        .await;
+        receive(before_publish, "Aero key revoked before output handoff").await;
 
         let (observed, contended) = oneshot::channel();
         *control.test_hooks.callback_lock_contended.lock().unwrap() = Some(observed);
@@ -902,7 +1009,8 @@ fn drain_aero_revokes_delegation_at_terminal_handoff() {
         });
         assert!(receive(contended, "callback reached the locked delegation table").await);
         publish.send(()).unwrap();
-        receive(paused, "Aero terminal queued with write paused").await;
+        let frame = receive(paused, "Aero output handed off").await;
+        assert_eq!(frame.is_none(), eof, "only EOF hands off without bytes");
         racing_callback.await.unwrap();
         assert!(!control.admission.has_business_work());
         let reply = exchange_wire(address, &callback, false).await;
@@ -1052,7 +1160,14 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
                     "aero_runtime_unavailable"
                 );
             }
-            Work::new(probe, client.io, Some(release), 200, "response.completed").await
+            Work::new(
+                probe,
+                client.io,
+                Some(release),
+                200,
+                "event: response.completed",
+            )
+            .await
         },
     );
 }
@@ -1109,12 +1224,12 @@ fn report_case(path: &'static str, query: &str, phase: Phase, via_quit: bool, br
             .execute_batch("UPDATE call_records SET facts = 'invalid JSON'")
             .unwrap();
     }
-    let marker: &'static [u8] = if broken_facts {
-        b"event: error"
+    let marker = if broken_facts {
+        "event: error"
     } else {
-        b"event: result"
+        "event: result"
     };
-    let name = format!("{path} {}", str::from_utf8(marker).unwrap());
+    let name = format!("{path} {marker}");
     run_case(fixture, &name, phase, via_quit, async |fixture| {
         let probe = Probe::arm(
             fixture,
@@ -1148,6 +1263,6 @@ fn report_case(path: &'static str, query: &str, phase: Phase, via_quit: bool, br
         } else {
             None
         };
-        Work::new(probe, client.io, release, 200, "event: result").await
+        Work::new(probe, client.io, release, 200, marker).await
     });
 }

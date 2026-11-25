@@ -26,15 +26,17 @@ pub(super) struct Endpoint {
     profiles: Value,
 }
 
+type ActiveCalls = Mutex<BTreeMap<String, (CallerDelegation, Option<CallLease>)>>;
+
 pub(crate) struct Callers {
-    active: Mutex<BTreeMap<String, (CallerDelegation, Option<CallLease>)>>,
+    active: Arc<ActiveCalls>,
     pending_headers: Arc<tokio::sync::Semaphore>,
 }
 
 impl Default for Callers {
     fn default() -> Self {
         Self {
-            active: Mutex::default(),
+            active: Arc::default(),
             pending_headers: Arc::new(tokio::sync::Semaphore::new(64)),
         }
     }
@@ -57,8 +59,13 @@ pub(crate) struct CallerDelegation {
     pub(crate) authorization: Option<String>,
 }
 
-pub(crate) struct Call<'a> {
-    callers: Option<&'a Callers>,
+pub(crate) enum CallParent {
+    Request(BusinessToken),
+    Connection(Arc<ConnectionSlot>),
+}
+
+pub(crate) struct Call {
+    active: Option<(Arc<ActiveCalls>, CallParent)>,
     pub(crate) key: String,
 }
 
@@ -68,9 +75,12 @@ impl Callers {
         caller: Caller,
         authorization: Option<String>,
         lease: Option<CallLease>,
-    ) -> Option<Call<'_>> {
+        parent: impl FnOnce() -> CallParent,
+    ) -> Option<Call> {
         let key = crate::util::random_hex(32).ok()?;
-        self.active.lock().ok()?.insert(
+        let mut calls = self.active.lock().ok()?;
+        let parent = parent();
+        calls.insert(
             key.clone(),
             (
                 CallerDelegation {
@@ -81,7 +91,7 @@ impl Callers {
             ),
         );
         Some(Call {
-            callers: Some(self),
+            active: Some((self.active.clone(), parent)),
             key,
         })
     }
@@ -119,30 +129,30 @@ impl Callers {
     }
 }
 
-impl Call<'_> {
-    /// Callback admission and handoff lock delegations before the admission pool.
-    pub(crate) fn finish_with(&mut self, business: BusinessToken, publish: impl FnOnce()) {
-        let mut calls = self
-            .callers
-            .take()
-            .and_then(|callers| callers.active.lock().ok());
-        let revoked = business.finish_with(|| {
-            let revoked = calls.as_mut().and_then(|calls| calls.remove(&self.key));
+impl Call {
+    pub(crate) fn finish_with(&mut self, publish: impl FnOnce()) {
+        let Some((active, parent)) = self.active.take() else {
+            publish();
+            return;
+        };
+        let mut calls = active.lock().unwrap_or_else(|error| error.into_inner());
+        let handoff = || {
+            let revoked = calls.remove(&self.key);
             publish();
             revoked
-        });
+        };
+        let revoked = match parent {
+            CallParent::Request(business) => business.finish_with(handoff),
+            CallParent::Connection(slot) => slot.with_admission(handoff),
+        };
         drop(calls);
         drop(revoked);
     }
 }
 
-impl Drop for Call<'_> {
+impl Drop for Call {
     fn drop(&mut self) {
-        if let Some(callers) = self.callers
-            && let Ok(mut calls) = callers.active.lock()
-        {
-            calls.remove(&self.key);
-        }
+        self.finish_with(|| ());
     }
 }
 

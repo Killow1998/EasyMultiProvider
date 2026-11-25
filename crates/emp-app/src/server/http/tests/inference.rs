@@ -19,7 +19,7 @@ const CHAT_COMPLETE: &[u8] = br#"{"id":"chat_fixture","model":"upstream-model","
 
 #[test]
 fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests() {
-    use crate::services::modules::aero::CallLease;
+    use crate::services::modules::aero::{CallLease, CallParent};
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     {
@@ -67,6 +67,7 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
                     connection: parent.slot().clone(),
                     work: Arc::new(state.lifecycle.updates().enter().unwrap()),
                 }),
+                || CallParent::Connection(parent.slot().clone()),
             ).unwrap();
             let port = address.port();
             let auth = format!("Authorization: Bearer {}", delegation.key);
@@ -106,7 +107,7 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
 #[cfg(unix)]
 #[test]
 fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
-    use crate::services::modules::aero::CallLease;
+    use crate::services::modules::aero::{CallLease, CallParent};
 
     let (release, released) = mpsc::channel();
     let upstream = OneShotUpstream::serve(1, move |socket| {
@@ -138,6 +139,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
                         connection: parent_permit.slot().clone(),
                         work: Arc::new(updates.enter().unwrap()),
                     }),
+                || CallParent::Connection(parent_permit.slot().clone()),
                 )
                 .unwrap();
             let header_slots = (0..64)

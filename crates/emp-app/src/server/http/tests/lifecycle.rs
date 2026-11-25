@@ -292,7 +292,10 @@ fn wrong_methods_keep_status_before_and_during_update_drain() {
 #[cfg(unix)]
 #[test]
 fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
-    use crate::{server::raw_tcp::RawClient, services::modules::aero::CallLease};
+    use crate::{
+        server::raw_tcp::RawClient,
+        services::modules::aero::{CallLease, CallParent},
+    };
 
     {
         Fixture::new().run_wire(async |fixture, address| {
@@ -310,6 +313,7 @@ fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
                         connection: parent.slot().clone(),
                         work: Arc::new(state.lifecycle.updates().enter().unwrap()),
                     }),
+                    || CallParent::Connection(parent.slot().clone()),
                 )
                 .unwrap();
             let auth = format!("Authorization: Bearer {}", delegation.key);

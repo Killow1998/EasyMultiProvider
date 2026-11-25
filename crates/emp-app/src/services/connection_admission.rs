@@ -343,9 +343,12 @@ impl BusinessToken {
 
     fn release<T>(&mut self, handoff: impl FnOnce() -> T) -> T {
         let slot = self.0.take();
-        if let Some(slot) = &slot
-            && let Ok(mut state) = slot.pool.state.lock()
-        {
+        if let Some(slot) = &slot {
+            let mut state = slot
+                .pool
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             state.working -= 1;
             if state.working == 0 {
                 #[cfg(test)]
@@ -377,6 +380,15 @@ pub(crate) struct ConnectionSlot {
 }
 
 impl ConnectionSlot {
+    pub(in crate::services) fn with_admission<T>(&self, handoff: impl FnOnce() -> T) -> T {
+        let _state = self
+            .pool
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        handoff()
+    }
+
     pub(in crate::services) fn admit_callback(self: &Arc<Self>) -> BusinessToken {
         self.pool
             .state

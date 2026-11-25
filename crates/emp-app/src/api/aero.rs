@@ -5,8 +5,9 @@ use crate::{
     server::http::{error::HttpReply, inference::InferenceOutcome},
     services::{
         disconnect::{DisconnectMonitor, DisconnectRace},
-        events::SseEvents,
-        modules::aero::{Call, Relay},
+        events::SseFrame,
+        gateway_clients::Caller,
+        modules::aero::{CallLease, Relay},
         observation::request::{Phase, RequestObservation},
     },
 };
@@ -40,9 +41,8 @@ impl RelayError {
     }
 }
 
-pub(super) struct Upstream<'a> {
+pub(super) struct Upstream {
     pub(super) response: HttpResponse,
-    caller: Call<'a>,
     _relay: Relay,
 }
 
@@ -67,25 +67,27 @@ pub(crate) fn relay(
     observation: &mut RequestObservation,
     compact: bool,
 ) -> InferenceOutcome {
-    let upstream = downstream
+    let monitor = downstream
         .disconnect()
-        .map_err(|_| RelayError::unavailable())
-        .and_then(|mut monitor| {
-            state
-                .backend
-                .transport
-                .runtime
-                .block_on(open(
-                    state,
-                    config,
-                    body,
-                    (request, incoming),
-                    observation,
-                    compact,
-                    &mut monitor,
-                ))
-                .map(|upstream| (upstream, monitor))
-        });
+        .map_err(|_| RelayError::unavailable());
+    let upstream = monitor.and_then(|mut monitor| {
+        state
+            .backend
+            .transport
+            .runtime
+            .block_on(open(
+                state,
+                config,
+                body,
+                (request, incoming),
+                observation,
+                (compact, |caller, authorization, lease| {
+                    downstream.delegate(&state.backend.aero_callers, caller, authorization, lease)
+                }),
+                &mut monitor,
+            ))
+            .map(|upstream| (upstream, monitor))
+    });
     let (mut upstream, mut monitor) = match upstream {
         Ok(upstream) => upstream,
         Err(RelayError::Disconnected) => return InferenceOutcome::Streamed,
@@ -122,7 +124,7 @@ pub(crate) fn relay(
     {
         return InferenceOutcome::Streamed;
     }
-    let mut parser = sse.then(SseEvents::default);
+    let mut parser = sse.then(|| SseFrame::new(true));
     let mut received = 0_u64;
     loop {
         match state.backend.transport.runtime.block_on(await_module(
@@ -132,22 +134,33 @@ pub(crate) fn relay(
         )) {
             DisconnectRace::Ready(Ok(Some(chunk))) => {
                 received += chunk.len() as u64;
-                let (terminal, events) = parser
-                    .as_mut()
-                    .map(|parser| parser.push(&chunk))
-                    .unwrap_or_default();
+                let mut terminal = false;
+                let mut events = Vec::new();
+                if let Some(parser) = &mut parser {
+                    parser.push(&chunk, |event, data| {
+                        let event = event.filter(|event| event.response_outcome().is_some());
+                        terminal |= event.is_some();
+                        if data.is_some() || event.is_some() {
+                            events.push((data.map(Value::Object), event));
+                        }
+                    });
+                }
                 let chunk = Bytes::from(chunk);
                 let written = if terminal || content_length == Some(received) {
-                    downstream.finish_frame(chunk, Some(&mut upstream.caller))
+                    downstream.finish_frame(chunk)
                 } else {
                     downstream.write_frame(chunk)
                 };
                 if observation.written(written, false).is_err() {
                     break;
                 }
-                for event in events {
-                    let _ = observation
-                        .event_written(&Value::Object(event), Ok::<(), std::io::Error>(()));
+                for (event, outcome) in events {
+                    let _ = observation.sse_event_written(
+                        event.as_ref(),
+                        false,
+                        outcome,
+                        Ok::<(), std::io::Error>(()),
+                    );
                 }
             }
             DisconnectRace::Ready(Ok(None)) => {
@@ -162,15 +175,18 @@ pub(crate) fn relay(
     InferenceOutcome::Streamed
 }
 
-pub(super) async fn open<'a>(
-    state: &'a ServerState,
+pub(super) async fn open(
+    state: &ServerState,
     config: &Value,
     body: &Value,
     (request, incoming): (Request<'_>, &BTreeMap<String, String>),
     observation: &mut RequestObservation,
-    compact: bool,
+    (compact, register): (
+        bool,
+        impl FnOnce(Caller, Option<String>, Option<CallLease>) -> Option<String>,
+    ),
     monitor: &mut DisconnectMonitor,
-) -> Result<Upstream<'a>, RelayError> {
+) -> Result<Upstream, RelayError> {
     observation.diagnostic_only("aero");
     observation.phase(Phase::ValidateInput);
     let anchor =
@@ -224,15 +240,12 @@ pub(super) async fn open<'a>(
             name: String::new(),
         });
     let caller_id = caller.id.clone();
-    let call = state
-        .backend
-        .aero_callers
-        .delegate(
-            caller,
-            request.header("Authorization").map(str::to_owned),
-            request.source.and_then(|source| source.aero_lease.clone()),
-        )
-        .ok_or_else(RelayError::unavailable)?;
+    let caller_key = register(
+        caller,
+        request.header("Authorization").map(str::to_owned),
+        request.source.and_then(|source| source.aero_lease.clone()),
+    )
+    .ok_or_else(RelayError::unavailable)?;
     let mut headers = BTreeMap::from([
         (
             "Authorization".into(),
@@ -240,7 +253,7 @@ pub(super) async fn open<'a>(
         ),
         ("Content-Type".into(), "application/json".into()),
         ("session_id".into(), session.to_owned()),
-        ("X-Aero-Caller-Key".into(), call.key.clone()),
+        ("X-Aero-Caller-Key".into(), caller_key),
         ("X-Aero-Caller-Id".into(), caller_id),
     ]);
     for (key, value) in incoming {
@@ -289,7 +302,6 @@ pub(super) async fn open<'a>(
     }
     Ok(Upstream {
         response,
-        caller: call,
         _relay: endpoint,
     })
 }
