@@ -1,6 +1,7 @@
 use super::{
-    Path, Result, cfg_test, fs,
+    Path, Result, fs,
     test_scope::{Index, SourceKind},
+    visit_macro_attributes,
 };
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::{
@@ -14,68 +15,21 @@ use syn::{
     visit::{self, Visit},
 };
 
-pub(super) fn check_conditional(path: &str, source: &str, errors: &mut Vec<String>) -> Result {
-    if !path.ends_with(".rs") || !source.contains("cfg_attr") || !source.contains("path") {
-        return Ok(());
-    }
-    let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
-    ConditionalPaths { path, errors }.visit_file(&file);
-    Ok(())
-}
-
-struct ConditionalPaths<'a> {
-    path: &'a str,
-    errors: &'a mut Vec<String>,
-}
-
-impl ConditionalPaths<'_> {
-    fn check(&mut self, meta: &Meta, line: usize) {
-        if let Meta::List(list) = meta
-            && list
-                .path
-                .get_ident()
-                .is_some_and(|name| name.unraw() == "cfg_attr")
-            && cfg_attr_sets_path(list.tokens.clone())
-        {
-            self.errors.push(format!(
-                "[conditional-module-path] {}:{line}: 禁止通过 cfg_attr 设置模块的 path；请用 #[cfg(...)] 分别声明两个 mod，或把差异放到同一文件内的 cfg 块中",
-                self.path
-            ));
+fn contains_path_assignment(tokens: TokenStream) -> bool {
+    let mut tokens = tokens.into_iter().peekable();
+    while let Some(token) = tokens.next() {
+        match token {
+            TokenTree::Ident(name)
+                if name.unraw() == "path"
+                    && matches!(tokens.peek(), Some(TokenTree::Punct(eq)) if eq.as_char() == '=') =>
+            {
+                return true;
+            }
+            TokenTree::Group(group) if contains_path_assignment(group.stream()) => return true,
+            _ => {}
         }
     }
-}
-
-impl<'ast> Visit<'ast> for ConditionalPaths<'_> {
-    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        for attr in &item.attrs {
-            self.check(&attr.meta, attr.span().start().line);
-        }
-        visit::visit_item_mod(self, item);
-    }
-
-    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        cfg_test::visit_macro_attributes(invocation.tokens.clone(), &mut |meta, line| {
-            self.check(meta, line);
-        });
-    }
-}
-
-fn cfg_attr_sets_path(tokens: TokenStream) -> bool {
-    let tokens: Vec<_> = tokens.into_iter().collect();
-    tokens
-        .split(|token| matches!(token, TokenTree::Punct(punct) if punct.as_char() == ','))
-        .skip(1)
-        .any(|attr| match attr {
-            [TokenTree::Ident(name), TokenTree::Punct(eq), ..] => {
-                name.unraw() == "path" && eq.as_char() == '='
-            }
-            [TokenTree::Ident(name), TokenTree::Group(group)] => {
-                name.unraw() == "cfg_attr"
-                    && group.delimiter() == Delimiter::Parenthesis
-                    && cfg_attr_sets_path(group.stream())
-            }
-            _ => false,
-        })
+    false
 }
 
 pub(super) fn check<'a>(
@@ -157,7 +111,36 @@ struct ModulePaths<'a, 'source> {
 }
 
 impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
+    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
+        if let Meta::List(list) = &attr.meta
+            && matches!(list.delimiter, syn::MacroDelimiter::Paren(_))
+            && list
+                .path
+                .get_ident()
+                .is_some_and(|name| name.unraw() == "cfg_attr")
+        {
+            self.check_conditional(list.tokens.clone(), attr.span().start().line);
+        }
+        visit::visit_attribute(self, attr);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        visit_macro_attributes(invocation.tokens.clone(), &mut |tokens, line| {
+            let mut tokens = tokens.into_iter();
+            if let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group))) =
+                (tokens.next(), tokens.next())
+                && name.unraw() == "cfg_attr"
+                && group.delimiter() == Delimiter::Parenthesis
+            {
+                self.check_conditional(group.stream(), line);
+            }
+        });
+    }
+
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        for attr in &item.attrs {
+            self.visit_attribute(attr);
+        }
         let kind = self.kind.in_test(&item.attrs);
         let explicit = item.attrs.iter().filter_map(|attr| {
             if let Meta::NameValue(attr) = &attr.meta
@@ -233,6 +216,19 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
 }
 
 impl ModulePaths<'_, '_> {
+    fn check_conditional(&mut self, tokens: TokenStream, line: usize) {
+        if contains_path_assignment(tokens) {
+            let file = self
+                .file
+                .strip_prefix(self.sources.root)
+                .unwrap_or(self.file);
+            self.sources.errors.push(format!(
+                "[conditional-module-path] {}:{line}: 禁止通过 cfg_attr 设置模块的 path；请用 #[cfg(...)] 分别声明两个 mod，或把差异放到同一文件内的 cfg 块中",
+                file.display()
+            ));
+        }
+    }
+
     fn visit_inline(&mut self, directory: &Path, items: &[syn::Item], kind: SourceKind) {
         let mut visitor = ModulePaths {
             sources: self.sources,

@@ -1,8 +1,8 @@
 use super::{
     Path, Result, read,
     test_scope::{self, Index},
+    visit_macro_attributes,
 };
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::collections::BTreeMap;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -193,35 +193,16 @@ impl<'ast> Visit<'ast> for TestCfg<'ast> {
     }
 
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        visit_macro_attributes(invocation.tokens.clone(), &mut |meta, line| {
-            if condition_mentions_test(meta) {
+        visit_macro_attributes(invocation.tokens.clone(), &mut |tokens, line| {
+            if let Ok(meta) = syn::parse2(tokens)
+                && condition_mentions_test(&meta)
+            {
                 self.findings.count += 1;
                 if !self.test_scope {
                     self.findings.non_item_lines.push(line);
                 }
             }
         });
-    }
-}
-
-pub(super) fn visit_macro_attributes(tokens: TokenStream, visit: &mut impl FnMut(&Meta, usize)) {
-    let mut tokens = tokens.into_iter().peekable();
-    while let Some(token) = tokens.next() {
-        match token {
-            TokenTree::Punct(punct) if punct.as_char() == '#' => {
-                tokens.next_if(
-                    |token| matches!(token, TokenTree::Punct(punct) if punct.as_char() == '!'),
-                );
-                if let Some(TokenTree::Group(group)) =
-                    tokens.next_if(|token| matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket))
-                    && let Ok(meta) = syn::parse2::<Meta>(group.stream())
-                {
-                    visit(&meta, punct.span().start().line);
-                }
-            }
-            TokenTree::Group(group) => visit_macro_attributes(group.stream(), visit),
-            _ => {}
-        }
     }
 }
 
