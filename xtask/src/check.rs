@@ -51,6 +51,7 @@ const RULES: &[&str] = &[
     "test-socket-timeouts",
     "test-thread-observations",
     "workflow-cargo-test",
+    "workflow-location",
 ];
 
 pub fn run(args: &[String]) -> Result {
@@ -119,9 +120,15 @@ fn check_files(
         test_boundary(path, &bytes, scopes.integration, errors);
         if prose::includes(path) {
             prose::check(path, &read(root, path)?, errors);
-        } else if path.starts_with(".github/workflows/")
-            && (path.ends_with(".yml") || path.ends_with(".yaml"))
+        } else if let Some(file) = path.strip_prefix(".github/workflows/")
+            && (file.ends_with(".yml") || file.ends_with(".yaml"))
         {
+            if file.contains('/') {
+                errors.push(format!(
+                    "[workflow-location] {path}: 请将子目录中的 YAML 移出 .github/workflows/"
+                ));
+                continue;
+            }
             let contents = read(root, path)?;
             workflows::check(path, &contents, errors);
             ci_profiles::check_references(

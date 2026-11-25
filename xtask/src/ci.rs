@@ -1,7 +1,7 @@
 use crate::{Result, project_root};
 use regex::Regex;
-use std::io::{self, BufRead, BufReader, Write};
-use std::process::{ChildStdout, Command, Stdio};
+use std::io::{self, Read, Write};
+use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
 pub enum Packages {
@@ -91,10 +91,16 @@ pub const PROFILES: &[Profile] = &[
     },
     Profile {
         name: "websocket-native-io",
-        invocations: &[Invocation::new(
-            Packages::Selected(&["emp-transport"]),
-            Targets::Tests(&["websocket_async"]),
-        )],
+        invocations: &[
+            Invocation::new(
+                Packages::Selected(&["emp-transport"]),
+                Targets::Tests(&["websocket_async"]),
+            ),
+            Invocation::lib(
+                &["emp-transport"],
+                "async_reads_keep_partial_frames_and_allow_concurrent_large_write",
+            ),
+        ],
     },
     Profile {
         name: "windows-process-handoff",
@@ -257,7 +263,10 @@ pub fn run(args: &[String]) -> Result {
         let mut child = command
             .spawn()
             .map_err(|error| format!("{description}: {error}"))?;
-        let passed = forward_test_output(child.stdout.take().expect("piped cargo stdout"));
+        let passed = forward_test_output(
+            child.stdout.take().expect("piped cargo stdout"),
+            io::stdout().lock(),
+        );
         let status = child
             .wait()
             .map_err(|error| format!("{description}: {error}"))?;
@@ -271,18 +280,35 @@ pub fn run(args: &[String]) -> Result {
     Ok(())
 }
 
-fn forward_test_output(output: ChildStdout) -> io::Result<usize> {
-    let mut output = BufReader::new(output);
-    let mut stdout = io::stdout().lock();
+fn forward_test_output(mut output: impl Read, mut stdout: impl Write) -> io::Result<usize> {
+    let mut buffer = [0; 8192];
     let mut passed = 0;
     let mut line = Vec::new();
-    while output.read_until(b'\n', &mut line)? != 0 {
-        stdout.write_all(&line)?;
+    loop {
+        let read = match output.read(&mut buffer) {
+            Ok(0) => return Ok(count_passed(passed, &line)),
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        let chunk = &buffer[..read];
+        stdout.write_all(chunk)?;
         stdout.flush()?;
-        passed = count_passed(passed, &line);
-        line.clear();
+
+        for part in chunk.split_inclusive(|&byte| byte == b'\n') {
+            if let Some(end) = part.strip_suffix(b"\n") {
+                if line.is_empty() {
+                    passed = count_passed(passed, end);
+                } else {
+                    line.extend_from_slice(end);
+                    passed = count_passed(passed, &line);
+                    line.clear();
+                }
+            } else {
+                line.extend_from_slice(part);
+            }
+        }
     }
-    Ok(passed)
 }
 
 fn count_passed(passed: usize, line: &[u8]) -> usize {
@@ -302,6 +328,16 @@ fn count_passed(passed: usize, line: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_a_summary_split_across_reads() {
+        let first = b"running 2 tests\ntest result: ok. 2 ";
+        let second = b"passed; 0 failed; 0 ignored\n";
+        let mut forwarded = Vec::new();
+        let passed = forward_test_output(first.as_slice().chain(second.as_slice()), &mut forwarded);
+        assert_eq!(passed.unwrap(), 2);
+        assert_eq!(forwarded, [first.as_slice(), second.as_slice()].concat());
+    }
 
     #[test]
     fn sums_passed_tests_across_binaries() {

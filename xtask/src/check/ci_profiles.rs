@@ -4,6 +4,13 @@ use regex::Regex;
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
+fn valid_profile_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 pub(super) fn check_references(
     path: &str,
     contents: &str,
@@ -12,12 +19,20 @@ pub(super) fn check_references(
     errors: &mut Vec<String>,
 ) {
     static CI_PROFILE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"\bxtask\s+ci\s+([^\s"';&|()<>]+)"#).expect("CI profile workflow pattern")
+        Regex::new(r"\bxtask\s+ci(?:\s+([^\s;&|()<>]+)?|[;&|()<>]|$)")
+            .expect("CI profile workflow pattern")
     });
     for (index, line) in contents.lines().enumerate() {
         let code = line.split_once('#').map_or(line, |(code, _)| code);
         for capture in CI_PROFILE.captures_iter(code) {
-            let name = &capture[1];
+            let name = capture.get(1).map_or("", |name| name.as_str());
+            if !valid_profile_name(name) {
+                errors.push(format!(
+                    "[ci-profiles] {path}:{}: profile 名不加引号，使用 [a-z0-9-]+",
+                    index + 1
+                ));
+                continue;
+            }
             if let Some(profile) = profiles.iter().find(|profile| profile.name == name) {
                 referenced.insert(profile.name);
             } else {
@@ -36,8 +51,18 @@ pub(super) fn check_profiles(
     referenced: &BTreeSet<&str>,
     errors: &mut Vec<String>,
 ) {
+    let mut names = BTreeSet::new();
     for profile in profiles {
         let location = format!("[ci-profiles] xtask/src/ci.rs: {}", profile.name);
+        if !valid_profile_name(profile.name) {
+            errors.push(format!("{location}: profile 名必须符合 [a-z0-9-]+"));
+        }
+        if !names.insert(profile.name) {
+            errors.push(format!("{location}: profile 名重复"));
+        }
+        if profile.invocations.is_empty() {
+            errors.push(format!("{location}: profile 至少需要一条测试调用"));
+        }
         if !referenced.contains(profile.name) {
             errors.push(format!("{location}: 没有工作流引用此 profile"));
         }
@@ -81,13 +106,82 @@ mod tests {
     use super::*;
     use crate::ci::Invocation;
 
-    const PROFILES: &[Profile] = &[Profile {
+    const HTTP_PROFILE: Profile = Profile {
         name: "verify-http",
         invocations: &[Invocation::new(
             Packages::Selected(&["emp-transport"]),
             Targets::Tests(&["http_client"]),
         )],
-    }];
+    };
+    const PROFILES: &[Profile] = &[HTTP_PROFILE];
+
+    #[test]
+    fn rejects_empty_invocations() {
+        let mut errors = Vec::new();
+        let profiles = [Profile {
+            invocations: &[],
+            ..HTTP_PROFILE
+        }];
+        check_profiles(
+            &profiles,
+            &TestTargets::new(),
+            &["verify-http"].into(),
+            &mut errors,
+        );
+        assert_eq!(
+            errors,
+            ["[ci-profiles] xtask/src/ci.rs: verify-http: profile 至少需要一条测试调用"]
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_profile_names() {
+        let mut errors = Vec::new();
+        let targets = [("emp-transport".into(), ["http_client".into()].into())].into();
+        check_profiles(
+            &[HTTP_PROFILE, HTTP_PROFILE],
+            &targets,
+            &["verify-http"].into(),
+            &mut errors,
+        );
+        assert_eq!(
+            errors,
+            ["[ci-profiles] xtask/src/ci.rs: verify-http: profile 名重复"]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_profile_names() {
+        let mut errors = Vec::new();
+        let targets = [("emp-transport".into(), ["http_client".into()].into())].into();
+        let profiles = [Profile {
+            name: "Verify_HTTP",
+            ..HTTP_PROFILE
+        }];
+        check_profiles(&profiles, &targets, &["Verify_HTTP"].into(), &mut errors);
+        assert_eq!(
+            errors,
+            ["[ci-profiles] xtask/src/ci.rs: Verify_HTTP: profile 名必须符合 [a-z0-9-]+"]
+        );
+    }
+
+    #[test]
+    fn requires_bare_workflow_profile_names() {
+        let mut errors = Vec::new();
+        let mut referenced = BTreeSet::new();
+        check_references(
+            "workflow.yml",
+            "run: cargo xtask ci \"native-tls\"\nrun: cargo xtask ci native-tls",
+            crate::ci::PROFILES,
+            &mut referenced,
+            &mut errors,
+        );
+        assert_eq!(referenced, ["native-tls"].into());
+        assert_eq!(
+            errors,
+            ["[ci-profiles] workflow.yml:1: profile 名不加引号，使用 [a-z0-9-]+"]
+        );
+    }
 
     #[test]
     fn rejects_package_outside_workspace() {

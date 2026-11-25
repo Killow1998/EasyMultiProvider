@@ -1,9 +1,6 @@
 //! These text rules catch accidental CI changes. YAML and Actions semantics belong to actionlint.
 //! Shell syntax, heredocs and deliberate indirection are outside this check's scope.
 
-use regex::Regex;
-use std::sync::LazyLock;
-
 const ALLOWED: &[(&str, &str)] = &[(
     ".github/workflows/module-e2e.yml",
     "M04 验收真实 Aero 包；Python 仅用于安装 PyInstaller 和打包，场景由 Rust 执行",
@@ -31,20 +28,12 @@ fn check_python(path: &str, contents: &str, errors: &mut Vec<String>) {
 }
 
 pub(super) fn check(path: &str, contents: &str, errors: &mut Vec<String>) {
-    static CARGO_TEST: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r#"(?x)
-            \bcargo (?:\s+\+\S+)?
-            (?:\s+(?: (?:--color|--config|-C|-Z)\s+\S+ | -\S+ ))*
-            \s+(?:test|nextest)(?:$|[\s"';&|()<>])
-            "#,
-        )
-        .expect("cargo test workflow pattern")
-    });
     check_python(path, contents, errors);
     for (index, line) in contents.lines().enumerate() {
         let code = line.split_once('#').map_or(line, |(code, _)| code);
-        if CARGO_TEST.is_match(code) {
+        let mut words = code.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
+        if words.any(|word| word == "cargo") && words.any(|word| matches!(word, "test" | "nextest"))
+        {
             errors.push(format!(
                 "[workflow-cargo-test] {path}:{}: 把测试调用加到 xtask/src/ci.rs 的 profile，工作流改用 cargo xtask ci <profile>",
                 index + 1
@@ -65,6 +54,7 @@ mod tests {
             "run: cargo +1.93.1 test --locked",
             "run: cargo nextest run",
             "if ! cargo --color always --locked test; then",
+            "run: cargo --config 'net.retry = 3' test --locked",
         ] {
             let mut errors = Vec::new();
             check("workflow.yml", &format!("steps:\n{command}"), &mut errors);
@@ -78,7 +68,7 @@ mod tests {
         let mut errors = Vec::new();
         check(
             "workflow.yml",
-            "run: cargo xtask ci foo\nrun: cargo build\nrun: cargo clippy # cargo test",
+            "run: cargo xtask ci tray-actions\nrun: cargo build --bins\nrun: cargo clippy # cargo test",
             &mut errors,
         );
         assert!(errors.is_empty(), "{errors:?}");
