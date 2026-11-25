@@ -17,7 +17,10 @@ pub(super) fn initialize(connection: &Connection) -> Result<()> {
             scope TEXT NOT NULL, event_id TEXT NOT NULL, payload TEXT NOT NULL,
             PRIMARY KEY(scope,event_id));
         CREATE INDEX IF NOT EXISTS call_period ON call_records(started_at);
-        CREATE INDEX IF NOT EXISTS call_session ON call_records(session_id);",
+        CREATE INDEX IF NOT EXISTS call_session ON call_records(session_id);
+        CREATE INDEX IF NOT EXISTS call_recovery_from
+            ON call_records(operation, CAST(CASE WHEN json_valid(facts)
+                THEN json_extract(facts,'$.continuation_recovery_from') END AS TEXT));",
     )?;
     Ok(())
 }
@@ -28,8 +31,10 @@ pub(super) fn restore_memory_usage(
 ) -> Result<()> {
     let missing = rows(connection, "SELECT facts,finished_at FROM call_records c
         WHERE operation IN ('memory_extraction','memory_consolidation')
-        AND json_type(facts,'$.usage_event_id')='text'
-        AND NOT EXISTS(SELECT 1 FROM usage_events u WHERE u.id=json_extract(c.facts,'$.usage_event_id'))", &[])?;
+        AND CASE WHEN json_valid(facts) THEN
+            json_type(facts,'$.usage_event_id')='text'
+            AND NOT EXISTS(SELECT 1 FROM usage_events u WHERE u.id=json_extract(c.facts,'$.usage_event_id'))
+        END", &[])?;
     let transaction = connection.transaction()?;
     for record in missing {
         let mut event: Value = serde_json::from_str(record["facts"].as_str().ok_or(UsageError)?)
@@ -313,7 +318,13 @@ impl UsageLedger {
             VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id,operation) DO UPDATE SET
             started_at=excluded.started_at,finished_at=excluded.finished_at,provider_id=excluded.provider_id,
             account_id=excluded.account_id,model_id=excluded.model_id,session_id=excluded.session_id,
-            state=excluded.state,facts=excluded.facts", params![id, operation,
+            state=excluded.state,facts=CASE
+                WHEN NOT json_valid(call_records.facts) OR NOT json_valid(excluded.facts) THEN excluded.facts
+                WHEN json_type(excluded.facts,'$.continuation_recovery_from') IS NULL
+                 AND json_type(call_records.facts,'$.continuation_recovery_from') IS NOT NULL
+                THEN json_set(excluded.facts,'$.continuation_recovery_from',
+                              call_records.facts -> '$.continuation_recovery_from')
+                ELSE excluded.facts END", params![id, operation,
             started, finished, text(event,"provider_id",""), text(event,"account_id",""),
             text(event,"model_id",""), &session, state, record.to_string()])?;
         if let Some((scope, share)) = team {

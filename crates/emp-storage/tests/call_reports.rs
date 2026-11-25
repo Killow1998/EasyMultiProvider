@@ -39,15 +39,26 @@ fn completed_history_recovery_links_its_rejection_without_double_counting_usage(
             )
             .unwrap();
     }
-    ledger
-        .record_call(
-            &json!({"request_id":"retried","route":"responses","model_id":"demo/model",
+    let retry = json!({"request_id":"retried","route":"responses","model_id":"demo/model",
         "success":true,"status":200,"attempts":1,"input_tokens":100,"output_tokens":5,
-        "continuation_recovery_from":"rejected"}),
-            10.1,
-            11.0,
+        "continuation_recovery_from":"rejected"});
+    ledger.record_call(&retry, 10.1, 11.0).unwrap();
+    let mut rewritten = retry;
+    rewritten
+        .as_object_mut()
+        .unwrap()
+        .remove("continuation_recovery_from");
+    ledger.record_call(&rewritten, 10.1, 11.0).unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    let saved_link: String = db
+        .query_row(
+            "SELECT json_extract(facts,'$.continuation_recovery_from') FROM call_records
+             WHERE request_id='retried' AND operation='responses'",
+            [],
+            |row| row.get(0),
         )
         .unwrap();
+    assert_eq!(saved_link, "rejected");
     drop(ledger);
     let ledger = UsageLedger::new(path, prices);
     let report = ledger.query_calls(&filter()).unwrap();
@@ -78,6 +89,112 @@ fn completed_history_recovery_links_its_rejection_without_double_counting_usage(
             .unwrap()["continuation_recovery_from"],
         "rejected"
     );
+
+    rewritten["continuation_recovery_from"] = json!("unrelated");
+    ledger.record_call(&rewritten, 10.1, 11.0).unwrap();
+    let report = ledger.query_calls(&filter()).unwrap();
+    let records = report["records"].as_array().unwrap();
+    for (id, expected) in [("rejected", Value::Null), ("unrelated", json!("retried"))] {
+        let row = records.iter().find(|row| row["request_id"] == id).unwrap();
+        assert_eq!(row["recovery_request_id"], expected, "{id}");
+    }
+}
+
+#[test]
+fn upgrading_call_receipts_indexes_recovery_without_changing_reports() {
+    let root = emp_test_support::fixture_dir().unwrap();
+    let path = root.path().join("usage.sqlite3");
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    let ledger = UsageLedger::new(path.clone(), Arc::clone(&prices));
+    for id in ["rejected", "legacy"] {
+        ledger
+            .record_call(
+                &json!({"request_id":id,"route":"responses","error_code":"previous_response_not_found"}),
+                10.0,
+                11.0,
+            )
+            .unwrap();
+    }
+    ledger
+        .record_call(
+            &json!({"request_id":"retried","route":"responses","success":true,
+                "continuation_recovery_from":"rejected"}),
+            20.0,
+            21.0,
+        )
+        .unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "DROP INDEX IF EXISTS call_recovery_from;
+         UPDATE call_records SET facts=json_set(facts,'$.recovery_request_id','legacy-retry')
+         WHERE request_id='legacy' AND operation='responses';",
+    )
+    .unwrap();
+    let filter = CallFilter {
+        end: 20.0,
+        ..filter()
+    };
+    let before = ledger.query_calls(&filter).unwrap();
+    assert_eq!(before["total"], 2);
+    assert_eq!(before["records"][0]["recovery_request_id"], "retried");
+    assert_eq!(before["records"][1]["recovery_request_id"], "legacy-retry");
+
+    drop(ledger);
+    let upgraded = UsageLedger::new(path, prices);
+    assert_eq!(upgraded.query_calls(&filter).unwrap(), before);
+    db.execute_batch(
+        "CREATE TEMP TABLE report_calls AS SELECT * FROM main.call_records WHERE started_at<20",
+    )
+    .unwrap();
+    let plan = db
+        .prepare(&format!(
+            "EXPLAIN QUERY PLAN {}",
+            include_str!("../src/usage/ledger/calls/report_page.sql")
+        ))
+        .unwrap()
+        .query_map([50, 0], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        plan.iter().any(|step| step
+            .contains("SEARCH retry USING INDEX call_recovery_from (operation=? AND <expr>=?)")),
+        "{plan:?}"
+    );
+}
+
+#[test]
+fn upgrading_call_receipts_keeps_malformed_facts_reportable_as_an_error() {
+    let root = emp_test_support::fixture_dir().unwrap();
+    let path = root.path().join("usage.sqlite3");
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    let ledger = UsageLedger::new(path.clone(), Arc::clone(&prices));
+    let event = json!({"request_id":"legacy","route":"memory_extraction","success":true,
+        "thread_id":"legacy-session"});
+    ledger.record_call(&event, 10.0, 11.0).unwrap();
+    let filter = filter();
+    let healthy = ledger.query_calls(&filter).unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "DROP INDEX IF EXISTS call_recovery_from;
+         UPDATE call_records SET facts='invalid JSON' WHERE request_id='legacy';",
+    )
+    .unwrap();
+    assert!(ledger.query_calls(&filter).is_err());
+    drop(ledger);
+
+    let upgraded = UsageLedger::new(path, prices);
+    assert!(upgraded.query_calls(&filter).is_err());
+    assert!(
+        db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='index' AND name='call_recovery_from')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap()
+    );
+    upgraded.record_call(&event, 10.0, 11.0).unwrap();
+    assert_eq!(upgraded.query_calls(&filter).unwrap(), healthy);
 }
 
 #[test]

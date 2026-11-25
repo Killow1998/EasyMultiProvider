@@ -16,9 +16,11 @@ pub(super) fn initialize(connection: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS usage_session ON usage_sessions(session_id,event_id);
          INSERT OR IGNORE INTO usage_sessions
          SELECT json_extract(facts,'$.usage_event_id'),session_id FROM call_records
-         WHERE json_type(facts,'$.usage_event_id')='text'
-           AND length(json_extract(facts,'$.usage_event_id')) BETWEEN 1 AND 256
-           AND length(session_id) BETWEEN 1 AND 256;",
+         WHERE length(session_id) BETWEEN 1 AND 256
+           AND CASE WHEN json_valid(facts) THEN
+               json_type(facts,'$.usage_event_id')='text'
+               AND length(json_extract(facts,'$.usage_event_id')) BETWEEN 1 AND 256
+           END;",
     )?;
     Ok(())
 }

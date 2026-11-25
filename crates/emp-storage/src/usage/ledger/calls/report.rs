@@ -199,25 +199,7 @@ fn query(
         SqlValue::Integer(filter.limit as i64),
         SqlValue::Integer(filter.offset.min(i64::MAX as usize) as i64),
     ];
-    let mut statement = connection.prepare(&format!(
-        "WITH page AS MATERIALIZED (
-            SELECT * FROM {calls} ORDER BY started_at DESC,request_id DESC,operation LIMIT ? OFFSET ?
-        ), recoveries AS (
-            SELECT page.request_id AS rejected_id, page.operation, retry.request_id,
-                ROW_NUMBER() OVER (PARTITION BY page.request_id,page.operation
-                                   ORDER BY retry.finished_at DESC,retry.request_id DESC) AS rank
-            FROM main.call_records AS retry JOIN page ON retry.operation=page.operation
-              AND json_extract(retry.facts,'$.continuation_recovery_from')=page.request_id
-            WHERE retry.state='completed' AND page.state='recovery_required'
-        )
-        SELECT json(page.facts),page.delivery,
-            (SELECT json_object('cost_nanos',cost_nanos,'price_issue',price_issue,'price_key',price_key)
-             FROM accounted_usage WHERE id=json_extract(page.facts,'$.usage_event_id') LIMIT 1),
-            page.state,recoveries.request_id
-        FROM page LEFT JOIN recoveries ON recoveries.rejected_id=page.request_id
-          AND recoveries.operation=page.operation AND recoveries.rank=1
-        ORDER BY page.started_at DESC,page.request_id DESC,page.operation"
-    ))?;
+    let mut statement = connection.prepare(include_str!("report_page.sql"))?;
     let records = statement
         .query_map(params_from_iter(args), |row| {
             Ok((
