@@ -117,9 +117,7 @@ impl Callers {
         key: &str,
         hooks: &ServerHooks,
     ) -> Option<(CallerDelegation, Option<CallbackLease>)> {
-        let calls = hooks
-            .lock_callback_delegations(&self.active, || self.active.lock())
-            .ok()?;
+        let calls = hooks.lock_callback_delegations(&self.active).ok()?;
         let (identity, lease) = calls.get(key)?;
         Some((
             identity.clone(),

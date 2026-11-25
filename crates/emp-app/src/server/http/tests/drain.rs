@@ -849,8 +849,7 @@ fn drain_aero_sse_eof_before_last_flush() {
     );
 }
 
-#[cfg(unix)]
-async fn assert_aero_prefix(client: &mut TcpStream, prefix: &[u8]) {
+async fn assert_stream_prefix(client: &mut TcpStream, prefix: &[u8]) {
     use tokio::io::{AsyncBufReadExt, BufReader};
     timeout(wire_timeout(), async {
         let mut client = BufReader::new(client);
@@ -916,7 +915,7 @@ fn aero_last_flush(content_type: &'static str, prefix: &'static [u8], last: &'st
             .await;
             assert!(client.head.starts_with("HTTP/1.1 200 OK\r\n"));
             assert_eq!(upstream.observed().0, "/v1/responses");
-            assert_aero_prefix(&mut client.io, prefix).await;
+            assert_stream_prefix(&mut client.io, prefix).await;
             prefix_read.store(true, Ordering::Release);
             assert!(fixture.server.state.lifecycle.admission.has_business_work());
             Work::new(probe, client.io, Some(release), 200, "")
@@ -955,7 +954,7 @@ fn drain_aero_sse_terminal_without_eof_at_deadline_stops_server() {
             let probe = Probe::arm(fixture, "/v1/responses", None);
             let mut client =
                 RawClient::request(fixture.server.local_addr(), &aero_request(fixture, true)).await;
-            assert_aero_prefix(&mut client.io, terminal).await;
+            assert_stream_prefix(&mut client.io, terminal).await;
             assert!(fixture.server.state.lifecycle.admission.has_business_work());
             Work::new(probe, client.io, Some(close), 200, "").await
         },
@@ -1033,6 +1032,234 @@ fn drain_native_and_aero_preserve_sse_bytes_and_json_diagnostics() {
 }
 
 #[cfg(unix)]
+const NATIVE_DELTA: &[u8] =
+    b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n";
+#[cfg(unix)]
+const FAILED_EVENT: &[u8] =
+    b"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"origin\":\"emp\",\"code\":\"fixture_failure\",\"message\":\"private failure\"}}}\n\n";
+
+#[cfg(unix)]
+fn wait_for_diagnostic(fixture: &Fixture, id: &str, name: &str, matches: impl Fn(&Value) -> bool) {
+    let deadline = Deadline::after(wire_timeout());
+    crate::tests::wait_for(&deadline, || {
+        crate::tests::live_journal_until(fixture.directory.path(), &deadline)
+            .iter()
+            .any(|row| {
+                row["event"] == name && row["fields"]["request_id"] == id && matches(&row["fields"])
+            })
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_native_accounts_for_a_read_terminal_before_previous_frame_flush() {
+    use super::inference::{fixture, upstream_reply};
+    use crate::tests::OneShotUpstream;
+
+    let terminal = b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\n";
+    let (send_terminal, ready) = oneshot::channel();
+    let mut ready = Some(ready);
+    let upstream = OneShotUpstream::serve(1, move |socket| {
+        upstream_reply(
+            socket,
+            200,
+            "text/event-stream",
+            NATIVE_DELTA.len() + terminal.len(),
+            "",
+        );
+        socket.write_all(NATIVE_DELTA).unwrap();
+        if ready.take().unwrap().blocking_recv().is_ok() {
+            socket.write_all(terminal).unwrap();
+        }
+    });
+    fixture(&upstream.base_url()).run_wire(async move |fixture, address| {
+        let probe = Probe::arm(
+            fixture,
+            "/v1/responses",
+            Some(WriteTrigger::Frame(Box::new(|frame| frame == NATIVE_DELTA))),
+        );
+        let wire = json_request(
+            fixture.port(),
+            "/v1/responses",
+            &[&fixture.session(), "Authorization: Bearer caller"],
+            br#"{"model":"native/alias","stream":true,"input":"fixture"}"#,
+        );
+        let client = RawClient::request(address, &wire).await;
+        let (reached, hold_write) = probe.write.unwrap();
+        assert_eq!(
+            receive(reached, "paused upstream delta write")
+                .await
+                .as_deref(),
+            Some(NATIVE_DELTA)
+        );
+        let id = receive(probe.id, "request ID").await;
+        send_terminal.send(()).unwrap();
+        wait_for_diagnostic(fixture, &id, "route_observation", |fields| {
+            fields["terminal_event_observed"] == true
+        });
+        client.io.set_zero_linger().unwrap();
+        drop(client);
+        drop(hold_write);
+        wait_for_diagnostic(fixture, &id, "request_finished", |fields| {
+            fields["delivery"] == "write_failed"
+                && fields["terminal_written"] == false
+                && fields["writes_completed"] == 1
+        });
+
+        let db = rusqlite::Connection::open(fixture.directory.path().join("state/usage.sqlite3"))
+            .unwrap();
+        let (facts, delivery): (String, String) = db
+            .query_row(
+                "SELECT facts,delivery FROM call_records WHERE request_id = ?",
+                [&id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let facts: Value = serde_json::from_str(&facts).unwrap();
+        let delivery: Value = serde_json::from_str(&delivery).unwrap();
+        assert_eq!(facts["input_tokens"], 3);
+        assert_eq!(facts["output_tokens"], 2);
+        assert_eq!(facts["response_status"], "completed");
+        assert_eq!(delivery["delivery"], "write_failed");
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_aero_resumes_diagnostics_after_malformed_sse_chunk() {
+    use super::inference::{fixture_directory, upstream_reply};
+    use crate::tests::OneShotUpstream;
+
+    let malformed = b"event: response.failed\ndata: broken-json\n\n";
+    let (send_next, next) = oneshot::channel();
+    let mut next = Some(next);
+    let upstream = OneShotUpstream::serve(1, move |socket| {
+        upstream_reply(
+            socket,
+            200,
+            "text/event-stream",
+            malformed.len() + FAILED_EVENT.len(),
+            "",
+        );
+        socket.write_all(malformed).unwrap();
+        if next.take().unwrap().blocking_recv().is_ok() {
+            socket.write_all(FAILED_EVENT).unwrap();
+        }
+    });
+    let directory = fixture_directory("http://127.0.0.1:1/v1");
+    install_aero_fixture(directory.path(), &upstream.base_url());
+    Fixture::with_directory(directory).run_wire(async move |fixture, address| {
+        let probe = Probe::arm(fixture, "/v1/responses", None);
+        let mut client = RawClient::request(address, &aero_request(fixture, true)).await;
+        assert_stream_prefix(&mut client.io, malformed).await;
+        send_next.send(()).unwrap();
+        assert_stream_prefix(&mut client.io, FAILED_EVENT).await;
+        assert_eq!(
+            client.rest(&Deadline::after(wire_timeout())).await,
+            b"0\r\n\r\n"
+        );
+        let id = receive(probe.id, "request ID").await;
+        wait_for_diagnostic(fixture, &id, "request_finished", |fields| {
+            fields["downstream_terminal"] == "failed"
+        });
+        let journal = fixture.flushed_journal().await;
+        let failures = journal
+            .iter()
+            .filter(|row| row["event"] == "response_error" && row["fields"]["request_id"] == id)
+            .collect::<Vec<_>>();
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0]["fields"]["error_code"], "fixture_failure");
+        assert_eq!(failures[0]["fields"]["delivered"], true);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_native_and_aero_publish_error_at_flush_while_producer_is_held() {
+    use super::inference::{SseClient, fixture_directory};
+    use crate::tests::OneShotUpstream;
+
+    for aero in [false, true] {
+        let (close_upstream, keep_open) = oneshot::channel::<()>();
+        let mut keep_open = Some(keep_open);
+        let upstream = OneShotUpstream::serve(1, move |socket| {
+            socket.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            ).unwrap();
+            socket.write_all(NATIVE_DELTA).unwrap();
+            socket.write_all(FAILED_EVENT).unwrap();
+            let _ = keep_open.take().unwrap().blocking_recv();
+        });
+        let directory = fixture_directory(&upstream.base_url());
+        if aero {
+            install_aero_fixture(directory.path(), &upstream.base_url());
+        }
+        Fixture::with_directory(directory).run_wire(async move |fixture, address| {
+            let (entered, at_handoff) = oneshot::channel();
+            let (resume, wait) = oneshot::channel::<()>();
+            if !aero {
+                *fixture
+                    .server
+                    .state
+                    .lifecycle
+                    .test_hooks
+                    .on_stream_handoff
+                    .lock()
+                    .unwrap() = Some(Box::new(move || {
+                    let _ = entered.send(());
+                    let _ = wait.blocking_recv();
+                }));
+            }
+            let probe = Probe::arm(fixture, "/v1/responses", None);
+            let wire = if aero {
+                aero_request(fixture, true)
+            } else {
+                json_request(
+                    fixture.port(),
+                    "/v1/responses",
+                    &[&fixture.session(), "Authorization: Bearer caller"],
+                    br#"{"model":"native/alias","stream":true,"input":"fixture"}"#,
+                )
+            };
+            let mut client = SseClient::from_raw(RawClient::request(address, &wire).await);
+            timeout(wire_timeout(), async {
+                while client.next().await.expect("failure frame")["type"] != "response.failed" {}
+            })
+            .await
+            .unwrap();
+            if !aero {
+                receive(at_handoff, "native producer paused at business handoff").await;
+            }
+            let id = receive(probe.id, "request ID").await;
+            let origin = if aero { "emp" } else { "upstream" };
+            wait_for_diagnostic(fixture, &id, "response_error", |fields| {
+                fields["error_origin"] == origin
+                    && fields["error_code"] == "fixture_failure"
+                    && fields["phase"] == "execute_and_relay"
+                    && fields["delivered"] == true
+            });
+            drop(resume);
+            close_upstream.send(()).unwrap();
+            timeout(wire_timeout(), async {
+                while client.next().await.is_some() {}
+            })
+            .await
+            .unwrap();
+            let journal = fixture.flushed_journal().await;
+            assert_eq!(
+                journal
+                    .iter()
+                    .filter(
+                        |row| row["event"] == "response_error" && row["fields"]["request_id"] == id
+                    )
+                    .count(),
+                1
+            );
+        });
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn drain_aero_revokes_delegation_at_eof_handoff() {
     use super::inference::{STREAM_REQUEST, fixture_directory};
@@ -1066,7 +1293,7 @@ fn drain_aero_revokes_delegation_at_eof_handoff() {
         let state = &fixture.server.state;
         let control = &state.lifecycle;
         let mut parent = RawClient::request(address, &aero_request(fixture, false)).await;
-        assert_aero_prefix(&mut parent.io, response).await;
+        assert_stream_prefix(&mut parent.io, response).await;
         let (_, headers, _) = aero.observed();
         let key = &headers["x-aero-caller-key"];
         let authorization = format!("Authorization: Bearer {key}");
@@ -1338,7 +1565,7 @@ fn report_case(path: &'static str, query: &str, phase: Phase, via_quit: bool, br
             }),
         );
         let progress = (!broken_facts).then(|| report_gate(fixture));
-        let client = RawClient::request(
+        let mut client = RawClient::request(
             fixture.server.local_addr(),
             &request(
                 fixture.port(),
@@ -1356,10 +1583,17 @@ fn report_case(path: &'static str, query: &str, phase: Phase, via_quit: bool, br
         );
         let release = if let Some((reached, release)) = progress {
             assert!(
-                !receive(reached, "report progress frame flushed")
+                !receive(reached, "report query paused after queueing progress")
                     .await
                     .load(Ordering::Acquire)
             );
+            let total = if path == "/api/calls" { 4 } else { 1 };
+            let first = crate::services::events::sse_frame(
+                "progress",
+                &json!({"completed":0,"total":total}),
+            )
+            .unwrap();
+            assert_stream_prefix(&mut client.io, &first).await;
             Some(release)
         } else {
             None

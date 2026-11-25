@@ -6,7 +6,7 @@ use emp_context::HistoryError;
 use emp_domain::ResolvedRoute;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[derive(Clone, Copy)]
@@ -37,7 +37,6 @@ impl Phase {
 struct EventError {
     origin: &'static str,
     code: String,
-    phase: Phase,
 }
 
 struct EventDelivery {
@@ -45,8 +44,125 @@ struct EventDelivery {
     terminal: Option<&'static str>,
 }
 
-pub(crate) struct RequestObservation {
+impl EventDelivery {
+    fn new(event: Option<&Value>, event_type: &str, upstream: bool) -> Self {
+        Self {
+            error: event.and_then(|event| EventError::from_event(event, upstream)),
+            terminal: terminal_outcome(event_type),
+        }
+    }
+}
+
+#[derive(Default)]
+struct DeliveryFacts {
+    writes_completed: u64,
+    write_failed: bool,
+    terminal_written: bool,
+    downstream_terminal: Option<&'static str>,
+    error_origin: Option<&'static str>,
+    error_code: Option<String>,
+}
+
+impl DeliveryFacts {
+    fn written(&mut self, delivered: bool, terminal: bool) {
+        if delivered {
+            self.writes_completed = self.writes_completed.saturating_add(1);
+            self.terminal_written |= terminal;
+        } else {
+            self.write_failed = true;
+        }
+    }
+}
+
+struct RequestDelivery {
     diagnostics: Arc<Diagnostics>,
+    request_id: Value,
+    connection_id: Value,
+    facts: Mutex<DeliveryFacts>,
+}
+
+impl RequestDelivery {
+    fn event_error(
+        &self,
+        facts: &mut DeliveryFacts,
+        error: EventError,
+        phase: Phase,
+        delivered: bool,
+    ) {
+        self.diagnostics.journal.event(
+            "warning",
+            "response_error",
+            &json!({
+                "request_id":self.request_id, "connection_id":self.connection_id,
+                "phase":phase.name(), "error_origin":error.origin, "error_code":error.code,
+                "delivered":delivered,
+            }),
+        );
+        facts.error_origin = Some(error.origin);
+        facts.error_code = Some(error.code);
+    }
+
+    fn event(
+        &self,
+        facts: &mut DeliveryFacts,
+        event: EventDelivery,
+        phase: Phase,
+        delivered: bool,
+    ) {
+        if let Some(error) = event.error {
+            self.event_error(facts, error, phase, delivered);
+        }
+        if delivered && event.terminal.is_some() {
+            facts.downstream_terminal = event.terminal;
+        }
+        facts.written(delivered, event.terminal.is_some());
+    }
+}
+
+enum FrameEvents {
+    Event(EventDelivery),
+    AeroChunk(Vec<EventDelivery>),
+}
+
+pub(crate) struct FrameDiagnostics {
+    delivery: Arc<RequestDelivery>,
+    phase: Phase,
+    events: Option<FrameEvents>,
+}
+
+impl FrameDiagnostics {
+    pub(crate) fn flushed(mut self) {
+        self.settle(true);
+    }
+
+    fn settle(&mut self, delivered: bool) {
+        let Some(events) = self.events.take() else {
+            return;
+        };
+        let mut facts = self.delivery.facts.lock().expect("request delivery");
+        match events {
+            FrameEvents::Event(event) => self
+                .delivery
+                .event(&mut facts, event, self.phase, delivered),
+            FrameEvents::AeroChunk(events) => {
+                facts.written(delivered, false);
+                for event in events {
+                    self.delivery
+                        .event(&mut facts, event, self.phase, delivered);
+                }
+            }
+        }
+    }
+}
+
+impl Drop for FrameDiagnostics {
+    fn drop(&mut self) {
+        self.settle(false);
+    }
+}
+
+pub(crate) struct RequestObservation {
+    delivery: Arc<RequestDelivery>,
     errors: crate::services::error_presentation::ErrorPresentation,
     ledger: Option<Arc<emp_state::usage::ledger::UsageLedger>>,
     reports_changed: Option<Arc<crate::services::management_events::ManagementEvents>>,
@@ -55,7 +171,6 @@ pub(crate) struct RequestObservation {
     execution_started: Option<Instant>,
     phase: Phase,
     fields: Value,
-    pending_event: Option<EventDelivery>,
     continuation: Option<super::continuation::NativeContinuation>,
 }
 
@@ -79,7 +194,12 @@ impl RequestObservation {
             .journal
             .event("info", "request_started", &fields);
         Self {
-            diagnostics,
+            delivery: Arc::new(RequestDelivery {
+                diagnostics,
+                request_id: fields["request_id"].clone(),
+                connection_id: fields["connection_id"].clone(),
+                facts: Mutex::default(),
+            }),
             errors: Default::default(),
             ledger: None,
             reports_changed: None,
@@ -88,7 +208,6 @@ impl RequestObservation {
             execution_started: None,
             phase: Phase::Authentication,
             fields,
-            pending_event: None,
             continuation: None,
         }
     }
@@ -148,7 +267,7 @@ impl RequestObservation {
             self.execution_started.get_or_insert(self.phase_started);
         }
         self.phase = phase;
-        self.diagnostics.journal.event(
+        self.delivery.diagnostics.journal.event(
             "info",
             "request_phase_started",
             &json!({
@@ -196,29 +315,35 @@ impl RequestObservation {
 
     pub(crate) fn selected(&mut self, route: &ResolvedRoute) {
         self.errors.select(route);
-        let mut fields = route_fields(route, &self.diagnostics);
+        let mut fields = route_fields(route, &self.delivery.diagnostics);
         self.fields.as_object_mut().unwrap().extend(fields.clone());
         fields.insert("request_id".into(), self.fields["request_id"].clone());
         fields.insert(
             "requested_effort".into(),
             self.fields["requested_effort"].clone(),
         );
-        self.diagnostics
-            .journal
-            .event("info", "request_route_selected", &Value::Object(fields));
+        self.delivery.diagnostics.journal.event(
+            "info",
+            "request_route_selected",
+            &Value::Object(fields),
+        );
     }
 
     /// Record local failure independently of socket delivery; upstream JSON and normal
     /// previous-response fallback never establish a history failure.
     pub(crate) fn history_failed(&mut self, error: &HistoryError) {
-        self.fields["error_origin"] = json!("emp");
+        self.delivery
+            .facts
+            .lock()
+            .expect("request delivery")
+            .error_origin = Some("emp");
         let diagnostic = error.diagnostic();
         let failure = json!({
             "category":diagnostic.category, "reason":diagnostic.reason,
             "phase":self.phase.name(),
         });
         self.fields["history_failure"] = failure;
-        self.diagnostics.journal.event(
+        self.delivery.diagnostics.journal.event(
             "warning",
             "history_reconstruction_failed",
             &json!({
@@ -233,15 +358,11 @@ impl RequestObservation {
 
     /// Preserve control flow and results; a successful local write is no client acknowledgement.
     pub(crate) fn written<T, E>(&mut self, result: Result<T, E>, terminal: bool) -> Result<T, E> {
-        if result.is_ok() {
-            let count = self.fields["writes_completed"].as_u64().unwrap_or(0);
-            self.fields["writes_completed"] = json!(count.saturating_add(1));
-            if terminal {
-                self.fields["terminal_written"] = json!(true);
-            }
-        } else {
-            self.fields["write_failed"] = json!(true);
-        }
+        self.delivery
+            .facts
+            .lock()
+            .expect("request delivery")
+            .written(result.is_ok(), terminal);
         result
     }
 
@@ -250,8 +371,12 @@ impl RequestObservation {
         event: &Value,
         result: Result<T, E>,
     ) -> Result<T, E> {
-        self.record_event_error(event, result.is_ok(), None);
-        self.event_type_written(event["type"].as_str().unwrap_or_default(), result)
+        self.record_event_delivery(
+            Some(event),
+            event["type"].as_str().unwrap_or_default(),
+            false,
+            result,
+        )
     }
 
     pub(crate) fn upstream_event_written<T, E>(
@@ -259,117 +384,106 @@ impl RequestObservation {
         event: &Value,
         result: Result<T, E>,
     ) -> Result<T, E> {
-        self.record_event_error(event, result.is_ok(), Some("upstream"));
-        self.event_type_written(event["type"].as_str().unwrap_or_default(), result)
+        self.record_event_delivery(
+            Some(event),
+            event["type"].as_str().unwrap_or_default(),
+            true,
+            result,
+        )
     }
 
-    pub(crate) fn queue_event(
-        &mut self,
+    pub(crate) fn frame_event(
+        &self,
         event: Option<&Value>,
         event_type: &str,
         upstream: bool,
-        queued: std::io::Result<()>,
-    ) -> std::io::Result<()> {
-        let delivery = EventDelivery {
-            error: event.and_then(|event| self.event_error(event, upstream.then_some("upstream"))),
-            terminal: terminal_outcome(event_type),
-        };
-        assert!(self.pending_event.replace(delivery).is_none());
-        match queued {
-            Ok(()) => Ok(()),
-            Err(error) => self.flush_event(Err(error)),
-        }
-    }
-
-    pub(crate) fn flush_event(&mut self, result: std::io::Result<()>) -> std::io::Result<()> {
-        if let Some(delivery) = self.pending_event.take() {
-            if let Some(error) = delivery.error {
-                self.write_event_error(error, result.is_ok());
-            }
-            return self.record_event_delivery(delivery.terminal, result);
-        }
-        result
-    }
-
-    fn event_error(&self, event: &Value, boundary: Option<&'static str>) -> Option<EventError> {
-        let error = event
-            .get("error")
-            .or_else(|| event.get("response")?.get("error"))?;
-        if !error.is_object() {
-            return None;
-        }
-        let origin = boundary.or_else(|| {
-            let origin = error["origin"].as_str()?;
-            ["emp", "upstream", "transport", "claude_cli", "client"]
-                .into_iter()
-                .find(|&valid| valid == origin)
-        });
-        Some(EventError {
-            origin: origin.unwrap_or("unknown"),
-            code: schema::id(&error["code"]),
+    ) -> FrameDiagnostics {
+        FrameDiagnostics {
+            delivery: self.delivery.clone(),
             phase: self.phase,
-        })
-    }
-
-    fn record_event_error(
-        &mut self,
-        event: &Value,
-        delivered: bool,
-        boundary: Option<&'static str>,
-    ) {
-        if let Some(error) = self.event_error(event, boundary) {
-            self.write_event_error(error, delivered);
+            events: Some(FrameEvents::Event(EventDelivery::new(
+                event, event_type, upstream,
+            ))),
         }
     }
 
-    fn write_event_error(&mut self, error: EventError, delivered: bool) {
-        let EventError {
-            origin,
-            code,
-            phase,
-        } = error;
-        self.fields["error_origin"] = json!(origin);
-        self.fields["error_code"] = json!(code);
-        self.diagnostics.journal.event("warning", "response_error", &json!({
-            "request_id":self.fields["request_id"], "connection_id":self.fields["connection_id"],
-            "phase":phase.name(), "error_origin":origin, "error_code":self.fields["error_code"],
-            "delivered":delivered,
-        }));
+    pub(crate) fn aero_chunk(
+        &self,
+        events: Vec<serde_json::Map<String, Value>>,
+    ) -> FrameDiagnostics {
+        let events = events
+            .into_iter()
+            .map(|event| {
+                let event = Value::Object(event);
+                EventDelivery::new(
+                    Some(&event),
+                    event["type"].as_str().unwrap_or_default(),
+                    false,
+                )
+            })
+            .collect();
+        FrameDiagnostics {
+            delivery: self.delivery.clone(),
+            phase: self.phase,
+            events: Some(FrameEvents::AeroChunk(events)),
+        }
     }
 
     pub(crate) fn buffered_error(&mut self, body: &[u8], delivered: bool) {
         if body.len() <= 64 * 1024
             && let Ok(event) = serde_json::from_slice(body)
+            && let Some(error) = EventError::from_event(&event, false)
         {
-            self.record_event_error(&event, delivered, None);
+            let mut facts = self.delivery.facts.lock().expect("request delivery");
+            self.delivery
+                .event_error(&mut facts, error, self.phase, delivered);
         }
-    }
-
-    pub(crate) fn event_type_written<T, E>(
-        &mut self,
-        event_type: &str,
-        result: Result<T, E>,
-    ) -> Result<T, E> {
-        self.record_event_delivery(terminal_outcome(event_type), result)
     }
 
     fn record_event_delivery<T, E>(
         &mut self,
-        terminal: Option<&'static str>,
+        event: Option<&Value>,
+        event_type: &str,
+        upstream: bool,
         result: Result<T, E>,
     ) -> Result<T, E> {
-        if result.is_ok()
-            && let Some(kind) = terminal
-        {
-            self.fields["downstream_terminal"] = json!(kind);
-        }
-        self.written(result, terminal.is_some())
+        let mut facts = self.delivery.facts.lock().expect("request delivery");
+        self.delivery.event(
+            &mut facts,
+            EventDelivery::new(event, event_type, upstream),
+            self.phase,
+            result.is_ok(),
+        );
+        result
     }
 
     pub(crate) fn http_response(&mut self, status: &Value, result: std::io::Result<()>) {
         self.fields["transport"] = json!("http");
         self.fields["response_status"] = status.clone();
         let _ = self.written(result, true);
+    }
+}
+
+impl EventError {
+    fn from_event(event: &Value, upstream: bool) -> Option<Self> {
+        let error = event
+            .get("error")
+            .or_else(|| event.get("response")?.get("error"))?;
+        if !error.is_object() {
+            return None;
+        }
+        let origin = if upstream {
+            "upstream"
+        } else {
+            ["emp", "upstream", "transport", "claude_cli", "client"]
+                .into_iter()
+                .find(|origin| error["origin"].as_str() == Some(*origin))
+                .unwrap_or("unknown")
+        };
+        Some(Self {
+            origin,
+            code: schema::id(&error["code"]),
+        })
     }
 }
 
@@ -394,15 +508,29 @@ impl RequestObservation {
         self.fields["last_phase"] = json!(self.phase.name());
         self.fields["duration_ms"] = json!(self.started.elapsed().as_millis() as u64);
         self.fields["handler_panicked"] = json!(std::thread::panicking());
-        self.fields["delivery"] = json!(if self.fields["write_failed"] == true {
-            "write_failed"
-        } else if self.fields["terminal_written"] == true {
-            "terminal_written"
-        } else if self.fields["writes_completed"].as_u64().unwrap_or(0) > 0 {
-            "partial"
-        } else {
-            "not_observed"
-        });
+        {
+            let facts = self.delivery.facts.lock().expect("request delivery");
+            self.fields["writes_completed"] = json!(facts.writes_completed);
+            self.fields["write_failed"] = json!(facts.write_failed);
+            self.fields["terminal_written"] = json!(facts.terminal_written);
+            self.fields["downstream_terminal"] =
+                json!(facts.downstream_terminal.unwrap_or("unknown"));
+            if let Some(origin) = facts.error_origin {
+                self.fields["error_origin"] = json!(origin);
+            }
+            if let Some(code) = &facts.error_code {
+                self.fields["error_code"] = json!(code);
+            }
+            self.fields["delivery"] = json!(if facts.write_failed {
+                "write_failed"
+            } else if facts.terminal_written {
+                "terminal_written"
+            } else if facts.writes_completed > 0 {
+                "partial"
+            } else {
+                "not_observed"
+            });
+        }
         if let Some(ledger) = &self.ledger
             && let Some(id) = self.fields["request_id"].as_str()
         {
@@ -416,14 +544,15 @@ impl RequestObservation {
                         events.publish(crate::services::management_events::Change::Usage);
                     }
                 }
-                Err(_) => self.diagnostics.journal.event(
+                Err(_) => self.delivery.diagnostics.journal.event(
                     "error",
                     "call_delivery_save_failed",
                     &json!({"request_id":id}),
                 ),
             }
         }
-        self.diagnostics
+        self.delivery
+            .diagnostics
             .journal
             .event("info", "request_finished", &self.fields);
     }

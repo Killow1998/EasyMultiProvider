@@ -1,4 +1,4 @@
-use super::{ConnectionAdmission, ServerMode, http::stream::BodyOutput, transport::ConnectionIo};
+use super::{ConnectionAdmission, ServerMode, transport::ConnectionIo};
 use crate::services::observation::http::HttpObservation;
 use axum::body::Bytes;
 use std::{
@@ -58,8 +58,8 @@ mod implementation {
         pub(in crate::server) fn after_report_progress(
             &self,
             _: &Arc<AtomicBool>,
-        ) -> impl Fn(i64, &mut BodyOutput) -> io::Result<()> + use<> {
-            |_, _| Ok(())
+        ) -> impl Fn(i64) + use<> {
+            |_| {}
         }
 
         #[inline]
@@ -74,10 +74,9 @@ mod implementation {
         #[inline]
         pub(crate) fn lock_callback_delegations<'a, T>(
             &self,
-            _: &'a Mutex<T>,
-            lock: impl FnOnce() -> LockResult<MutexGuard<'a, T>>,
+            delegations: &'a Mutex<T>,
         ) -> LockResult<MutexGuard<'a, T>> {
-            lock()
+            delegations.lock()
         }
     }
 
@@ -135,7 +134,7 @@ mod implementation {
 
     type FrameMatcher = Box<dyn Fn(&[u8]) -> bool + Send>;
     pub(in crate::server) struct ReportGate {
-        pub(in crate::server) first_frame: oneshot::Sender<Arc<AtomicBool>>,
+        pub(in crate::server) query_paused: oneshot::Sender<Arc<AtomicBool>>,
         pub(in crate::server) release: oneshot::Receiver<()>,
     }
 
@@ -165,19 +164,17 @@ mod implementation {
         pub(in crate::server) fn after_report_progress(
             self: &Arc<Self>,
             cancelled: &Arc<AtomicBool>,
-        ) -> impl Fn(i64, &mut BodyOutput) -> io::Result<()> + use<> {
+        ) -> impl Fn(i64) + use<> {
             let hooks = Arc::clone(self);
             let cancelled = Arc::clone(cancelled);
-            move |completed, output| {
+            move |completed| {
                 if completed == 0 {
                     let gate = hooks.report_gate.lock().unwrap().take();
                     if let Some(gate) = gate {
-                        output.flush_frame()?;
-                        let _ = gate.first_frame.send(cancelled.clone());
+                        let _ = gate.query_paused.send(cancelled.clone());
                         let _ = gate.release.blocking_recv();
                     }
                 }
-                Ok(())
             }
         }
 
@@ -270,7 +267,6 @@ mod implementation {
         pub(crate) fn lock_callback_delegations<'a, T>(
             &self,
             delegations: &'a Mutex<T>,
-            lock: impl FnOnce() -> LockResult<MutexGuard<'a, T>>,
         ) -> LockResult<MutexGuard<'a, T>> {
             let probe = self.callback_lock_contended.lock().unwrap().take();
             if let Some(probe) = probe {
@@ -287,7 +283,7 @@ mod implementation {
                     }
                 }
             }
-            lock()
+            delegations.lock()
         }
     }
 

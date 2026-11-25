@@ -404,7 +404,7 @@ async fn drive_connection(
                 && let Some(stream) = stream
             {
                 let _ = unbuffered_status.set(response.status().as_u16());
-                stream.delivery.await_flush(flushed);
+                stream.delivery.await_flush(flushed, None);
             }
             if local_upgrade {
                 let _ = unbuffered_status.set(response.status().as_u16());

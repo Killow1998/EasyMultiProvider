@@ -163,7 +163,7 @@ fn history_reason_survives_a_failed_write_and_unknown_text_is_not_logged() {
         let write: std::io::Result<()> = Err(std::io::ErrorKind::BrokenPipe.into());
         assert_eq!(
             receipt
-                .event_type_written("response.failed", write)
+                .event_written(&json!({"type":"response.failed"}), write)
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::BrokenPipe

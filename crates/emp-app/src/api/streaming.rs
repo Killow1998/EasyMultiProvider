@@ -100,17 +100,24 @@ impl<'a> ObservedSse<'a> {
         event_type: &str,
         upstream: bool,
     ) -> std::io::Result<()> {
-        self.observation.flush_event(self.sink.flush_frame())?;
+        self.sink.flush_frame()?;
+        let diagnostics = self.observation.frame_event(event, event_type, upstream);
         let format_error = matches!(event_type, "response.failed" | "error");
-        let queued = frames.iter().try_for_each(|frame| {
-            let bytes = format_error
+        let bytes = |frame: &[u8]| {
+            format_error
                 .then(|| self.observation.errors().frame(frame, upstream))
                 .flatten()
-                .map_or_else(|| Bytes::copy_from_slice(frame), Bytes::from);
-            self.sink.write_frame(bytes)
-        });
-        self.observation
-            .queue_event(event, event_type, upstream, queued)
+                .map_or_else(|| Bytes::copy_from_slice(frame), Bytes::from)
+        };
+        if let Some((last, preceding)) = frames.split_last() {
+            for frame in preceding {
+                self.sink.write_frame(bytes(frame), None)?;
+            }
+            self.sink.write_frame(bytes(last), Some(diagnostics))
+        } else {
+            diagnostics.flushed();
+            Ok(())
+        }
     }
 }
 
@@ -136,25 +143,19 @@ pub(crate) fn serve_external_stream(
             return crate::api::failure_response::external_open_error(error).map_or(Ok(()), Err);
         }
     };
-    let completed = relay_stream(
+    relay_stream(
         &mut downstream,
         RelayContext {
             state,
             route: &candidate,
+            learn_protocol: true,
             body,
             response_headers: &BTreeMap::new(),
             usage,
         },
         ExternalRelay { upstream },
         monitor,
-    )?;
-    if completed {
-        let flushed = downstream.sink.finish_producing();
-        if downstream.observation.flush_event(flushed).is_ok() {
-            persist_protocol_observation(state, &candidate);
-        }
-    }
-    Ok(())
+    )
 }
 
 pub(crate) fn serve_native_stream(
@@ -195,6 +196,7 @@ pub(crate) fn serve_native_stream(
         RelayContext {
             state,
             route,
+            learn_protocol: false,
             body,
             response_headers: &response_headers,
             usage,
@@ -202,7 +204,6 @@ pub(crate) fn serve_native_stream(
         NativeRelay { upstream },
         monitor,
     )
-    .map(|_| ())
 }
 
 enum RelayEvent {
@@ -282,6 +283,7 @@ impl RelaySource for ExternalRelay {
 struct RelayContext<'a> {
     state: &'a ServerState,
     route: &'a ResolvedRoute,
+    learn_protocol: bool,
     body: &'a Value,
     response_headers: &'a BTreeMap<String, String>,
     usage: crate::services::request_outcome::RequestOutcome<'a>,
@@ -292,10 +294,11 @@ fn relay_stream(
     context: RelayContext<'_>,
     mut source: impl RelaySource,
     monitor: Option<DisconnectMonitor>,
-) -> Result<bool, HttpReply> {
+) -> Result<(), HttpReply> {
     let RelayContext {
         state,
         route,
+        learn_protocol,
         body,
         response_headers,
         mut usage,
@@ -307,35 +310,21 @@ fn relay_stream(
     let mut started = false;
     loop {
         let event = source.next(runtime, monitor.as_mut());
-        if started {
-            let flushed = match event {
-                RelayEvent::Incomplete | RelayEvent::Disconnected => {
-                    downstream.sink.finish_producing()
-                }
-                _ => downstream.sink.flush_frame(),
-            };
-            if downstream.observation.flush_event(flushed).is_err() {
-                return Ok(false);
-            }
-        }
         usage.upstream_observation(source.observation());
-        let terminal =
-            matches!(&event, RelayEvent::Event { body, .. } if terminal_stream_event(body));
-        let completed = terminal
-            && match &event {
-                RelayEvent::Event { body, .. } => {
-                    body.get("type").and_then(Value::as_str) == Some("response.completed")
-                }
-                _ => false,
-            };
         match event {
             RelayEvent::Disconnected => {
                 usage.disconnected();
-                return Ok(false);
+                if started {
+                    let _ = downstream.sink.finish_producing();
+                }
+                return Ok(());
             }
             RelayEvent::Incomplete => {
                 usage.status(502, "stream_incomplete");
-                return Ok(false);
+                if started {
+                    let _ = downstream.sink.finish_producing();
+                }
+                return Ok(());
             }
             RelayEvent::Failure(error) => {
                 usage.router_error(&error);
@@ -344,13 +333,13 @@ fn relay_stream(
                 }
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),
-                    Err(_) => return Ok(false),
+                    Err(_) => return Ok(()),
                 };
                 let failure = stream_failure_value_for_route(&error, &response_id, route, true);
                 if let Ok(frame) = sse_frame("response.failed", &failure) {
                     let _ = downstream.event(&failure, &[frame]);
                 }
-                return Ok(false);
+                return Ok(());
             }
             RelayEvent::SerializationFailure => {
                 usage.status(500, "stream_error");
@@ -362,6 +351,10 @@ fn relay_stream(
             } => {
                 usage.observe(&event_body);
                 crate::services::context::record_event(state, route, body, &event_body);
+                let terminal = terminal_stream_event(&event_body);
+                if learn_protocol && event_body["type"] == "response.completed" {
+                    persist_protocol_observation(state, route);
+                }
                 let frame = if !downstream.codex
                     && crate::services::events::codex_event(
                         event_body["type"].as_str().unwrap_or_default(),
@@ -376,10 +369,10 @@ fn relay_stream(
                 );
                 if started {
                     if downstream.upstream_event(&event_body, &[frame]).is_err() {
-                        return Ok(false);
+                        return Ok(());
                     }
                     if terminal {
-                        return Ok(completed);
+                        return Ok(());
                     }
                     continue;
                 }
@@ -405,12 +398,12 @@ fn relay_stream(
                         downstream.head_with_headers(response_headers).is_ok()
                     };
                     if !head_ok || downstream.upstream_event(&event_body, &pending).is_err() {
-                        return Ok(false);
+                        return Ok(());
                     }
                     started = true;
                     pending.clear();
                     if terminal {
-                        return Ok(completed);
+                        return Ok(());
                     }
                 }
             }

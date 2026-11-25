@@ -8,6 +8,7 @@ use crate::{
         connection_admission::BusinessToken,
         gateway_clients::Caller,
         modules::aero::{Call, CallLease, CallParent, Callers},
+        observation::request::FrameDiagnostics,
     },
 };
 use axum::{
@@ -58,21 +59,30 @@ pub(in crate::server) struct Delivery {
 
 #[derive(Default)]
 struct PendingFlush {
-    ack: Option<Flushed>,
+    frame: Option<FrameFlush>,
     body: Option<Waker>,
+}
+
+struct FrameFlush {
+    diagnostics: Option<FrameDiagnostics>,
+    ack: Flushed,
 }
 
 #[derive(Clone)]
 pub(in crate::server) struct Flushed(mpsc::Sender<()>);
 
 impl Delivery {
-    pub(in crate::server) fn await_flush(&self, flushed: Flushed) {
+    pub(in crate::server) fn await_flush(
+        &self,
+        ack: Flushed,
+        diagnostics: Option<FrameDiagnostics>,
+    ) {
         let previous = self
             .pending
             .lock()
             .expect("HTTP flush")
-            .ack
-            .replace(flushed);
+            .frame
+            .replace(FrameFlush { diagnostics, ack });
         assert!(previous.is_none());
     }
 
@@ -85,10 +95,13 @@ impl Delivery {
     }
 
     pub(in crate::server) fn flushed(&self) {
-        let PendingFlush { ack, body } =
+        let PendingFlush { frame, body } =
             std::mem::take(&mut *self.pending.lock().expect("HTTP flush"));
-        if let Some(sender) = ack {
-            let _ = sender.0.try_send(());
+        if let Some(FrameFlush { diagnostics, ack }) = frame {
+            if let Some(diagnostics) = diagnostics {
+                diagnostics.flushed();
+            }
+            let _ = ack.0.try_send(());
         }
         if let Some(body) = body {
             body.wake();
@@ -101,7 +114,7 @@ impl Delivery {
 
     fn poll_flushed(&self, cx: &Context<'_>) -> Poll<()> {
         let mut pending = self.pending.lock().expect("HTTP flush");
-        if pending.ack.is_some() {
+        if pending.frame.is_some() {
             pending.body = Some(cx.waker().clone());
             Poll::Pending
         } else {
@@ -203,13 +216,17 @@ impl BodyOutput {
             .wait_for_flush()
     }
 
-    pub(crate) fn write_frame(&mut self, bytes: Bytes) -> io::Result<()> {
+    pub(crate) fn write_frame(
+        &mut self,
+        bytes: Bytes,
+        diagnostics: Option<FrameDiagnostics>,
+    ) -> io::Result<()> {
         self.flush_frame()?;
         let stream = self.stream.as_mut().expect("response stream");
         self.delivery.write_hook.publish_frame(bytes, |bytes| {
             stream
                 .send
-                .blocking_send(bytes)
+                .blocking_send(OutputFrame { bytes, diagnostics })
                 .map_err(|_| io::ErrorKind::BrokenPipe)?;
             self.frame_pending = true;
             Ok(())
@@ -282,7 +299,7 @@ impl Drop for BodyOutput {
 }
 
 pub(super) struct StreamFrames {
-    send: mpsc::Sender<Bytes>,
+    send: mpsc::Sender<OutputFrame>,
     confirmation: mpsc::Receiver<()>,
 }
 
@@ -317,7 +334,10 @@ impl StreamFrames {
 
     pub(super) async fn frame(&mut self, bytes: Vec<u8>) -> io::Result<()> {
         self.send
-            .send(Bytes::from(bytes))
+            .send(OutputFrame {
+                bytes: Bytes::from(bytes),
+                diagnostics: None,
+            })
             .await
             .map_err(|_| io::ErrorKind::BrokenPipe)?;
         self.flushed().await
@@ -328,8 +348,13 @@ impl StreamFrames {
     }
 }
 
+struct OutputFrame {
+    bytes: Bytes,
+    diagnostics: Option<FrameDiagnostics>,
+}
+
 struct EventBody {
-    frames: mpsc::Receiver<Bytes>,
+    frames: mpsc::Receiver<OutputFrame>,
     flushed: Flushed,
     delivery: Arc<Delivery>,
 }
@@ -344,8 +369,8 @@ impl HttpBody for EventBody {
     ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
         ready!(self.delivery.poll_flushed(cx));
         self.frames.poll_recv(cx).map(|frame| {
-            frame.map(|bytes| {
-                self.delivery.await_flush(self.flushed.clone());
+            frame.map(|OutputFrame { bytes, diagnostics }| {
+                self.delivery.await_flush(self.flushed.clone(), diagnostics);
                 Ok(Frame::data(bytes))
             })
         })

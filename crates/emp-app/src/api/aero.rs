@@ -116,46 +116,41 @@ pub(crate) fn relay(
         return InferenceOutcome::Streamed;
     }
     let mut parser = sse.then(SseJsonParser::new);
-    let mut pending = None;
     loop {
         let next = state
             .backend
             .transport
             .runtime
             .block_on(monitor.race(upstream.response.next_chunk()));
-        let flushed = if matches!(next, DisconnectRace::Ready(Ok(Some(_)))) {
-            downstream.flush_frame()
-        } else {
-            downstream.finish_producing()
-        };
-        if let Some(events) = pending.take() {
-            if observation.written(flushed, false).is_err() {
-                break;
-            }
-            for event in events {
-                let _ =
-                    observation.event_written(&Value::Object(event), Ok::<(), std::io::Error>(()));
-            }
-        }
         match next {
             DisconnectRace::Ready(Ok(Some(chunk))) => {
-                let events = parser
-                    .as_mut()
-                    .and_then(|parser| parser.push(&chunk).ok())
-                    .unwrap_or_default();
-                if let Err(error) = downstream.write_frame(Bytes::from(chunk)) {
-                    let _ = observation.written(Err::<(), _>(error), false);
+                let events = parser.as_mut().map_or_else(Vec::new, |parser| {
+                    parser.push(&chunk).unwrap_or_else(|_| {
+                        *parser = SseJsonParser::new();
+                        Vec::new()
+                    })
+                });
+                if downstream.flush_frame().is_err() {
                     break;
                 }
-                pending = Some(events);
+                let diagnostics = observation.aero_chunk(events);
+                if downstream
+                    .write_frame(Bytes::from(chunk), Some(diagnostics))
+                    .is_err()
+                {
+                    break;
+                }
             }
             DisconnectRace::Ready(Ok(None)) => {
-                if !sse {
+                if downstream.finish_producing().is_ok() && !sse {
                     observation.http_response(&json!(status), Ok(()));
                 }
                 break;
             }
-            _ => break,
+            _ => {
+                let _ = downstream.finish_producing();
+                break;
+            }
         }
     }
     InferenceOutcome::Streamed

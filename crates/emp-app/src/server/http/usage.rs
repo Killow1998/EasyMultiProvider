@@ -175,12 +175,13 @@ async fn read_report(
                     let mut output = progress_output.lock().expect("report output");
                     let frame =
                         sse_frame("progress", &json!({"completed":completed,"total":total}))?;
-                    output.write_frame(Bytes::from(frame))?;
-                    after_progress(completed, &mut output)
+                    output.write_frame(Bytes::from(frame), None)?;
+                    after_progress(completed);
+                    Ok(())
                 });
                 let mut output = output.lock().expect("report output");
                 if let Ok(terminal) = terminal {
-                    let _ = output.write_frame(Bytes::from(terminal));
+                    let _ = output.write_frame(Bytes::from(terminal), None);
                 }
                 let _ = output.finish_producing();
             } else {

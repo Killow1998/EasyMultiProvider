@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 pub(super) fn report_gate(
     fixture: &Fixture,
 ) -> (oneshot::Receiver<Arc<AtomicBool>>, oneshot::Sender<()>) {
-    let (first_frame, received) = oneshot::channel();
+    let (query_paused, received) = oneshot::channel();
     let (release, wait) = oneshot::channel();
     *fixture
         .server
@@ -16,7 +16,7 @@ pub(super) fn report_gate(
         .report_gate
         .lock()
         .unwrap() = Some(ReportGate {
-        first_frame,
+        query_paused,
         release: wait,
     });
     (received, release)

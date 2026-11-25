@@ -238,7 +238,7 @@ async fn submit(
                 state.lifecycle.test_hooks.shared(),
             );
             let reply = route.execute(&mut sink, request, body, &state, observation.as_mut());
-            let flushed = sink.finish(|| match reply {
+            let _ = sink.finish(|| match reply {
                 InferenceOutcome::Buffered(reply) => {
                     buffered(reply, observation.as_ref(), &inference.receipt)
                 }
@@ -248,9 +248,6 @@ async fn submit(
                 }
                 InferenceOutcome::Streamed => no_response(),
             });
-            if let Some(observation) = &mut observation {
-                let _ = observation.flush_event(flushed);
-            }
             *inference.model.lock().expect("model observation") = observation;
         }
     });
