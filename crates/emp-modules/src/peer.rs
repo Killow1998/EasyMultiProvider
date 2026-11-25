@@ -165,8 +165,8 @@ impl Connection {
         let _ = self.closed.send(result);
     }
 
-    fn cancel_incoming(&mut self) {
-        for (_, token) in self.incoming.drain() {
+    fn cancel_incoming(&self) {
+        for token in self.incoming.values() {
             token.cancel();
         }
     }

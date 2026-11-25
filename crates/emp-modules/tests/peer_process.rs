@@ -48,6 +48,11 @@ fn module_fixture() {
     };
     match mode.as_str() {
         "broken-write" => return check_broken_write_pipe(),
+        "broken-write-duplicate-request" => {
+            return check_protocol_error_while_draining(
+                Request::new("m:1".to_owned().into(), "host.active".into(), ()).into(),
+            );
+        }
         "broken-write-invalid-request" => {
             return check_protocol_error_while_draining(
                 Request::new("h:1".to_owned().into(), "host.echo".into(), ()).into(),
@@ -496,6 +501,11 @@ fn check_broken_write_pipe() {
 }
 
 #[test]
+fn a_broken_write_pipe_still_rejects_a_duplicate_in_flight_request_id() {
+    run_broken_write_fixture("broken-write-duplicate-request");
+}
+
+#[test]
 fn a_broken_write_pipe_still_rejects_an_invalid_request_id() {
     run_broken_write_fixture("broken-write-invalid-request");
 }
@@ -509,11 +519,20 @@ fn check_protocol_error_while_draining(invalid: Message) {
     let (input, writer) = io::pipe().unwrap();
     let (reader, mut output) = io::pipe().unwrap();
     let (reader_exited, reader_exit) = mpsc::channel();
+    let (started, starting) = mpsc::channel();
+    let (finish, finishing) = mpsc::channel();
+    let finishing = Mutex::new(finishing);
+    let mut handlers = Handlers::default();
+    handlers.register("host.active", move |_, token, _| {
+        started.send(token).unwrap();
+        finishing.lock().unwrap().recv_timeout(budget()).unwrap();
+        Ok(Value::Null)
+    });
     let peer = Peer::connect_observed(
         Side::Host,
         BufReader::new(reader),
         writer,
-        Handlers::default(),
+        handlers,
         move |error| reader_exited.send(error).unwrap(),
         || {},
     )
@@ -525,10 +544,19 @@ fn check_protocol_error_while_draining(invalid: Message) {
         panic!("expected the request written before stdin closed");
     };
     assert_eq!(request.id, RequestId::from("h:1".to_owned()));
+    Message::Request(Request::new(
+        "m:1".to_owned().into(),
+        "host.active".into(),
+        (),
+    ))
+    .write(&mut output)
+    .unwrap();
+    let token = starting.recv_timeout(budget()).unwrap();
 
     drop(input);
     host.notify("module.notify", Value::Null).unwrap();
     assert_eq!(peer.wait().unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+    assert!(token.is_cancelled());
 
     let mut frames = Vec::new();
     invalid.write(&mut frames).unwrap();
@@ -546,6 +574,7 @@ fn check_protocol_error_while_draining(invalid: Message) {
         Some(io::ErrorKind::InvalidData),
         "{invalid:?}"
     );
+    finish.send(()).unwrap();
 }
 
 #[test]
