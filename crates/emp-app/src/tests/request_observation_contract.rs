@@ -1,5 +1,4 @@
 //! Loopback acceptance: receipts explain execution without controlling it.
-use super::internal_events_contract::live_journal;
 use super::*;
 
 #[test]
@@ -98,37 +97,20 @@ fn generated_compaction_sse_records_its_actual_terminal_event() {
 #[track_caller]
 pub(super) fn finished(root: &Path, count: usize) -> Vec<Value> {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
-    loop {
-        let records = live_journal(root);
+    let mut records = Vec::new();
+    wait_for(&deadline, || {
+        records = live_journal_until(root, &deadline);
         let actual = records
             .iter()
             .filter(|r| r["event"] == "request_finished")
             .count();
-        if actual == count {
-            return deadline
-                .accept(records, "request journal completion")
-                .unwrap();
-        }
         assert!(
-            actual < count,
+            actual <= count,
             "extra request receipts: expected {count}, found {actual}"
         );
-        assert!(
-            !deadline.is_expired(),
-            "missing request receipts: expected {count}, found {actual}; recent events: {:?}",
-            records
-                .iter()
-                .rev()
-                .take(8)
-                .map(|r| &r["event"])
-                .collect::<Vec<_>>()
-        );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "观测状态没有通知接口，以固定间隔轮询"
-        )]
-        thread::sleep(Duration::from_millis(5));
-    }
+        actual == count
+    });
+    records
 }
 
 fn chat_answer() -> Value {

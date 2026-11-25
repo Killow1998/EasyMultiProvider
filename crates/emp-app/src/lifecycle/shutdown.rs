@@ -74,6 +74,7 @@ impl ServerHandle {
         );
         let result = self.shutdown_inner(preserve_integration);
         close_exit_callbacks();
+        drop(self._service_owner);
         self.state
             .backend
             .diagnostics
@@ -91,7 +92,6 @@ impl ServerHandle {
                     },
                 }),
             );
-        drop(self._service_owner);
         result
     }
 

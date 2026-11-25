@@ -236,18 +236,24 @@ fn stream_control(native: bool, cancel: bool) {
         .expect("Codex first inference");
     codex.wait(|value| value["method"] == "item/agentMessage/delta");
     let before = crate::tests::flushed_journal(&root, &server.state);
-    let starts: Vec<_> = before
+    let starts = before
         .iter()
-        .filter(|event| event["event"] == "request_started")
-        .collect();
+        .filter(|event| event["event"] == "request_started");
+    let mut active = starts.clone().filter(|start| {
+        let id = start["fields"]["request_id"].as_str().unwrap();
+        !before.iter().any(|event| {
+            event["event"] == "request_finished" && event["fields"]["request_id"] == id
+        })
+    });
+    let inference = active
+        .next()
+        .expect("first inference must have a start receipt");
     assert!(
-        !starts.is_empty(),
-        "first inference must have a start receipt"
+        active.next().is_none(),
+        "only first inference should be active"
     );
-    assert!(
-        starts
-            .iter()
-            .all(|event| event["fields"]["transport"] == "websocket"),
+    assert_eq!(
+        inference["fields"]["transport"], "websocket",
         "warmup must not force Codex into HTTP fallback"
     );
     if cancel {
@@ -279,7 +285,7 @@ fn stream_control(native: bool, cancel: bool) {
         "Codex must reject the wrong turn: {rejected}"
     );
     assert_eq!(
-        starts.len(),
+        starts.count(),
         crate::tests::flushed_journal(&root, &server.state)
             .iter()
             .filter(|event| event["event"] == "request_started")

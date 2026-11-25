@@ -73,7 +73,7 @@ mod gateway_contract;
 mod history_diagnostic_contract;
 mod integration_sideband_contract;
 mod internal_events_contract;
-pub(crate) use internal_events_contract::{flushed_journal, live_journal};
+pub(crate) use internal_events_contract::{flushed_journal, live_journal, live_journal_until};
 mod management_http_contract;
 mod management_operation_contract;
 mod memory_routing_contract;
@@ -95,7 +95,6 @@ mod retry_advice_contract;
 mod session_boundary_contract;
 mod stream_boundary_contract;
 mod websocket_capacity_contract;
-#[cfg(unix)]
 pub(crate) use websocket_capacity_contract::wait_for;
 
 fn canonical_root(directory: &TempDir) -> PathBuf {

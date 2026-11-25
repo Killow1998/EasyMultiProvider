@@ -621,7 +621,7 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
 
 #[test]
 fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
-    use crate::tests::{live_journal, wait_for};
+    use crate::tests::{live_journal_until, wait_for};
 
     let body =
         json!({"bundle":STANDARD.encode(bundle("detached")),"password":PASSWORD}).to_string();
@@ -661,10 +661,12 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
             };
             let gated_root = root.clone();
             tokio::task::spawn_blocking(move || {
-                wait_for(
-                    &Deadline::after(test_timeout(Duration::from_secs(10))),
-                    || live_journal(&gated_root).iter().any(commit_started),
-                );
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
+                wait_for(&deadline, || {
+                    live_journal_until(&gated_root, &deadline)
+                        .iter()
+                        .any(commit_started)
+                });
             })
             .await
             .unwrap();

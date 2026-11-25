@@ -140,18 +140,43 @@ struct Command {
 }
 
 enum Action {
-    Event(Event),
-    Flush(Option<Event>, Sender<usize>),
+    Event(Record),
+    Flush {
+        record: Option<Record>,
+        rejected: usize,
+        receipt: Sender<usize>,
+    },
 }
 
 #[derive(Default)]
 struct QueueState {
     pending_events: usize,
-    dropped: usize,
+    rejected: usize,
+    accepted: usize,
+    settled: usize,
+    lost_by_writer: usize,
+    attached_rejected: usize,
+    reported: usize,
+}
+
+impl QueueState {
+    fn take_losses(&mut self, rejected_at_flush: Option<usize>) -> usize {
+        let total = match rejected_at_flush {
+            Some(rejected) => rejected + self.lost_by_writer,
+            None => self.rejected + self.lost_by_writer + (self.accepted - self.settled),
+        };
+        let unreported = total - self.reported;
+        self.reported = total;
+        unreported
+    }
+}
+
+struct Record {
+    timestamp: String,
+    event: Event,
 }
 
 struct Event {
-    timestamp: String,
     level: &'static str,
     name: String,
     fields: Value,
@@ -162,7 +187,6 @@ impl Event {
         let name = redact_sensitive_text(name).chars().take(256).collect();
         let fields = sanitize(fields, 0);
         Self {
-            timestamp: super::timestamp(),
             level: match level {
                 "debug" => "debug",
                 "warning" => "warning",
@@ -176,23 +200,43 @@ impl Event {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-mod event_gate {
+mod event_gates {
     use std::sync::{Arc, Mutex};
 
-    type Armed = Option<(&'static str, Box<dyn FnOnce() + Send>)>;
+    /// Points where tests pause the journal: before an event is enqueued and before it is written.
+    #[derive(Default)]
+    pub(super) struct EventGates {
+        pub(super) before_write: EventGate,
+        pub(super) before_enqueue: EventGate,
+    }
 
-    /// Pauses the writer just before it writes the named event.
-    #[derive(Clone, Default)]
-    pub(super) struct EventGate(Arc<Mutex<Armed>>);
+    pub(super) type SharedEventGates = Arc<EventGates>;
+
+    #[derive(Default)]
+    pub(super) struct EventGate(Mutex<Option<ArmedEventGate>>);
+
+    struct ArmedEventGate {
+        name: &'static str,
+        wait: Box<dyn FnOnce() + Send>,
+    }
 
     impl EventGate {
-        pub(super) fn arm(&self, name: &'static str, gate: Box<dyn FnOnce() + Send>) {
-            assert!(self.0.lock().unwrap().replace((name, gate)).is_none());
+        pub(super) fn arm(&self, name: &'static str, gate: impl FnOnce() + Send + 'static) {
+            assert!(
+                self.0
+                    .lock()
+                    .unwrap()
+                    .replace(ArmedEventGate {
+                        name,
+                        wait: Box::new(gate),
+                    })
+                    .is_none()
+            );
         }
 
-        pub(super) fn before_write(&self, name: &str) {
-            let gate = self.0.lock().unwrap().take_if(|(armed, _)| *armed == name);
-            if let Some((_, wait)) = gate {
+        pub(super) fn run(&self, name: &str) {
+            let gate = self.0.lock().unwrap().take_if(|armed| armed.name == name);
+            if let Some(ArmedEventGate { wait, .. }) = gate {
                 wait();
             }
         }
@@ -200,19 +244,27 @@ mod event_gate {
 }
 
 #[cfg(not(any(test, feature = "test-support")))]
-mod event_gate {
+mod event_gates {
+    #[derive(Clone, Default)]
+    pub(super) struct EventGates {
+        pub(super) before_write: EventGate,
+        pub(super) before_enqueue: EventGate,
+    }
+
+    pub(super) type SharedEventGates = EventGates;
+
     #[derive(Clone, Default)]
     pub(super) struct EventGate {}
 
-    const _: () = assert!(size_of::<EventGate>() == 0);
+    const _: () = assert!(size_of::<EventGates>() == 0);
 
     impl EventGate {
         #[inline]
-        pub(super) fn before_write(&self, _name: &str) {}
+        pub(super) fn run(&self, _name: &str) {}
     }
 }
 
-use event_gate::EventGate;
+use event_gates::SharedEventGates;
 
 pub struct Journal {
     directory: PathBuf,
@@ -220,7 +272,7 @@ pub struct Journal {
     sender: Sender<Command>,
     queue: Arc<Mutex<QueueState>>,
     flush_lock: Mutex<()>,
-    event_gate: EventGate,
+    event_gates: SharedEventGates,
 }
 
 impl Journal {
@@ -232,7 +284,7 @@ impl Journal {
             sender,
             queue: Arc::default(),
             flush_lock: Mutex::default(),
-            event_gate: EventGate::default(),
+            event_gates: SharedEventGates::default(),
         };
         (journal, receiver)
     }
@@ -242,7 +294,7 @@ impl Journal {
         let mut writer = Writer::new(
             journal.directory.clone(),
             journal.run_id.clone(),
-            journal.event_gate.clone(),
+            journal.event_gates.clone(),
         );
         let queue = Arc::clone(&journal.queue);
         if let Err(error) = std::thread::Builder::new()
@@ -268,20 +320,30 @@ impl Journal {
 
     pub fn event(&self, level: &str, name: &str, fields: &Value) {
         let event = Event::new(level, name, fields);
+        self.event_gates.before_enqueue.run(&event.name);
         let mut queue = self.queue.lock().unwrap();
-        if queue.pending_events == QUEUE_CAPACITY
-            || self
-                .sender
-                .send(Command {
-                    dropped: queue.dropped,
-                    action: Action::Event(event),
-                })
-                .is_err()
-        {
-            queue.dropped = queue.dropped.saturating_add(1);
-        } else {
+        if queue.pending_events == QUEUE_CAPACITY {
+            queue.rejected += 1;
+            return;
+        }
+        let record = Record {
+            timestamp: super::timestamp(),
+            event,
+        };
+        if self.enqueue(&mut queue, Action::Event(record), 1) {
             queue.pending_events += 1;
-            queue.dropped = 0;
+        }
+    }
+
+    fn enqueue(&self, queue: &mut QueueState, action: Action, records: usize) -> bool {
+        let dropped = queue.rejected - queue.attached_rejected;
+        if self.sender.send(Command { dropped, action }).is_ok() {
+            queue.accepted += records;
+            queue.attached_rejected = queue.rejected;
+            true
+        } else {
+            queue.rejected += records;
+            false
         }
     }
 
@@ -296,39 +358,50 @@ impl Journal {
     fn confirm(&self, event: Option<Event>) -> usize {
         let _flush = self.flush_lock.lock().unwrap();
         let (done, receipt) = mpsc::channel();
-        {
+        let sent = {
             let mut queue = self.queue.lock().unwrap();
-            let dropped = std::mem::take(&mut queue.dropped);
-            let unsent = dropped.saturating_add(usize::from(event.is_some()));
-            if self
-                .sender
-                .send(Command {
-                    dropped,
-                    action: Action::Flush(event, done),
-                })
-                .is_err()
-            {
-                drop(queue);
-                report_dropped(unsent);
-                return unsent;
-            }
+            let rejected = queue.rejected;
+            let records = usize::from(event.is_some());
+            let record = event.map(|event| Record {
+                timestamp: super::timestamp(),
+                event,
+            });
+            self.enqueue(
+                &mut queue,
+                Action::Flush {
+                    record,
+                    rejected,
+                    receipt: done,
+                },
+                records,
+            )
+        };
+        if sent && let Ok(losses) = receipt.recv() {
+            return losses;
         }
-        receipt.recv().unwrap_or_default()
+        report_losses(&self.queue, None)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn gate_next_event(&self, name: &'static str, gate: impl FnOnce() + Send + 'static) {
-        self.event_gate.arm(name, Box::new(gate));
+        self.event_gates.before_write.arm(name, gate);
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn flush_pending_for_test(&self) -> bool {
+        self.flush_lock.try_lock().is_err()
     }
 }
 
-fn report_dropped(count: usize) {
+fn report_losses(queue: &Mutex<QueueState>, rejected_at_flush: Option<usize>) -> usize {
+    let count = queue.lock().unwrap().take_losses(rejected_at_flush);
     if count != 0 {
         let _ = writeln!(
             std::io::stderr().lock(),
             "EMP diagnostic journal dropped {count} records"
         );
     }
+    count
 }
 
 struct Writer {
@@ -340,11 +413,11 @@ struct Writer {
     bytes: u64,
     sequence: u64,
     managed: u64,
-    event_gate: EventGate,
+    event_gates: SharedEventGates,
 }
 
 impl Writer {
-    fn new(directory: PathBuf, run_id: String, event_gate: EventGate) -> Self {
+    fn new(directory: PathBuf, run_id: String, event_gates: SharedEventGates) -> Self {
         let now = time::OffsetDateTime::now_utc();
         let basename = format!(
             "emp-{:04}{:02}{:02}T{:02}{:02}{:02}Z-{}-{run_id}",
@@ -365,7 +438,7 @@ impl Writer {
             bytes: 0,
             sequence: 0,
             managed: 0,
-            event_gate,
+            event_gates,
         }
     }
 
@@ -386,35 +459,39 @@ impl Writer {
                 error.kind()
             );
         }
-        let mut losses = 0usize;
         for Command { dropped, action } in receiver {
-            let (event, receipt) = match action {
-                Action::Event(event) => {
+            let (record, confirmation) = match action {
+                Action::Event(record) => {
                     queue.lock().unwrap().pending_events -= 1;
-                    (Some(event), None)
+                    (Some(record), None)
                 }
-                Action::Flush(event, receipt) => (event, Some(receipt)),
+                Action::Flush {
+                    record,
+                    rejected,
+                    receipt,
+                } => (record, Some((rejected, receipt))),
             };
-            losses = losses.saturating_add(dropped);
             if dropped != 0 {
-                self.write_event(&Event {
-                    timestamp: super::timestamp(),
-                    level: "warning",
-                    name: "journal_records_dropped".into(),
-                    fields: json!({"count":dropped}),
-                });
+                self.write_event(
+                    &super::timestamp(),
+                    &Event {
+                        level: "warning",
+                        name: "journal_records_dropped".into(),
+                        fields: json!({"count":dropped}),
+                    },
+                );
             }
-            if let Some(event) = event
-                && !self.write_event(&event)
-            {
-                losses = losses.saturating_add(1);
+            if let Some(record) = record {
+                let lost = !self.write_event(&record.timestamp, &record.event);
+                let mut queue = queue.lock().unwrap();
+                queue.settled += 1;
+                queue.lost_by_writer += usize::from(lost);
             }
-            if let Some(receipt) = receipt {
-                report_dropped(losses);
-                let _ = receipt.send(std::mem::take(&mut losses));
+            if let Some((rejected, receipt)) = confirmation {
+                let _ = receipt.send(report_losses(queue, Some(rejected)));
             }
         }
-        report_dropped(losses.saturating_add(queue.lock().unwrap().dropped));
+        report_losses(queue, None);
     }
 
     fn path(&self, part: u32) -> PathBuf {
@@ -422,7 +499,7 @@ impl Writer {
             .join(format!("{}-p{part:03}.jsonl", self.basename))
     }
     fn open_part(&self, part: u32) -> std::io::Result<File> {
-        no_symlinks(&self.directory)?;
+        let _parts_lock = self.lock_parts()?;
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -430,9 +507,34 @@ impl Writer {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         }
-        options.open(self.path(part))
+        let file = options.open(self.path(part))?;
+        #[cfg(unix)]
+        file.lock()?;
+        Ok(file)
     }
+
+    fn lock_parts(&self) -> std::io::Result<File> {
+        no_symlinks(&self.directory)?;
+        let mut lock_path = self.directory.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        let lock_path = PathBuf::from(lock_path);
+        no_symlinks(&lock_path)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(lock_path)?;
+        file.lock()?;
+        Ok(file)
+    }
+
     fn prune(&mut self) {
+        let Ok(_parts_lock) = self.lock_parts() else {
+            return;
+        };
         let parts = parts(&self.directory);
         self.managed = parts.iter().map(|part| part.3).sum();
         let newest = parts.last().map(|part| part.2.as_path());
@@ -442,18 +544,18 @@ impl Writer {
             }
             if *path != self.path(self.part)
                 && Some(path.as_path()) != newest
-                && std::fs::remove_file(path).is_ok()
+                && remove_closed_part(path)
             {
                 self.managed -= size;
             }
         }
     }
 
-    fn write_event(&mut self, event: &Event) -> bool {
+    fn write_event(&mut self, timestamp: &str, event: &Event) -> bool {
         if self.file.is_none() {
             return false;
         }
-        let mut record = json!({"timestamp":event.timestamp,"sequence":self.sequence+1,"run_id":self.run_id,"level":event.level,"event":event.name,"fields":event.fields});
+        let mut record = json!({"timestamp":timestamp,"sequence":self.sequence+1,"run_id":self.run_id,"level":event.level,"event":event.name,"fields":event.fields});
         let mut bytes = serde_json::to_vec(&record).expect("diagnostic JSON");
         if bytes.len() > MAX_RECORD {
             record["fields"] = json!({"_dropped":true,"_event":event.name});
@@ -469,7 +571,7 @@ impl Writer {
                 self.prune();
             }
             let file = self.file.as_mut().unwrap();
-            self.event_gate.before_write(&event.name);
+            self.event_gates.before_write.run(&event.name);
             file.write_all(&bytes)?;
             file.flush()?;
             self.sequence += 1;
@@ -491,6 +593,32 @@ impl Writer {
         }
         true
     }
+}
+
+fn remove_closed_part(path: &Path) -> bool {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_DELETE, FILE_SHARE_READ};
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);
+    }
+    let Ok(file) = options.open(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    if file.try_lock().is_err() {
+        return false;
+    }
+    let removed = std::fs::remove_file(path).is_ok();
+    drop(file);
+    removed
 }
 
 fn parts(directory: &Path) -> Vec<(std::time::SystemTime, String, PathBuf, u64)> {

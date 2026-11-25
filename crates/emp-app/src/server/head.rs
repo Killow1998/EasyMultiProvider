@@ -465,6 +465,14 @@ mod tests {
         assert!(poll_once(pin!(stream.flush())).await.is_pending());
         advance(Duration::from_secs(5)).await;
         stream.io.inner.0 = true;
-        assert_expired_without_io(&mut stream).await;
+        let calls = stream.io.calls;
+        assert!(matches!(
+            poll_once(pin!(stream.flush())).await,
+            Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::TimedOut
+        ));
+        assert_eq!(
+            stream.io.calls, calls,
+            "expired flush must not poll the underlying writer"
+        );
     }
 }

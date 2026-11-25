@@ -1,6 +1,6 @@
 use super::account_writes::{expect_upstream_get, normalize_body};
 use super::*;
-use crate::tests::{fixture_tls, live_journal, wait_for};
+use crate::tests::{fixture_tls, live_journal_until, wait_for};
 use emp_state::filesystem::count_commits;
 use emp_storage::quota_history::SAMPLE_INTERVAL_SECONDS;
 use emp_test_support::{Deadline, test_timeout};
@@ -609,16 +609,14 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
     client.write_all(body).await.unwrap();
     let root = fixture.directory.path().to_owned();
     tokio::task::spawn_blocking(move || {
-        wait_for(
-            &Deadline::after(test_timeout(Duration::from_secs(5))),
-            || {
-                live_journal(&root).iter().any(|record| {
-                    record["event"] == "operation_stage_started"
-                        && record["fields"]["operation"] == "catalog_refresh"
-                        && record["fields"]["last_stage"] == "publish_catalog"
-                })
-            },
-        );
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        wait_for(&deadline, || {
+            live_journal_until(&root, &deadline).iter().any(|record| {
+                record["event"] == "operation_stage_started"
+                    && record["fields"]["operation"] == "catalog_refresh"
+                    && record["fields"]["last_stage"] == "publish_catalog"
+            })
+        });
     })
     .await
     .unwrap();

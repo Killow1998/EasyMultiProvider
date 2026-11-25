@@ -7,7 +7,7 @@ use crate::server::raw_tcp::{
 use crate::tests::realtime_contract::{
     RealtimeUpstream, UpstreamResponse, app_server_for, multipart_offer,
 };
-use crate::tests::{live_journal, wait_for};
+use crate::tests::{live_journal_until, wait_for};
 use emp_test_support::{Deadline, test_timeout};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as AsyncListener, TcpStream as AsyncStream};
@@ -1100,10 +1100,11 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
         assert_eq!(diagnostics["health"]["sample_count"], 0);
         let root = fixture.directory.path().to_owned();
         let journal = tokio::task::spawn_blocking(move || {
-            let observations = || live_journal(&root).into_iter()
+            let deadline = Deadline::after(wire_timeout());
+            let observations = || live_journal_until(&root, &deadline).into_iter()
                 .filter(|row| row["event"] == "route_observation")
                 .map(|row| row["fields"].clone()).collect::<Vec<_>>();
-            wait_for(&Deadline::after(wire_timeout()), || observations().len() >= requests);
+            wait_for(&deadline, || observations().len() >= requests);
             observations()
         }).await.unwrap();
         for id in drain_ids {

@@ -2,7 +2,11 @@
 use super::*;
 
 pub(crate) fn live_journal(root: &Path) -> Vec<Value> {
-    read_journal(root, true)
+    read_journal(root, true, None)
+}
+
+pub(crate) fn live_journal_until(root: &Path, deadline: &Deadline) -> Vec<Value> {
+    read_journal(root, true, Some(deadline))
 }
 
 pub(crate) fn flushed_journal(root: &Path, state: &crate::app::ServerState) -> Vec<Value> {
@@ -11,11 +15,19 @@ pub(crate) fn flushed_journal(root: &Path, state: &crate::app::ServerState) -> V
 }
 
 pub(super) fn final_journal(root: &Path) -> Vec<Value> {
-    read_journal(root, false)
+    read_journal(root, false, None)
 }
 
-fn read_journal(root: &Path, complete_lines_only: bool) -> Vec<Value> {
-    let entries = std::fs::read_dir(root.join("state/logs")).unwrap();
+fn read_journal(root: &Path, complete_lines_only: bool, waiting: Option<&Deadline>) -> Vec<Value> {
+    let entries = match std::fs::read_dir(root.join("state/logs")) {
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && waiting.is_some_and(|deadline| !deadline.is_expired()) =>
+        {
+            return Vec::new();
+        }
+        entries => entries.unwrap(),
+    };
     entries
         .flat_map(|entry| {
             let path = entry.unwrap().path();

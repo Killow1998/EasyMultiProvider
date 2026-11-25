@@ -1,6 +1,7 @@
 use super::*;
 use emp_test_support::{Deadline, Observation, test_timeout};
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::time::Instant;
 
 const ORIGINAL: &str = "# user settings\nopenai_base_url = \"https://native.example/v1\"\n[features]\nunified_exec = true\n";
@@ -77,17 +78,37 @@ fn exit_restores_before_active_requests_and_websockets_release() {
     shutdown.join().unwrap().unwrap();
 }
 
+fn hold_journal_event(
+    state: &ServerState,
+    event: &'static str,
+) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (entered, writing) = mpsc::channel();
+    let (resume, release) = mpsc::channel();
+    state
+        .backend
+        .diagnostics
+        .journal
+        .gate_next_event(event, move || {
+            let _ = entered.send(());
+            let _ = release.recv();
+        });
+    (writing, resume)
+}
+
 #[test]
 fn final_journal_flush_waits_for_the_exit_restore_receipt() {
     let (directory, server) = fixture();
     let state = Arc::clone(&server.state);
     let callback_state = Arc::clone(&state);
+    let root = directory.path().to_owned();
     let callback = Observation::spawn(move |probe| {
         let result = prepare_exit(&callback_state, false);
         probe.observe(|_| result.is_ok());
         probe.observe(|_| {
             confirm_session_exit_restore(&callback_state, result);
-            true
+            crate::tests::live_journal(&root).iter().any(|record| {
+                record["event"] == "session_exit_restore" && record["fields"]["success"] == true
+            })
         });
     });
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
@@ -112,13 +133,18 @@ fn final_journal_flush_waits_for_the_exit_restore_receipt() {
             assert!(!before.iter().any(|record| {
                 record["event"] == "session_exit_restore" || record["event"] == "shutdown_complete"
             }));
+            let (writing, resume) = hold_journal_event(&state, "session_exit_restore");
             let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            let returned = callback.begin(deadline, "exit callback confirmed its receipt");
+            writing.recv_timeout(deadline.remaining()).unwrap();
+            assert!(state.backend.diagnostics.journal.flush_pending_for_test());
             assert!(
-                callback
-                    .begin(deadline, "exit callback confirmed its receipt")
-                    .wait()
-                    .unwrap()
+                !crate::tests::live_journal(directory.path())
+                    .iter()
+                    .any(|record| record["event"] == "session_exit_restore")
             );
+            resume.send(()).unwrap();
+            assert!(returned.wait().unwrap());
             drop(callback);
         })
         .unwrap();
@@ -135,6 +161,31 @@ fn final_journal_flush_waits_for_the_exit_restore_receipt() {
     assert_eq!(receipts[0]["fields"]["success"], true);
     assert_eq!(receipts[1]["event"], "shutdown_complete");
     assert!(receipts[0]["sequence"].as_u64().unwrap() < receipts[1]["sequence"].as_u64().unwrap());
+}
+
+#[test]
+fn final_journal_flush_does_not_hold_the_service_lock() {
+    let (directory, server) = fixture();
+    let state = Arc::clone(&server.state);
+    let shutdown = Observation::spawn(move |probe| {
+        probe.observe(|_| server.shutdown());
+    });
+    let (writing, resume) = hold_journal_event(&state, "shutdown_complete");
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let result = shutdown.begin(deadline, "finish shutdown");
+    writing.recv_timeout(deadline.remaining()).unwrap();
+    let _new_owner = emp_state::IntegrationFileLock::acquire(
+        &directory
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("state/service.lock"),
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .expect("service ownership is available before final journal acknowledgement");
+    resume.send(()).unwrap();
+    result.wait().unwrap().unwrap();
 }
 
 #[test]
