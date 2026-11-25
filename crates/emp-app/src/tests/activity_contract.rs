@@ -33,7 +33,7 @@ impl HeldUpstream {
                     break;
                 };
                 let mut stream = accept_before(&listener, observed.deadline());
-                let (path, headers, body) = receive_upstream_request(&mut stream);
+                let (path, headers, body) = receive_upstream_request(&stream, observed.deadline());
                 observed.complete((index, path, headers, body));
                 handlers.push(thread::spawn(move || {
                     let reply = release.recv_timeout(Duration::from_secs(8)).unwrap_or_else(|_| {

@@ -167,7 +167,9 @@ impl LocalMessagesApi {
                 if stream.set_nonblocking(false).is_err() {
                     break;
                 }
-                let Some(raw) = read_request_head(&mut stream) else {
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+                let mut input = deadline.io(&stream);
+                let Some(raw) = read_request_head_with(|buffer| input.read(buffer)) else {
                     break;
                 };
                 let method = raw
@@ -176,7 +178,7 @@ impl LocalMessagesApi {
                     .next()
                     .unwrap_or_default()
                     .to_owned();
-                let (path, headers, body) = receive_upstream_request_from_head(&stream, raw);
+                let (path, headers, body) = receive_upstream_request_from_head(&mut input, raw);
                 if request_sender
                     .send(LocalRequest {
                         method: method.clone(),

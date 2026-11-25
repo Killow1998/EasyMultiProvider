@@ -302,7 +302,8 @@ fn long_to_short_external_switch_compacts_before_the_destination_request() {
         let mut requests = Vec::new();
         loop {
             let (mut stream, _) = listener.accept().expect("accept compaction request");
-            let (_, _, body) = receive_upstream_request(&mut stream);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            let (_, _, body) = receive_upstream_request(&stream, &deadline);
             let wire = body.to_string();
             let summary = wire.contains("structured portable checkpoint")
                 || wire.contains("Merge the visible portable checkpoints");

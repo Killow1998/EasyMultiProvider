@@ -6,6 +6,7 @@ use crate::services::auto_review::{automatic_review_candidates, resolve_auto_rev
 use crate::services::request_outcome::RequestOutcome;
 use emp_codex::{account_auth_headers, native_catalog_owner};
 use emp_domain::{ResolvedRoute, RouteResolutionError};
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -532,8 +533,9 @@ impl ReviewStreamUpstream {
                     .write_all(b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                     .expect("reject native WebSocket and exercise HTTP fallback");
                 drop(stream);
-                let (mut fallback, _) = listener.accept().expect("accept HTTP fallback");
-                let (path, headers, body) = super::receive_upstream_request(&mut fallback);
+                let (fallback, _) = listener.accept().expect("accept HTTP fallback");
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+                let (path, headers, body) = super::receive_upstream_request(&fallback, &deadline);
                 sender.send((path, headers, body)).unwrap();
                 stream = fallback;
             } else {

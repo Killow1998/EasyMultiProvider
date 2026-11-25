@@ -243,7 +243,8 @@ fn jev_decisions_forward_the_body_and_provider_key_without_entering_the_model_ca
     let worker = thread::spawn(move || {
         for status in [200, 429] {
             let (mut stream, _) = listener.accept().unwrap();
-            let incoming = receive_upstream_request(&mut stream);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            let incoming = receive_upstream_request(&stream, &deadline);
             send.send(incoming).unwrap();
             let body = if status == 200 {
                 br#"{"model":"typesafe/jev-1.14","answers":{"effort":"low"},"usage":{"input_tokens":5}}"#.as_slice()
@@ -327,7 +328,8 @@ fn decision_settings_persist_and_route_native_payloads_with_per_service_defaults
     let worker = thread::spawn(move || {
         for _ in 0..5 {
             let (mut stream, _) = listener.accept().unwrap();
-            let incoming = receive_upstream_request(&mut stream);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            let incoming = receive_upstream_request(&stream, &deadline);
             let body = if incoming.0 == "/openai/v1/decisions" {
                 br#"{"model":"gpt-6-luna","answers":[{"name":"urgent","type":"predicate","probability":0.2}],"usage":{"input_tokens":7}}"#.as_slice()
             } else {

@@ -160,7 +160,10 @@ fn not_modified_without_cached_metadata_is_rejected() {
     let server = thread::spawn(move || {
         retry::serve_responses(
             listener,
-            vec![b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_vec()],
+            [(
+                Duration::ZERO,
+                b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_vec(),
+            )],
         )
     });
     let manager = manager(root.path(), &base, "0.13.7");
@@ -195,16 +198,28 @@ fn stable_history_spans_pages_survives_304_and_tracks_the_installed_version() {
         let body = body.to_string();
         format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"history\"\r\nConnection: close\r\n\r\n{body}",body.len()).into_bytes()
     };
-    let replies = vec![
-        response(json!(first)),
-        b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
-        b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_vec(),
-        response(json!(vec![
-            json!({"tag_name":"v0.14.0-beta1","draft":false,"prerelease":true});
-            100
-        ])),
-        response(next),
-        b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_vec(),
+    let replies = [
+        (Duration::ZERO, response(json!(first))),
+        (
+            Duration::ZERO,
+            b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        ),
+        (
+            NETWORK_RETRY_BACKOFF[0],
+            b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_vec(),
+        ),
+        (
+            Duration::ZERO,
+            response(json!(vec![
+                json!({"tag_name":"v0.14.0-beta1","draft":false,"prerelease":true});
+                100
+            ])),
+        ),
+        (Duration::ZERO, response(next)),
+        (
+            Duration::ZERO,
+            b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_vec(),
+        ),
     ];
     let server = thread::spawn(move || retry::serve_responses(listener, replies));
     let open = |version: &str| {

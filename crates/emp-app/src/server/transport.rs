@@ -147,10 +147,16 @@ pub(crate) fn read_request_head_before(
     stream: &mut StdStream,
     deadline: Instant,
 ) -> Option<RequestHead> {
+    read_request_head_with(|buffer| read_before(stream, buffer, deadline))
+}
+
+pub(crate) fn read_request_head_with(
+    mut read: impl FnMut(&mut [u8]) -> io::Result<usize>,
+) -> Option<RequestHead> {
     let mut buffer = [0_u8; 1024];
     let mut request = Vec::new();
     loop {
-        let count = read_before(stream, &mut buffer, deadline).ok()?;
+        let count = read(&mut buffer).ok()?;
         if count == 0 {
             break;
         }

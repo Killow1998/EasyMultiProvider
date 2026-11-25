@@ -17,12 +17,13 @@ impl Upstream {
         let counted = Arc::clone(&count);
         let worker = thread::spawn(move || {
             while !stopped.load(Ordering::Acquire) {
-                let (mut stream, _) = listener.accept().unwrap();
+                let (stream, _) = listener.accept().unwrap();
                 if stopped.load(Ordering::Acquire) {
                     break;
                 }
                 stream.set_nonblocking(false).unwrap();
-                let (path, _, body) = receive_upstream_request(&mut stream);
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+                let (path, _, body) = receive_upstream_request(&stream, &deadline);
                 assert_eq!(body["model"], "upstream");
                 let (content_type, response) = if path.ends_with("/chat/completions") {
                     let mut events = String::new();

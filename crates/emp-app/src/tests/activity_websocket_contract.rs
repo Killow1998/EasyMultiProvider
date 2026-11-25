@@ -26,7 +26,8 @@ impl HeldActivityUpstream {
                     break;
                 };
                 let mut stream = accept_before(&listener, observed.deadline());
-                observed.complete(receive_upstream_request(&mut stream));
+                let request = receive_upstream_request(&stream, observed.deadline());
+                observed.complete(request);
 
                 let id = format!("resp_activity_{index}");
                 let created = json!({

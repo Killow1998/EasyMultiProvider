@@ -81,11 +81,13 @@ impl CatalogUpstream {
                         stream
                             .set_nonblocking(false)
                             .expect("blocking accepted discovery stream");
-                        let Some(raw) = read_request_head(&mut stream) else {
+                        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+                        let mut input = deadline.io(&stream);
+                        let Some(raw) = read_request_head_with(|buffer| input.read(buffer)) else {
                             continue;
                         };
                         let (path, headers, body) =
-                            receive_upstream_request_from_head(&stream, raw);
+                            receive_upstream_request_from_head(&mut input, raw);
                         sender
                             .send((path.clone(), headers, body))
                             .expect("record request");

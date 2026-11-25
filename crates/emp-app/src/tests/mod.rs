@@ -12,7 +12,7 @@ use crate::http::request::RequestHead;
 use crate::http::request::parse_request;
 use crate::http::response::status_text;
 use crate::lifecycle::ServerHandle;
-use crate::server::transport::read_request_head;
+use crate::server::transport::{read_request_head, read_request_head_with};
 use crate::services::accounts::notify_quota_update;
 use crate::services::compaction::COMPACTION_PROMPT;
 use crate::services::events::sse_frame;
@@ -557,13 +557,17 @@ pub(crate) struct OneShotUpstream {
     worker: Option<JoinHandle<()>>,
 }
 
-fn receive_upstream_request(stream: &mut TcpStream) -> (String, BTreeMap<String, String>, Value) {
-    let raw = read_request_head(stream).expect("upstream request head");
-    receive_upstream_request_from_head(stream, raw)
+fn receive_upstream_request(
+    stream: &TcpStream,
+    deadline: &Deadline,
+) -> (String, BTreeMap<String, String>, Value) {
+    let mut stream = deadline.io(stream);
+    let raw = read_request_head_with(|buffer| stream.read(buffer)).expect("upstream request head");
+    receive_upstream_request_from_head(&mut stream, raw)
 }
 
 fn receive_upstream_request_from_head(
-    stream: &TcpStream,
+    stream: &mut DeadlineIo<&TcpStream>,
     raw: RequestHead,
 ) -> (String, BTreeMap<String, String>, Value) {
     let request = parse_request(&raw.head).expect("upstream HTTP request");
@@ -579,7 +583,6 @@ fn receive_upstream_request_from_head(
         .get("content-length")
         .map(|value| value.parse::<usize>().expect("upstream Content-Length"))
         .unwrap_or(0);
-    let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
     let mut body = raw.body_prefix;
     while body.len() < length {
         let mut chunk = [0_u8; 4096];
@@ -603,7 +606,10 @@ fn receive_upstream_request_from_head(
         .expect("decode upstream request");
         serde_json::from_slice(&decoded).expect("upstream request JSON")
     };
-    (path, headers, body)
+    stream
+        .deadline()
+        .accept((path, headers, body), "complete upstream request")
+        .unwrap()
 }
 
 impl OneShotUpstream {
@@ -675,7 +681,8 @@ impl OneShotUpstream {
                 let Ok((mut stream, _)) = listener.accept() else {
                     break;
                 };
-                let (path, headers, body) = receive_upstream_request(&mut stream);
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+                let (path, headers, body) = receive_upstream_request(&stream, &deadline);
                 let _ = sender.send((path, headers, body));
                 reply(&mut stream);
             }
@@ -740,7 +747,8 @@ fn two_attempt_upstream(
             let Ok((mut stream, _)) = listener.accept() else {
                 break;
             };
-            let (path, _, _) = receive_upstream_request(&mut stream);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            let (path, _, _) = receive_upstream_request(&stream, &deadline);
             let _ = path_sender.send(path);
             let (status, response_type, body) = if attempt == 0 {
                 (

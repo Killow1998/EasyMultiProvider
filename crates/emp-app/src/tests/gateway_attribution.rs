@@ -82,7 +82,8 @@ fn agent_calls_keep_client_and_session_attribution_through_http_and_billing() {
         let mut ids = Vec::new();
         for index in 0..count {
             let (mut stream, _) = listener.accept().unwrap();
-            let (_, headers, payload) = receive_upstream_request(&mut stream);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            let (_, headers, payload) = receive_upstream_request(&stream, &deadline);
             assert_eq!(headers["authorization"], "Bearer upstream-secret");
             ids.push(headers["x-emp-request-id"].clone());
             let body = json!({"id":format!("agent-response-{index}"),"object":"chat.completion",

@@ -5,6 +5,7 @@ mod support;
 
 use emp_state::VaultStore;
 use emp_test_support::{Deadline, accept_blocking, test_timeout};
+use emp_updater::manager::NETWORK_RETRY_BACKOFF;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -105,7 +106,7 @@ fn try_request_before(
     deadline.accept(response, path)
 }
 
-fn update_accepted(port: u16, session: &str, path: &str) -> Deadline {
+fn update_accepted(port: u16, session: &str, path: &str, backoff: Duration) -> Deadline {
     let response = support::http::http_before(
         port,
         "POST",
@@ -117,7 +118,9 @@ fn update_accepted(port: u16, session: &str, path: &str) -> Deadline {
         b"{}",
         &Deadline::after(test_timeout(Duration::from_secs(10))),
     );
-    let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
+    let margin = if backoff.is_zero() { 10 } else { 3 };
+    let completion_budget = backoff + test_timeout(Duration::from_secs(margin));
+    let deadline = Deadline::after(completion_budget);
     assert_eq!(response.status, 202, "{path}: {}", response.text());
     deadline
 }
@@ -139,7 +142,7 @@ fn accepted_update_does_not_wait_for_the_connection_to_close() {
             stream.write_all(framing).unwrap();
             finish.recv().unwrap();
         });
-        let deadline = update_accepted(port, "fixture", "/api/updates/check");
+        let deadline = update_accepted(port, "fixture", "/api/updates/check", Duration::ZERO);
         assert!(!deadline.is_expired());
         received.send(()).unwrap();
         server.join().unwrap();
@@ -266,6 +269,16 @@ enum FakeReleaseMode {
     TemporaryPackageError,
 }
 
+impl FakeReleaseMode {
+    fn retry_backoff(self) -> Duration {
+        match self {
+            Self::ReleaseError | Self::PackageError => NETWORK_RETRY_BACKOFF.iter().sum(),
+            Self::TemporaryPackageError => NETWORK_RETRY_BACKOFF[0],
+            Self::Valid | Self::InvalidJson => Duration::ZERO,
+        }
+    }
+}
+
 fn release_server_with_mode(
     package: Vec<u8>,
     digest: String,
@@ -293,7 +306,13 @@ fn release_server_with_mode(
         if started.recv().is_err() {
             return;
         }
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
+        let margin = match mode {
+            FakeReleaseMode::ReleaseError | FakeReleaseMode::PackageError => 13,
+            FakeReleaseMode::TemporaryPackageError => 19,
+            FakeReleaseMode::Valid | FakeReleaseMode::InvalidJson => 20,
+        };
+        let fixture_budget = mode.retry_backoff() + test_timeout(Duration::from_secs(margin));
+        let deadline = Deadline::after(fixture_budget);
         let mut handled = 0;
         let expected_requests = match mode {
             FakeReleaseMode::InvalidJson => 2,
@@ -796,7 +815,8 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         assert_update_accepted_wire(&install.join().unwrap());
     }
 
-    let gate_deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
+    let gate_budget = NETWORK_RETRY_BACKOFF[0] + test_timeout(Duration::from_secs(9));
+    let gate_deadline = Deadline::after(gate_budget);
     let mut observed_closed_gate = false;
     let mut delete_during_update = None;
     let mut config_during_update = None;
@@ -1066,7 +1086,12 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
             release_server_with_mode(b"unused".to_vec(), "0".repeat(64), mode);
         let mut emp = start_authenticated_emp(&case, &repository, false);
         server.start();
-        let deadline = update_accepted(emp.port, &emp.session, "/api/updates/check");
+        let deadline = update_accepted(
+            emp.port,
+            &emp.session,
+            "/api/updates/check",
+            mode.retry_backoff(),
+        );
         wait_for_error(emp.port, &emp.session, expected, &deadline);
         server.join().expect("fake release error server completed");
         stop_emp(&mut emp);
@@ -1080,7 +1105,12 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
     drop(listener);
     let base = format!("http://{unused}");
     let mut emp = start_authenticated_emp_with_api(&case, &base, &format!("{base}/latest"), false);
-    let deadline = update_accepted(emp.port, &emp.session, "/api/updates/check");
+    let deadline = update_accepted(
+        emp.port,
+        &emp.session,
+        "/api/updates/check",
+        NETWORK_RETRY_BACKOFF.iter().sum(),
+    );
     wait_for_error(emp.port, &emp.session, "update_failed", &deadline);
     stop_emp(&mut emp);
 
@@ -1110,7 +1140,12 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         &format!("{partial_base}/latest"),
         false,
     );
-    let deadline = update_accepted(emp.port, &emp.session, "/api/updates/check");
+    let deadline = update_accepted(
+        emp.port,
+        &emp.session,
+        "/api/updates/check",
+        NETWORK_RETRY_BACKOFF.iter().sum(),
+    );
     wait_for_error(emp.port, &emp.session, "update_failed", &deadline);
     partial_server.join().unwrap();
     stop_emp(&mut emp);
@@ -1144,7 +1179,12 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
         let mut emp = start_authenticated_emp(&case, &repository, false);
         server.start();
         check_for_available(&emp);
-        let deadline = update_accepted(emp.port, &emp.session, "/api/updates/install");
+        let deadline = update_accepted(
+            emp.port,
+            &emp.session,
+            "/api/updates/install",
+            mode.retry_backoff(),
+        );
         wait_for_error(emp.port, &emp.session, expected, &deadline);
         server.join().expect("fake package error server completed");
         assert_eq!(
@@ -1164,7 +1204,12 @@ fn malicious_symlink_package_is_rejected_before_replacement() {
     let mut emp = start_authenticated_emp(temp.path(), &repository, false);
     server.start();
     check_for_available(&emp);
-    let deadline = update_accepted(emp.port, &emp.session, "/api/updates/install");
+    let deadline = update_accepted(
+        emp.port,
+        &emp.session,
+        "/api/updates/install",
+        Duration::ZERO,
+    );
     wait_for_error(emp.port, &emp.session, "invalid_package", &deadline);
     assert_eq!(
         std::fs::read(&emp.executable).unwrap(),
@@ -1182,7 +1227,12 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
     let mut emp = start_authenticated_emp(temp.path(), &repository, true);
     server.start();
     check_for_available(&emp);
-    let deadline = update_accepted(emp.port, &emp.session, "/api/updates/install");
+    let deadline = update_accepted(
+        emp.port,
+        &emp.session,
+        "/api/updates/install",
+        Duration::ZERO,
+    );
     wait_for_error(emp.port, &emp.session, "worker_failed", &deadline);
     let delete = request(
         emp.port,

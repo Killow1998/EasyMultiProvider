@@ -9,7 +9,8 @@ fn responses_sse_stops_at_terminal_without_eof_or_parsing_the_tail() {
         let (release, hold) = std::sync::mpsc::channel();
         let worker = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let _ = receive_upstream_request(&mut stream);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            let _ = receive_upstream_request(&stream, &deadline);
             stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
             let data = concat!(
                 "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fixture\"}}\n\n",

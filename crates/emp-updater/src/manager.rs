@@ -4,6 +4,7 @@ mod operations;
 mod retry;
 mod trace;
 pub use diagnostics::UpdateDiagnostic;
+pub use retry::NETWORK_RETRY_BACKOFF;
 #[cfg(test)]
 mod tests;
 

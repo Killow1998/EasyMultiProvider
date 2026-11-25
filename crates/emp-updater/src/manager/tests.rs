@@ -1,6 +1,6 @@
 #[cfg(any(unix, windows))]
 use super::probe_candidate_version;
-use super::{UpdateManager, nonce_with};
+use super::{NETWORK_RETRY_BACKOFF, UpdateManager, nonce_with};
 use crate::release::UpdateEndpoints;
 use emp_test_support::{Deadline, accept_blocking, test_timeout};
 use std::io::{Read, Write};
@@ -288,10 +288,10 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = thread::spawn(move || {
-        retry::serve_responses(listener, vec![
-            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
-            4
-        ])
+        let attempts = std::iter::once(Duration::ZERO).chain(NETWORK_RETRY_BACKOFF);
+        retry::serve_responses(listener, attempts.map(|backoff| {
+            (backoff, b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec())
+        }))
     });
     let endpoints = UpdateEndpoints::for_source(&base, format!("{base}/latest"));
     let manager = UpdateManager::with_endpoints(
@@ -480,7 +480,8 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
     )
     .unwrap();
     manager.start("check").unwrap();
-    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let completion_budget = NETWORK_RETRY_BACKOFF[0] + test_timeout(Duration::from_secs(4));
+    let deadline = Deadline::after(completion_budget);
     loop {
         if events
             .lock()
@@ -546,7 +547,8 @@ fn release_check_retains_notes_without_starting_installation() {
         body,
     ]
     .concat();
-    let server = thread::spawn(move || retry::serve_responses(listener, vec![response]));
+    let server =
+        thread::spawn(move || retry::serve_responses(listener, [(Duration::ZERO, response)]));
     let manager = UpdateManager::with_endpoints(
         std::env::current_exe().unwrap(),
         Vec::new(),

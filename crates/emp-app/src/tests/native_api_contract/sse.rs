@@ -65,7 +65,9 @@ fn read_native_sse(input: impl BufRead, deadline: &Deadline) -> (String, Vec<Str
     while !stream.fill_buf().unwrap().is_empty() {
         frames.push(read_sse_frame(&mut stream));
     }
-    (head, frames)
+    deadline
+        .accept((head, frames), "native SSE response")
+        .unwrap()
 }
 
 fn post_native_sse(server: &ServerHandle, body: &[u8], headers: &[&str]) -> (String, Vec<String>) {

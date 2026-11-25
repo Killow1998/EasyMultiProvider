@@ -206,35 +206,48 @@ fn interrupt_can_collect_an_on_time_upstream_close_after_a_later_receipt() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let http_client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (http_upstream, _) = listener.accept().unwrap();
+    let (eof_observed, before_receipt) = mpsc::channel();
     let observation = Observation::spawn(move |probe| {
-        probe.observe(|deadline| upstream_closed_before(&http_upstream, deadline));
+        let Some(request) = probe.next_request() else {
+            return;
+        };
+        assert_eq!(
+            request
+                .deadline()
+                .io(&http_upstream)
+                .peek(&mut [0])
+                .unwrap(),
+            0
+        );
+        request.complete(true);
+        eof_observed.send(()).unwrap();
     });
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
-    let peer = thread::spawn(move || {
-        let stream = super::interrupt::complete_upgrade(listener.accept().unwrap().0);
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-        let mut io = deadline.io(&stream);
-        let mut socket = WebSocketConnection::new(&mut io);
-        assert_eq!(
-            upstream_websocket_request(&mut socket, &deadline)["type"],
-            "response.interrupt"
-        );
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let start = tokio::time::Instant::now();
-            tokio::time::sleep_until(start + test_timeout(Duration::from_secs(1))).await;
+    let peer = Observation::spawn(move |probe| {
+        probe.observe(|deadline| {
+            let stream = super::interrupt::complete_upgrade(accept_before(&listener, deadline));
+            let mut io = deadline.io(&stream);
+            let mut socket = WebSocketConnection::new(&mut io);
+            assert_eq!(
+                upstream_websocket_request(&mut socket, deadline)["type"],
+                "response.interrupt"
+            );
             drop(http_client);
-            tokio::time::sleep_until(start + test_timeout(Duration::from_secs(3))).await;
+            before_receipt
+                .recv_timeout(deadline.remaining())
+                .expect("observe HTTP EOF before sending the interrupt receipt");
+            socket
+                .send_json(&json!({"type":"response.incomplete"}))
+                .unwrap();
         });
-        socket
-            .send_json(&json!({"type":"response.incomplete"}))
-            .unwrap();
     });
+    let peer_done = peer.begin(
+        Deadline::after(test_timeout(Duration::from_secs(5))),
+        "interrupt peer sent receipt",
+    );
     let mut client = ClientWebSocket::connect(
         &format!("ws://{address}/v1/responses"),
         &BTreeMap::new(),
@@ -248,5 +261,5 @@ fn interrupt_can_collect_an_on_time_upstream_close_after_a_later_receipt() {
     );
     assert_eq!(receipt.unwrap()["type"], "response.incomplete");
     assert!(closed.unwrap());
-    peer.join().unwrap();
+    peer_done.wait().unwrap();
 }

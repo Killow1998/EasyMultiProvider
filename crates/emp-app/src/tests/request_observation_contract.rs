@@ -10,8 +10,8 @@ fn cancelled_compaction_does_not_claim_a_terminal_write() {
         let Some(dispatch) = probe.next_request() else {
             return;
         };
-        let mut stream = accept_before(&listener, dispatch.deadline());
-        receive_upstream_request(&mut stream);
+        let stream = accept_before(&listener, dispatch.deadline());
+        receive_upstream_request(&stream, dispatch.deadline());
         dispatch.complete(true);
         probe.observe(|deadline| matches!(deadline.io(stream).read(&mut [0]), Ok(0)));
     });

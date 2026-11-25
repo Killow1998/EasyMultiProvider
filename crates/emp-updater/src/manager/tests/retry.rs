@@ -4,11 +4,15 @@ use crate::{UpdateError, download::download_package, release::Asset};
 use emp_test_support::{Deadline, accept_blocking, test_timeout};
 use sha2::{Digest, Sha256};
 
-pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) -> usize {
+pub(super) fn serve_responses(
+    listener: TcpListener,
+    responses: impl IntoIterator<Item = (Duration, Vec<u8>)>,
+) -> usize {
     listener.set_nonblocking(true).unwrap();
     let mut requests = 0;
-    for response in responses {
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(12)));
+    for (backoff, response) in responses {
+        let request_budget = backoff + test_timeout(Duration::from_secs(12));
+        let deadline = Deadline::after(request_budget);
         let stream = loop {
             match accept_blocking(&listener) {
                 Ok((stream, _)) => {
@@ -41,7 +45,9 @@ pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) ->
     requests
 }
 
-fn fixture(responses: Vec<Vec<u8>>) -> (UpdateManager, Asset, thread::JoinHandle<usize>) {
+fn fixture<const N: usize>(
+    responses: [(Duration, Vec<u8>); N],
+) -> (UpdateManager, Asset, thread::JoinHandle<usize>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = thread::spawn(move || serve_responses(listener, responses));
@@ -71,9 +77,13 @@ fn interrupted_download_retries_from_zero_and_verifies_the_complete_file() {
         b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\npart".to_vec(),
         b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\npart".to_vec(),
     ] {
-        let (manager, asset, server) = fixture(vec![
-            first,
-            b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\ncomplete".to_vec(),
+        let (manager, asset, server) = fixture([
+            (Duration::ZERO, first),
+            (
+                NETWORK_RETRY_BACKOFF[0],
+                b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\ncomplete"
+                    .to_vec(),
+            ),
         ]);
         let root = emp_test_support::fixture_dir().unwrap();
         let destination = root.path().join("package");
@@ -96,7 +106,7 @@ fn permanent_download_failures_do_not_retry() {
             "checksum_mismatch",
         ),
     ] {
-        let (manager, asset, server) = fixture(vec![response]);
+        let (manager, asset, server) = fixture([(Duration::ZERO, response)]);
         let root = emp_test_support::fixture_dir().unwrap();
         assert_eq!(
             download_package(&manager, &asset, &root.path().join("package"), |_| {}).unwrap_err(),
@@ -109,10 +119,16 @@ fn permanent_download_failures_do_not_retry() {
 
 #[test]
 fn release_check_recovers_from_a_temporary_service_failure() {
-    let (manager, _, server) = fixture(vec![
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            .to_vec(),
-        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+    let (manager, _, server) = fixture([
+        (
+            Duration::ZERO,
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+        ),
+        (
+            NETWORK_RETRY_BACKOFF[0],
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        ),
     ]);
     manager.check().unwrap();
     assert_eq!(server.join().unwrap(), 2);

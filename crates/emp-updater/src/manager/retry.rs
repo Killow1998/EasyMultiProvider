@@ -2,7 +2,12 @@
 use super::{Result, UpdateManager, json};
 use std::time::Duration;
 
-pub(super) const MAX_RETRIES: u8 = 3;
+pub const NETWORK_RETRY_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+pub(super) const MAX_RETRIES: u8 = NETWORK_RETRY_BACKOFF.len() as u8;
 
 impl UpdateManager {
     pub(crate) fn retry_network(&self, mut operation: impl FnMut() -> Result<()>) -> Result<()> {
@@ -63,7 +68,7 @@ impl UpdateManager {
                 clippy::disallowed_methods,
                 reason = "更新请求失败后按既有指数退避间隔重试"
             )]
-            std::thread::sleep(Duration::from_secs(1 << (count - 1)));
+            std::thread::sleep(NETWORK_RETRY_BACKOFF[usize::from(count - 1)]);
         }
     }
 }

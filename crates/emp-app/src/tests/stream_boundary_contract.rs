@@ -128,7 +128,8 @@ fn streaming_flushes_before_upstream_eof() {
     let (release, released) = mpsc::sync_channel(1);
     let worker = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept upstream");
-        let _ = receive_upstream_request(&mut stream);
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let _ = receive_upstream_request(&stream, &deadline);
         stream
                 .write_all(
                     format!(
@@ -186,7 +187,7 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
             return;
         };
         let mut stream = accept_before(&listener, dispatch.deadline());
-        let _ = receive_upstream_request(&mut stream);
+        let _ = receive_upstream_request(&stream, dispatch.deadline());
         stream
             .write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",

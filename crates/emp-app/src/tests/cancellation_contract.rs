@@ -9,8 +9,8 @@ fn downstream_disconnect_cancels_external_open_before_upstream_headers() {
         let Some(dispatch) = probe.next_request() else {
             return;
         };
-        let mut stream = accept_before(&listener, dispatch.deadline());
-        let _ = receive_upstream_request(&mut stream);
+        let stream = accept_before(&listener, dispatch.deadline());
+        let _ = receive_upstream_request(&stream, dispatch.deadline());
         dispatch.complete(true);
         probe.observe(|deadline| upstream_closed_before(&stream, deadline));
     });
