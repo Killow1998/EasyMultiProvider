@@ -407,9 +407,14 @@ fn update_drain_waits_for_request_access_to_drop() {
                 .unwrap();
         let access = RequestAccess::require(request, state, None)
             .unwrap_or_else(|error| panic!("write admission failed: {:?}", error.reply()));
+        let budget = test_timeout(Duration::from_millis(50));
         assert!(
-            updates.drain_blocked_for_test(),
-            "an immediate drain cannot succeed while the request still has access"
+            !updates.drain_for_test(budget).await,
+            "update drain must time out while the DELETE request holds its permit"
+        );
+        assert!(
+            updates.enter().is_some(),
+            "update drain timeout must reopen admission"
         );
 
         let draining = tokio::spawn(updates.drain_for_test(wire_timeout()));
@@ -421,10 +426,6 @@ fn update_drain_waits_for_request_access_to_drop() {
         })
         .await
         .unwrap();
-        assert!(
-            !draining.is_finished(),
-            "update drain finished while the DELETE request still held its permit"
-        );
         drop(access);
         assert!(
             draining.await.unwrap(),
@@ -435,7 +436,7 @@ fn update_drain_waits_for_request_access_to_drop() {
 
 #[cfg(unix)]
 #[test]
-fn update_drain_expires_while_queued_without_closing_admission() {
+fn update_drain_queued_past_deadline_succeeds_only_when_idle() {
     let fixture = Fixture::new();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -443,34 +444,36 @@ fn update_drain_expires_while_queued_without_closing_admission() {
         .build()
         .unwrap()
         .block_on(async {
-            let (occupied, ready) = oneshot::channel();
-            let (release, released) = oneshot::channel();
-            let blocker = tokio::task::spawn_blocking(move || {
-                occupied.send(()).unwrap();
-                let _ = released.blocking_recv();
-            });
-            receive(ready, "blocking worker occupied").await;
-
-            let state = &fixture.server.state;
+            let updates = fixture.server.state.lifecycle.updates();
             let budget = test_timeout(Duration::from_millis(50));
-            let result = timeout(
-                wire_timeout().duration(),
-                state.lifecycle.updates().drain_for_test(budget),
-            )
-            .await;
-            release.send(()).unwrap();
-            blocker.await.unwrap();
-            assert!(
-                !result.expect("update drain must return while the worker is still occupied"),
-                "a queued update drain cannot succeed after its deadline"
-            );
+            for has_in_flight_request in [true, false] {
+                let _permit = has_in_flight_request.then(|| updates.enter().unwrap());
+                let (occupied, ready) = oneshot::channel();
+                let (release, released) = oneshot::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    occupied.send(()).unwrap();
+                    let _ = released.blocking_recv();
+                });
+                receive(ready, "blocking worker occupied").await;
 
-            let state = state.clone();
-            let admitted =
-                tokio::task::spawn_blocking(move || state.lifecycle.updates().enter().is_some())
-                    .await
-                    .unwrap();
-            assert!(admitted, "the expired update drain closed admission");
+                let mut draining = std::pin::pin!(updates.drain_for_test(budget));
+                assert!(
+                    timeout(budget.duration(), draining.as_mut()).await.is_err(),
+                    "update drain returned while its blocking worker was occupied"
+                );
+                release.send(()).unwrap();
+                blocker.await.unwrap();
+                assert_eq!(
+                    draining.await,
+                    !has_in_flight_request,
+                    "expired drain must succeed only when there are no in-flight requests"
+                );
+                assert_eq!(
+                    updates.enter().is_some(),
+                    has_in_flight_request,
+                    "admission must reopen on timeout and stay closed after success"
+                );
+            }
         });
     fixture.server.shutdown().unwrap();
 }

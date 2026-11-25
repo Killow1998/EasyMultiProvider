@@ -132,29 +132,15 @@ impl UpdateState {
 
 #[cfg(all(test, unix))]
 impl UpdateState {
+    /// The budget limits the wait for in-flight requests to finish.
+    /// With no requests in flight, draining succeeds even after the deadline.
     pub(crate) fn drain_for_test(&self, budget: TestBudget) -> impl Future<Output = bool> + use<> {
-        let started_at = Instant::now();
-        let deadline = Deadline::starting_at(started_at, budget);
-        let expires_at = started_at + budget.duration();
-        assert!(
-            !budget.duration().is_zero(),
-            "update drain needs a positive test budget"
-        );
+        let deadline = Deadline::after(budget);
         let gate = Arc::clone(&self.gate);
         async move {
-            let task = tokio::task::spawn_blocking(move || {
-                if deadline.is_expired() {
-                    return false;
-                }
-                let Ok(state) = gate.state.lock() else {
-                    return false;
-                };
-                !deadline.is_expired() && drain_requests(&gate, state, expires_at)
-            });
-            match tokio::time::timeout_at(expires_at.into(), task).await {
-                Ok(drained) => drained.unwrap() && !deadline.is_expired(),
-                Err(_) => false,
-            }
+            tokio::task::spawn_blocking(move || drain(&gate, deadline.remaining()))
+                .await
+                .unwrap()
         }
     }
 
