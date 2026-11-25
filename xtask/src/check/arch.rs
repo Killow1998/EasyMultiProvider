@@ -187,11 +187,14 @@ fn dependencies(
             let to = dependency["name"]
                 .as_str()
                 .ok_or("[arch] dependency 缺少 name")?;
-            let dev = dependency["kind"].as_str() == Some("dev");
-            if from == "emp-modules" && !dev && !matches!(to, "emp-domain" | "serde" | "serde_json")
+            let kind = &dependency["kind"];
+            let dev = kind.as_str() == Some("dev");
+            if from == "emp-modules"
+                && kind.is_null()
+                && !matches!(to, "emp-domain" | "serde" | "serde_json")
             {
                 errors.push(format!(
-                    "[module-sdk-deps] {}: emp-modules → {to} 不在 SDK 的普通及构建依赖白名单中，只允许 emp-domain、serde 和 serde_json",
+                    "[module-sdk-deps] {}: emp-modules → {to} 不在 SDK 的普通依赖白名单中，只允许 emp-domain、serde 和 serde_json",
                     package["manifest_path"].as_str().unwrap_or("Cargo.toml"),
                 ));
             }
@@ -390,7 +393,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn module_sdk_limits_non_dev_dependencies_including_external_crates() {
+    fn module_sdk_limits_normal_dependencies_including_external_crates() {
         for (to, path, kind, valid) in [
             (
                 "emp-domain",
@@ -401,7 +404,7 @@ mod tests {
             ("serde", Value::Null, Value::Null, true),
             ("serde_json", Value::Null, Value::Null, true),
             ("tokio", Value::Null, Value::Null, false),
-            ("tokio", Value::Null, json!("build"), false),
+            ("tokio", Value::Null, json!("build"), true),
             ("tokio", Value::Null, json!("dev"), true),
             (
                 "emp-config",

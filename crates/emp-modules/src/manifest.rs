@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::{collections::BTreeSet, fmt};
 
 pub const HOST_API_V3: HostApi = HostApi { major: 3, minor: 0 };
@@ -23,13 +24,47 @@ impl ApiRequirement {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Decode a manifest with [`Self::from_json`] to enforce its JSON object shape.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ModuleManifest {
     pub id: String,
     pub module_version: String,
     pub host_api: ApiRequirement,
     pub contributions: Vec<Contribution>,
+}
+
+#[derive(Debug)]
+pub enum ManifestDecodeError {
+    Json(serde_json::Error),
+    ManifestNotObject,
+    HostApiNotObject,
+    ContributionNotObject { index: usize },
+    ContributionFieldNotString { index: usize, field: &'static str },
+}
+
+impl fmt::Display for ManifestDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Json(error) => error.fmt(f),
+            Self::ManifestNotObject => f.write_str("模组 manifest 必须是 JSON 对象"),
+            Self::HostApiNotObject => f.write_str("host_api 必须是 JSON 对象"),
+            Self::ContributionNotObject { index } => {
+                write!(f, "贡献[{index}] 必须是 JSON 对象")
+            }
+            Self::ContributionFieldNotString { index, field } => {
+                write!(f, "贡献[{index}] 的 {field} 必须是字符串")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ManifestDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Json(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +226,44 @@ impl fmt::Display for ManifestError {
 impl std::error::Error for ManifestError {}
 
 impl ModuleManifest {
+    pub fn from_json(bytes: &[u8]) -> Result<Self, ManifestDecodeError> {
+        #[derive(Deserialize)]
+        #[serde(remote = "ModuleManifest", deny_unknown_fields)]
+        struct ManifestFields {
+            id: String,
+            module_version: String,
+            host_api: ApiRequirement,
+            contributions: Vec<Contribution>,
+        }
+
+        let value: Value = serde_json::from_slice(bytes).map_err(ManifestDecodeError::Json)?;
+        let manifest = value
+            .as_object()
+            .ok_or(ManifestDecodeError::ManifestNotObject)?;
+        if !manifest.get("host_api").is_some_and(Value::is_object) {
+            return Err(ManifestDecodeError::HostApiNotObject);
+        }
+        if let Some(contributions) = manifest.get("contributions").and_then(Value::as_array) {
+            for (index, contribution) in contributions.iter().enumerate() {
+                let contribution = contribution
+                    .as_object()
+                    .ok_or(ManifestDecodeError::ContributionNotObject { index })?;
+                for field in ["type", "auth", "phase"] {
+                    let must_be_string = field == "type" || contribution.contains_key(field);
+                    if must_be_string && !contribution.get(field).is_some_and(Value::is_string) {
+                        return Err(ManifestDecodeError::ContributionFieldNotString {
+                            index,
+                            field,
+                        });
+                    }
+                }
+            }
+        }
+
+        ManifestFields::deserialize(&mut serde_json::Deserializer::from_slice(bytes))
+            .map_err(ManifestDecodeError::Json)
+    }
+
     pub fn validate(&self, host: HostApi) -> Result<(), Vec<ManifestError>> {
         let mut errors = Vec::new();
         let valid_id = self
@@ -283,10 +356,12 @@ impl ModuleManifest {
                     entry,
                     revision,
                 } => {
-                    if entry.starts_with(['/', '\\'])
-                        || matches!(entry.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
+                    let first_segment = entry.split('/').next().unwrap_or_default();
+                    if entry.starts_with('/')
+                        || first_segment.contains(':')
+                        || entry.contains(['\\', '?', '#'])
                         || !entry.ends_with(".js")
-                        || entry.contains("..")
+                        || entry.split('/').any(|segment| segment == "..")
                     {
                         errors.push(ManifestError::InvalidPanelEntry {
                             index,

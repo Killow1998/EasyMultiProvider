@@ -17,7 +17,7 @@ const MANIFEST_JSON: &str = r#"{
 }"#;
 
 fn manifest() -> ModuleManifest {
-    serde_json::from_str(MANIFEST_JSON).unwrap()
+    ModuleManifest::from_json(MANIFEST_JSON.as_bytes()).unwrap()
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn manifest_round_trips_the_wire_contract() {
         serde_json::from_str::<Value>(MANIFEST_JSON).unwrap()
     );
     assert_eq!(
-        serde_json::from_str::<ModuleManifest>(&encoded).unwrap(),
+        ModuleManifest::from_json(encoded.as_bytes()).unwrap(),
         manifest
     );
     assert_eq!(manifest.validate(HOST_API_V3), Ok(()));
@@ -79,8 +79,32 @@ fn manifest_rejects_unknown_fields_and_enum_values() {
         let mut invalid = original.clone();
         invalid.pointer_mut(object).unwrap()[field] = json!("unknown");
         assert!(
-            serde_json::from_value::<ModuleManifest>(invalid).is_err(),
+            ModuleManifest::from_json(&serde_json::to_vec(&invalid).unwrap()).is_err(),
             "accepted {field} in {object}"
+        );
+    }
+}
+
+#[test]
+fn manifest_requires_named_objects_and_string_tags() {
+    let original = serde_json::from_str::<Value>(MANIFEST_JSON).unwrap();
+    for (pointer, value) in [
+        (
+            "",
+            json!(["example-module", "1.2.0", {"major": 3, "min_minor": 0}, []]),
+        ),
+        ("/host_api", json!([3, 0])),
+        ("/contributions/2", json!(["catalog"])),
+        ("/contributions/2", json!({})),
+        ("/contributions/2/type", json!(0)),
+        ("/contributions/0/auth", json!({"local_proxy": null})),
+        ("/contributions/1/phase", json!({"project_catalog": null})),
+    ] {
+        let mut invalid = original.clone();
+        *invalid.pointer_mut(pointer).unwrap() = value;
+        assert!(
+            ModuleManifest::from_json(&serde_json::to_vec(&invalid).unwrap()).is_err(),
+            "accepted invalid shape at {pointer}: {invalid}"
         );
     }
 }
