@@ -1,4 +1,4 @@
-use super::RequestGuard;
+use super::{DeliveryCancellation, RequestGuard};
 use crate::services::observation::diagnostics::schema;
 use emp_domain::ResolvedRoute;
 use serde_json::json;
@@ -10,8 +10,11 @@ impl RequestGuard<'_> {
             json!(crate::services::error_origin::claude(error));
         match error {
             ClaudeCliError::Router(error) => self.router_error(error),
-            ClaudeCliError::Disconnected => self.disconnected(),
-            ClaudeCliError::Failure("claude_cli_interrupted") => self.interrupted(),
+            ClaudeCliError::Disconnected => self.disconnected_before_delivery(),
+            ClaudeCliError::Failure("claude_cli_interrupted") => {
+                self.record_cancellation_before_delivery(DeliveryCancellation::Interrupted);
+                self.interrupted();
+            }
             ClaudeCliError::Failure(code) => {
                 self.pending_mut().event["error_code"] = json!(code);
                 self.status(failure_details(code).0, code);

@@ -1,6 +1,5 @@
 use crate::app::ServerState;
 use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, race};
-use crate::services::observation;
 use crate::services::providers::save_learned_protocol;
 use crate::services::request_outcome::RequestGuard;
 use emp_domain::{ResolvedRoute, RouteResolutionError};
@@ -42,12 +41,7 @@ pub(crate) fn complete(
             .begin(crate::services::activity::ActivityIdentity::from_route(
                 route,
             ));
-    let execution = Execution {
-        state,
-        route,
-        body,
-        incoming,
-    };
+    let execution = Execution { state, route, body };
     let (result, candidate) = state.backend.transport.runtime.block_on(execution.run(
         None,
         &mut outcome,
@@ -100,16 +94,11 @@ pub(crate) async fn open_stream_async<'a>(
     let router = &router;
     let mut outcome =
         RequestGuard::new(state, route, body, incoming, None, "responses").started_at(started);
-    let (stream, candidate) = Execution {
-        state,
-        route,
-        body,
-        incoming,
-    }
-    .run(monitor, &mut outcome, |candidate| async move {
-        router.open_stream(&candidate, body, incoming, ids).await
-    })
-    .await?;
+    let (stream, candidate) = Execution { state, route, body }
+        .run(monitor, &mut outcome, |candidate| async move {
+            router.open_stream(&candidate, body, incoming, ids).await
+        })
+        .await?;
     Ok((stream, candidate, outcome))
 }
 
@@ -117,7 +106,6 @@ struct Execution<'a> {
     state: &'a ServerState,
     route: &'a ResolvedRoute,
     body: &'a Value,
-    incoming: &'a BTreeMap<String, String>,
 }
 
 impl Execution<'_> {
@@ -127,13 +115,7 @@ impl Execution<'_> {
         outcome: &mut RequestGuard<'_>,
         mut request: impl FnMut(ResolvedRoute) -> F,
     ) -> Result<(T, ResolvedRoute), ExternalRequestError> {
-        let Self {
-            state,
-            route,
-            body,
-            incoming,
-            ..
-        } = *self;
+        let Self { state, route, body } = *self;
         let candidates = emp_router::protocol_candidates(route);
         'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
             let candidate = route
@@ -145,8 +127,7 @@ impl Execution<'_> {
                 let result = match race(monitor.as_deref_mut(), request(candidate.clone())).await {
                     DisconnectRace::Ready(result) => result,
                     DisconnectRace::Disconnected => {
-                        observation::request_cancelled(state, incoming);
-                        outcome.disconnected();
+                        outcome.disconnected_before_delivery();
                         return Err(ExternalRequestError::Disconnected);
                     }
                 };
@@ -173,8 +154,7 @@ impl Execution<'_> {
                         race(monitor.as_deref_mut(), tokio::time::sleep(delay)).await,
                         DisconnectRace::Disconnected
                     ) {
-                        observation::request_cancelled(state, incoming);
-                        outcome.disconnected();
+                        outcome.disconnected_before_delivery();
                         return Err(ExternalRequestError::Disconnected);
                     }
                     continue;

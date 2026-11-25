@@ -1,10 +1,8 @@
 pub(crate) mod continuation;
 pub(crate) mod diagnostics;
 pub(crate) mod operation;
-use crate::app::ServerState;
 use emp_storage::diagnostics::Journal;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 pub(crate) mod http;
 pub(crate) mod request;
 pub(crate) fn retry_scheduled(
@@ -45,27 +43,4 @@ pub(crate) fn record_attempt(journal: &Journal, event: &Value, boundary: &'stati
     }
     fields.insert("attempt_boundary".into(), json!(boundary));
     journal.event("info", "model_attempt_started", &Value::Object(fields));
-}
-
-pub(crate) fn request_cancelled(state: &ServerState, incoming: &BTreeMap<String, String>) {
-    record_cancellation(state, incoming, "client_disconnect", None);
-}
-
-pub(crate) fn request_interrupted(state: &ServerState, incoming: &BTreeMap<String, String>) {
-    record_cancellation(state, incoming, "client_cancelled", Some("interrupted"));
-}
-
-fn record_cancellation(
-    state: &ServerState,
-    incoming: &BTreeMap<String, String>,
-    error_class: &str,
-    reason: Option<&str>,
-) {
-    let event = json!({"request_id":request::request_id(incoming),
-        "error_class":error_class,"error_origin":"client","failure_reason":reason,"success":false});
-    state
-        .backend
-        .diagnostics
-        .journal
-        .event("info", "model_request_cancelled", &event);
 }

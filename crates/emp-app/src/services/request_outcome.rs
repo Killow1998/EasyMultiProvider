@@ -31,7 +31,7 @@ struct PendingRequest {
     models: emp_router::model_observation::ModelObservation,
     source_clock: bool,
     buffered: bool,
-    disconnected_while_opening: bool,
+    prewarm_cancellation: Option<DeliveryCancellation>,
 }
 
 struct RequestOutcome {
@@ -39,7 +39,24 @@ struct RequestOutcome {
     identity: Option<ActivityIdentity>,
     started: Instant,
     aggregate_owner: Option<String>,
-    disconnected_while_opening: bool,
+    prewarm_cancellation: Option<DeliveryCancellation>,
+}
+
+#[derive(Clone, Copy)]
+enum DeliveryCancellation {
+    Disconnected,
+    Interrupted,
+}
+
+impl DeliveryCancellation {
+    fn event(self, request_id: &Value) -> Value {
+        let (class, reason) = match self {
+            Self::Disconnected => ("client_disconnect", None),
+            Self::Interrupted => ("client_cancelled", Some("interrupted")),
+        };
+        json!({"request_id":request_id,"error_class":class,"error_origin":"client",
+            "failure_reason":reason,"success":false})
+    }
 }
 
 impl<'a> RequestGuard<'a> {
@@ -204,7 +221,7 @@ impl<'a> RequestGuard<'a> {
             models: Default::default(),
             source_clock: false,
             buffered: crate::services::claude_cli::selected(route),
-            disconnected_while_opening: false,
+            prewarm_cancellation: None,
         };
         pending.publish_active(services.activity);
         Self {
@@ -338,11 +355,21 @@ impl<'a> RequestGuard<'a> {
         }
     }
 
-    pub(crate) fn disconnected_while_opening(&mut self) {
-        if let Some(pending) = &mut self.pending {
-            pending.disconnected_while_opening = true;
-        }
+    pub(crate) fn disconnected_before_delivery(&mut self) {
+        self.record_cancellation_before_delivery(DeliveryCancellation::Disconnected);
         self.disconnected();
+    }
+
+    fn record_cancellation_before_delivery(&mut self, cancellation: DeliveryCancellation) {
+        let pending = self.pending_mut();
+        if pending.event["route"] == "prewarm" {
+            pending.prewarm_cancellation = Some(cancellation);
+        }
+        let event = cancellation.event(&pending.event["request_id"]);
+        self.services
+            .diagnostics
+            .journal
+            .event("info", "model_request_cancelled", &event);
     }
 
     pub(crate) fn drained(&mut self) {
@@ -523,7 +550,7 @@ impl PendingRequest {
             identity: self.identity,
             started: self.started,
             aggregate_owner: self.aggregate_owner,
-            disconnected_while_opening: self.disconnected_while_opening,
+            prewarm_cancellation: self.prewarm_cancellation,
         }
     }
 

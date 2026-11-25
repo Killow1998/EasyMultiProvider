@@ -23,11 +23,7 @@ pub(super) struct CompletionServices<'a> {
 
 pub(super) fn finish_request(services: &CompletionServices<'_>, outcome: RequestOutcome) {
     let event = &outcome.event;
-    let prewarm = event["route"] == "prewarm";
-    if !prewarm {
-        record_route_feedback(services, &outcome);
-    }
-    if prewarm {
+    if event["route"] == "prewarm" {
         services.diagnostics.journal.event(
             "info",
             "model_prewarm_finished",
@@ -35,22 +31,21 @@ pub(super) fn finish_request(services: &CompletionServices<'_>, outcome: Request
                     "duration_ms":event["duration_ms"],"success":event["success"],
                     "error_class":event["error_class"],"generate":false}),
         );
-    } else {
-        record_billing(services, &outcome);
+        if let Some(cancellation) = outcome.prewarm_cancellation {
+            services.activity.finish_request(
+                &cancellation.event(&event["request_id"]),
+                outcome.identity.as_ref(),
+            );
+        }
+        return;
     }
 
-    if !prewarm {
-        services
-            .activity
-            .finish_request(event, outcome.identity.as_ref());
-        notify_projected_call_finished();
-    } else if outcome.disconnected_while_opening {
-        services.activity.finish_request(
-            &json!({"request_id":event["request_id"],"error_class":event["error_class"],
-                    "error_origin":event["error_origin"],"success":event["success"]}),
-            outcome.identity.as_ref(),
-        );
-    }
+    record_route_feedback(services, &outcome);
+    record_billing(services, &outcome);
+    services
+        .activity
+        .finish_request(event, outcome.identity.as_ref());
+    notify_projected_call_finished();
 }
 
 fn record_billing(services: &CompletionServices<'_>, outcome: &RequestOutcome) {

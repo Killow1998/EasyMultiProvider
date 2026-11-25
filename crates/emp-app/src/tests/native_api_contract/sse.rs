@@ -99,6 +99,11 @@ fn first_native_sse_event(frames: impl IntoIterator<Item = Frame>) -> Value {
 
 #[test]
 fn native_sse_activity_terminal_has_a_committed_call_and_usage() {
+    assert_native_sse_activity_settlement(true);
+    assert_native_sse_activity_settlement(false);
+}
+
+fn assert_native_sse_activity_settlement(subscription: bool) {
     let terminal = json!({"type":"response.completed","response":{
         "id":"resp_activity_settlement","status":"completed","model":"upstream","output":[],
         "usage":{"input_tokens":17,"output_tokens":3}
@@ -106,23 +111,40 @@ fn native_sse_activity_terminal_has_a_committed_call_and_usage() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
-    let (directory, server, _) =
-        super::http::account_server(&format!("http://{address}/v1"), "missing-test-codex");
+    let base_url = format!("http://{address}/v1");
+    let (directory, server, model, expected_account) = if subscription {
+        let (directory, server, _) = super::http::account_server(&base_url, "missing-test-codex");
+        (directory, server, "demo/upstream", "selected-owner")
+    } else {
+        let (directory, server) = native_alias_server(&base_url);
+        (directory, server, "native/alias", "caller-owner")
+    };
     let root = canonical_root(&directory);
     let mut db = settlement_db(&root, &server);
     let session = session_header(&server);
-    let gateway = format!("Authorization: Bearer {}", server.state.backend.gateway_key);
+    let authorization = if subscription {
+        format!("Authorization: Bearer {}", server.state.backend.gateway_key)
+    } else {
+        "Authorization: Bearer caller".to_owned()
+    };
+    let body = json!({"model":model,"input":"hello","stream":true}).to_string();
+    let thread_id = "activity-settlement";
     let socket = open_post_stream(
         &server,
         "/v1/responses",
-        br#"{"model":"demo/upstream","input":"hello","stream":true}"#,
-        &[&gateway, "chatgpt-account-id: caller-owner"],
+        body.as_bytes(),
+        &[
+            &session,
+            &authorization,
+            "chatgpt-account-id: caller-owner",
+            &format!("thread-id: {thread_id}"),
+        ],
     );
     let deadline = Deadline::after(response_timeout());
     let mut upstream = accept_before(&listener, &deadline);
     let observed = receive_native_request(&mut upstream);
     let request_id = &observed.headers["x-emp-request-id"];
-    assert_eq!(observed.headers["chatgpt-account-id"], "selected-owner");
+    assert_eq!(observed.headers["chatgpt-account-id"], expected_account);
 
     db.busy_timeout(Duration::ZERO).unwrap();
     let write_lock = lock_settlement_writes(&mut db);
@@ -196,10 +218,20 @@ fn native_sse_activity_terminal_has_a_committed_call_and_usage() {
     let call: Value = serde_json::from_str(&facts).unwrap();
     assert_eq!(activity["state"], "completed");
     assert_eq!(activity["state"], state);
-    assert_eq!(activity["account_id"], call["account_id"]);
+    assert_eq!(activity["thread_id"], thread_id);
+    if subscription {
+        assert_eq!(activity["account_id"], call["account_id"]);
+    } else {
+        assert_eq!(activity["provider_id"], "native");
+        assert_eq!(activity["provider_id"], call["provider_id"]);
+    }
     let expected_owner = emp_state::usage::account_owner(&observed.headers);
     let expected_usage_id = emp_state::usage::identity_hash(&json!([
-        "subscription",
+        if subscription {
+            "subscription"
+        } else {
+            "native"
+        },
         expected_owner,
         "upstream",
         "responses",
@@ -248,99 +280,256 @@ fn native_sse_prewarm_preserves_activity_and_billing_boundaries() {
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let (directory, server) = native_alias_server(&format!("http://{address}/v1"));
-        let db = settlement_db(&canonical_root(&directory), &server);
-        let session = session_header(&server);
-        let mut events = open_quota_events(&server, &session);
-        let deadline = Deadline::after(response_timeout());
-        let downstream = open_post_stream(
-            &server,
-            "/v1/responses",
-            br#"{"model":"native/alias","input":"hello","generate":false,"stream":true}"#,
-            &[&session, "Authorization: Bearer caller"],
-        );
-        let mut upstream = accept_before(&listener, &deadline);
-        let observed = receive_native_request(&mut upstream);
-        assert_eq!(observed.body["generate"], false);
-        let request_id = &observed.headers["x-emp-request-id"];
-        let mut wire = deadline.io(&upstream);
+        let cancelled = matches!(end, End::DisconnectBeforeHeaders);
+        assert_prewarm_outcome(
+            &directory,
+            server,
+            "native/alias",
+            cancelled,
+            |downstream, deadline| {
+                let mut upstream = accept_before(&listener, deadline);
+                let observed = receive_native_request(&mut upstream);
+                assert_eq!(observed.body["generate"], false);
+                let mut wire = deadline.io(&upstream);
 
-        match end {
-            End::Success => {
-                wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
-                let terminal = json!({"type":"response.completed","response":{
-                    "id":"resp_prewarm","status":"completed","output":[],
-                    "usage":{"input_tokens":17,"output_tokens":3}
-                }});
-                write!(wire, "data: {terminal}\n\n").unwrap();
-                let (_, frames) =
-                    read_native_sse(BufReader::new(deadline.io(downstream)), &deadline);
-                assert_eq!(first_native_sse_event(frames)["type"], "response.completed");
-            }
-            End::UpstreamFailure => {
-                wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
-                let terminal = json!({"type":"response.failed","response":{
-                    "status":"failed","error":{"status":400,"code":"invalid_request"}
-                }});
-                write!(wire, "data: {terminal}\n\n").unwrap();
-                let response = complete_response_from(&mut deadline.io(downstream), &deadline);
-                assert!(response.starts_with("HTTP/1.1 400"), "{response}");
-            }
-            End::CancelAfterOpening => {
-                wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
-                wire.write_all(
-                    b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
-                )
-                .unwrap();
-                let (_, mut stream) =
-                    read_sse_head(BufReader::new(deadline.io(downstream)), &deadline);
-                assert_eq!(
-                    first_native_sse_event(read_sse_frames(&mut stream))["type"],
-                    "response.output_text.delta"
-                );
-                drop(stream);
-                assert!(upstream_closed_before(&upstream, &deadline));
-            }
-            End::DisconnectBeforeHeaders => {
-                drop(downstream);
-                assert!(upstream_closed_before(&upstream, &deadline));
-            }
-        }
-
-        set_sse_deadline(&mut events, &deadline);
-        let finished = next_activity_snapshot(&mut events, |snapshot| {
-            snapshot["routes"][0]["in_flight"] == 0
-                && snapshot["routes"][0]["last_finished"].is_number()
-        });
-        let activity = finished["requests"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["request_id"] == request_id.as_str());
-        if matches!(end, End::DisconnectBeforeHeaders) {
-            let activity = activity
-                .expect("prewarm disconnected before headers must publish its cancellation");
-            assert_eq!(activity["state"], "cancelled");
-            assert_eq!(activity["error_class"], "client_disconnect");
-            assert_eq!(activity["error_origin"], "client");
-            assert_eq!(activity["duration_ms"], Value::Null);
-        } else {
-            assert!(
-                activity.is_none(),
-                "unexpected prewarm activity: {activity:?}"
-            );
-        }
-        let counts = db.query_row(
-            "SELECT (SELECT COUNT(*) FROM call_records WHERE request_id=?), (SELECT COUNT(*) FROM usage_events)",
-            [request_id],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-        ).unwrap();
-        assert_eq!(
-            counts,
-            (0, 0),
-            "prewarm must not create a call receipt or usage row"
+                match end {
+                    End::Success => {
+                        wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
+                        let terminal = json!({"type":"response.completed","response":{
+                            "id":"resp_prewarm","status":"completed","output":[],
+                            "usage":{"input_tokens":17,"output_tokens":3}
+                        }});
+                        write!(wire, "data: {terminal}\n\n").unwrap();
+                        let (_, frames) =
+                            read_native_sse(BufReader::new(deadline.io(downstream)), deadline);
+                        assert_eq!(first_native_sse_event(frames)["type"], "response.completed");
+                    }
+                    End::UpstreamFailure => {
+                        wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
+                        let terminal = json!({"type":"response.failed","response":{
+                            "status":"failed","error":{"status":400,"code":"invalid_request"}
+                        }});
+                        write!(wire, "data: {terminal}\n\n").unwrap();
+                        let response =
+                            complete_response_from(&mut deadline.io(downstream), deadline);
+                        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+                    }
+                    End::CancelAfterOpening => {
+                        wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
+                        wire.write_all(
+                        b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+                    )
+                    .unwrap();
+                        let (_, mut stream) =
+                            read_sse_head(BufReader::new(deadline.io(downstream)), deadline);
+                        assert_eq!(
+                            first_native_sse_event(read_sse_frames(&mut stream))["type"],
+                            "response.output_text.delta"
+                        );
+                        drop(stream);
+                        assert!(upstream_closed_before(&upstream, deadline));
+                    }
+                    End::DisconnectBeforeHeaders => {
+                        drop(downstream);
+                        assert!(upstream_closed_before(&upstream, deadline));
+                    }
+                }
+                Some(observed.headers["x-emp-request-id"].clone())
+            },
         );
-        server.shutdown().unwrap();
     }
+}
+
+#[test]
+fn external_sse_prewarm_disconnect_publishes_cancellation_without_billing() {
+    for retry in [false, true] {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = canonical_root(&directory);
+        let server = prewarm_provider_server(
+            &root,
+            json!({
+                "id":"demo","base_url":format!("http://{address}/v1"),
+                "protocol":"responses","auth_mode":"api_key","api_key":"fixture"
+            }),
+        );
+        assert_prewarm_outcome(
+            &directory,
+            server,
+            "demo/model",
+            true,
+            |downstream, deadline| {
+                let mut upstream = accept_before(&listener, deadline);
+                let observed = receive_native_request(&mut upstream);
+                let request_id = observed.headers["x-emp-request-id"].clone();
+                if retry {
+                    let response = b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    deadline.io(&upstream).write_all(response).unwrap();
+                    wait_for(deadline, || {
+                        crate::tests::internal_events_contract::live_journal_until(&root, deadline)
+                            .iter()
+                            .any(|record| {
+                                record["event"] == "model_retry_scheduled"
+                                    && record["fields"]["request_id"] == request_id
+                                    && record["fields"]["delay_ms"] == 120_000
+                            })
+                    });
+                }
+                drop(downstream);
+                if !retry {
+                    assert!(upstream_closed_before(&upstream, deadline));
+                }
+                Some(request_id)
+            },
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_cli_sse_prewarm_disconnect_publishes_cancellation_without_billing() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    const FIXTURE: &str = "EMP_TEST_PREWARM_CLAUDE";
+    if let Some(executable) = std::env::var_os(FIXTURE) {
+        assert_eq!(
+            emp_codex::installed_cli::resolve_claude_cli()
+                .unwrap()
+                .executable,
+            PathBuf::from(&executable)
+        );
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let server = prewarm_provider_server(
+            &canonical_root(&directory),
+            json!({
+                "id":"demo","base_url":"http://127.0.0.1:1/v1",
+                "protocol":"anthropic_messages","auth_mode":"anthropic_api_key","api_key":"fixture",
+                "execution_backend":"claude_cli"
+            }),
+        );
+        assert_prewarm_outcome(
+            &directory,
+            server,
+            "demo/model",
+            true,
+            |downstream, deadline| {
+                let ready = PathBuf::from(executable).with_extension("ready");
+                wait_for(deadline, || ready.is_file());
+                drop(downstream);
+                None
+            },
+        );
+        return;
+    }
+
+    let directory = emp_test_support::fixture_dir().unwrap();
+    let root = canonical_root(&directory);
+    let executable = root.join("claude");
+    std::fs::write(
+        &executable,
+        b"#!/bin/sh\n: > \"$0.ready\"\nwhile IFS= read -r line; do :; done\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command.args([
+        "--exact",
+        "tests::native_api_contract::sse::claude_cli_sse_prewarm_disconnect_publishes_cancellation_without_billing",
+    ]).env(FIXTURE, &executable).env("PATH", &root);
+    let output = emp_test_support::OwnedChild::output(
+        command,
+        Deadline::after(response_timeout() + response_timeout()),
+    )
+    .unwrap();
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn prewarm_provider_server(root: &Path, provider: Value) -> ServerHandle {
+    let config = root.join("config.json");
+    let native = root.join("codex/auth.json");
+    std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        json!({
+            "providers":[provider],
+            "models":[{"id":"demo/model","provider":"demo","upstream_id":"upstream","enabled":true}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config,
+        "missing-test-codex",
+        native,
+    )
+    .unwrap()
+}
+
+fn assert_prewarm_outcome(
+    directory: &TempDir,
+    server: ServerHandle,
+    model: &str,
+    cancelled: bool,
+    exercise: impl FnOnce(TcpStream, &Deadline) -> Option<String>,
+) {
+    let db = settlement_db(&canonical_root(directory), &server);
+    let session = session_header(&server);
+    let mut events = open_quota_events(&server, &session);
+    let deadline = Deadline::after(response_timeout());
+    let body = json!({"model":model,"input":"hello","generate":false,"stream":true}).to_string();
+    let downstream = open_post_stream(
+        &server,
+        "/v1/responses",
+        body.as_bytes(),
+        &[&session, "Authorization: Bearer caller"],
+    );
+    let request_id = exercise(downstream, &deadline);
+
+    set_sse_deadline(&mut events, &deadline);
+    let finished = next_activity_snapshot(&mut events, |snapshot| {
+        snapshot["routes"][0]["in_flight"] == 0
+            && snapshot["routes"][0]["last_finished"].is_number()
+    });
+    let requests = finished["requests"].as_array().unwrap();
+    assert_eq!(
+        requests.len(),
+        usize::from(cancelled),
+        "{model} prewarm activity after request ended: {requests:?}"
+    );
+    if cancelled {
+        let activity = &requests[0];
+        if let Some(request_id) = request_id {
+            assert_eq!(activity["request_id"], request_id);
+        }
+        assert_eq!(activity["model_id"], model);
+        assert_eq!(activity["state"], "cancelled");
+        assert_eq!(activity["error_class"], "client_disconnect");
+        assert_eq!(activity["error_origin"], "client");
+        assert_eq!(activity["duration_ms"], Value::Null);
+    }
+    let counts = db
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM call_records), (SELECT COUNT(*) FROM usage_events)",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        counts,
+        (0, 0),
+        "prewarm must not create a call receipt or usage row"
+    );
+    server.shutdown().unwrap();
 }
 
 #[test]

@@ -78,11 +78,6 @@ pub(crate) fn execute_complete(
         )
     })();
     if let Err(error) = &result {
-        if matches!(error, ClaudeCliError::Failure("claude_cli_interrupted")) {
-            crate::services::observation::request_interrupted(state, incoming);
-        } else if matches!(error, ClaudeCliError::Disconnected) {
-            crate::services::observation::request_cancelled(state, incoming);
-        }
         let (status, code) = match error {
             ClaudeCliError::Failure(code) => (failure_details(code).0, *code),
             ClaudeCliError::Router(error) => (error.status(), error.error_class().as_str()),
