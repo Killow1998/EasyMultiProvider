@@ -50,6 +50,7 @@ const RULES: &[&str] = &[
     "test-fixture-root",
     "test-socket-timeouts",
     "test-thread-observations",
+    "tracked-sources",
     "workflow-cargo-test",
     "workflow-location",
 ];
@@ -60,8 +61,6 @@ pub fn run(args: &[String]) -> Result {
     }
     let root = project_root();
     let mut errors = Vec::new();
-    let (test_scopes, test_targets) = arch::check(&root, &mut errors)?;
-    modules::check(&root, &mut errors)?;
     let list_files = [
         "ls-files",
         "--cached",
@@ -69,13 +68,18 @@ pub fn run(args: &[String]) -> Result {
         "--exclude-standard",
         "-z",
     ];
-    let paths = git_paths(&root, &list_files)?;
+    let mut paths = git_paths(&root, &list_files)?;
+    let cached_or_unignored: BTreeSet<&Path> = paths.iter().map(Path::new).collect();
+    let (test_scopes, test_targets) = arch::check(&root, &cached_or_unignored, &mut errors)?;
+    modules::check(&root, &mut errors)?;
+    let (referenced_profiles, invalid_sources) =
+        check_files(&root, &paths, &test_scopes, &mut errors)?;
+    paths.retain(|path| !invalid_sources.contains(path));
     comments::check(&root, &paths, &test_scopes, &mut errors)?;
     cfg_test::check(&root, &paths, &test_scopes, &mut errors)?;
     test_deadlines::check(&root, &paths, &test_scopes, &mut errors)?;
     test_fixture_root::check(&root, &paths, &test_scopes, &mut errors)?;
     test_thread_observations::check(&root, &paths, &test_scopes, &mut errors)?;
-    let referenced_profiles = check_files(&root, &paths, &test_scopes, &mut errors)?;
     ci_profiles::check_profiles(PROFILES, &test_targets, &referenced_profiles, &mut errors);
     if errors.is_empty() {
         println!("check: {} passed", RULES.join(", "));
@@ -90,8 +94,9 @@ fn check_files(
     paths: &[String],
     test_scopes: &test_scope::Index,
     errors: &mut Vec<String>,
-) -> Result<BTreeSet<&'static str>> {
+) -> Result<(BTreeSet<&'static str>, BTreeSet<String>)> {
     let mut referenced_profiles = BTreeSet::new();
+    let mut invalid_sources = BTreeSet::new();
     for path in paths {
         let file = root.join(path);
         if !file.is_file() {
@@ -100,11 +105,13 @@ fn check_files(
         let bytes = fs::read(file).map_err(|error| format!("{path}: {error}"))?;
         let source = std::str::from_utf8(&bytes);
         match path.rsplit_once('.') {
-            Some((_, "rs")) => module_paths::check_source(
-                path,
-                source.map_err(|error| format!("{path}: {error}"))?,
-                errors,
-            )?,
+            Some((_, "rs")) => {
+                let source = source.map_err(|error| format!("{path}: {error}"))?;
+                if !module_paths::check_source(path, source, errors) {
+                    invalid_sources.insert(path.clone());
+                    continue;
+                }
+            }
             Some((_, extension)) if extension.eq_ignore_ascii_case("rs") => errors.push(format!(
                 "[rust-extension-case] {path}: Rust 源文件后缀必须是小写 .rs"
             )),
@@ -140,7 +147,7 @@ fn check_files(
             );
         }
     }
-    Ok(referenced_profiles)
+    Ok((referenced_profiles, invalid_sources))
 }
 
 fn single_http_driver(path: &str, source: &str, errors: &mut Vec<String>) {
@@ -332,11 +339,15 @@ mod tests {
                 );
             } else if path.extension().is_some_and(|extension| extension == "rs") {
                 let contents = fs::read_to_string(path).unwrap();
-                for capture in prefix.captures_iter(&contents) {
-                    let name = &capture[1];
-                    if !matches!(name, "features" | "lints" | "package") {
-                        rules.insert(name.to_owned());
-                    }
+                for line in contents
+                    .lines()
+                    .take_while(|line| !line.trim_start().starts_with("#[cfg(test)]"))
+                {
+                    rules.extend(
+                        prefix
+                            .captures_iter(line)
+                            .map(|capture| capture[1].to_owned()),
+                    );
                 }
             }
         }

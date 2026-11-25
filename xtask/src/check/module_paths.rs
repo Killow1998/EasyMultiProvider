@@ -35,6 +35,7 @@ pub(super) fn check<'a>(
     root: &Path,
     crate_dir: &Path,
     targets: impl Iterator<Item = (&'a Path, SourceKind)>,
+    tracked_paths: &BTreeSet<&Path>,
     test_scopes: &mut Index,
     errors: &mut Vec<String>,
 ) -> Result {
@@ -44,6 +45,7 @@ pub(super) fn check<'a>(
         crate_dir: crate_dir
             .canonicalize()
             .map_err(|error| format!("{}: {error}", crate_dir.display()))?,
+        tracked_paths,
         visited: BTreeSet::new(),
         test_scopes,
         errors,
@@ -58,54 +60,99 @@ struct CrateSources<'a> {
     root: &'a Path,
     resolved_root: PathBuf,
     crate_dir: PathBuf,
+    tracked_paths: &'a BTreeSet<&'a Path>,
     visited: BTreeSet<(PathBuf, Option<String>, SourceKind)>,
     test_scopes: &'a mut Index,
     errors: &'a mut Vec<String>,
 }
 
 impl CrateSources<'_> {
+    fn is_tracked_source(&self, path: &Path) -> bool {
+        let mut relative = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::Normal(name) => relative.push(name),
+                Component::CurDir => {}
+                Component::ParentDir if relative.pop() => {}
+                _ => return false,
+            }
+        }
+        relative
+            .extension()
+            .is_some_and(|extension| extension == "rs")
+            && self.tracked_paths.contains(relative.as_path())
+    }
+
+    fn visit_module(&mut self, file: &Path, module: Option<String>, kind: SourceKind) {
+        if file.is_file() {
+            self.visit_file(file, module, kind);
+        }
+    }
+
     fn visit_file(&mut self, file: &Path, module: Option<String>, kind: SourceKind) {
+        let relative = file
+            .strip_prefix(self.root)
+            .or_else(|_| file.strip_prefix(&self.resolved_root))
+            .unwrap_or(file);
+        let resolved = resolve(file);
+        let Some(path) = resolved
+            .strip_prefix(&self.resolved_root)
+            .ok()
+            .filter(|path| {
+                self.is_tracked_source(path)
+                    && (relative == *path || self.is_tracked_source(relative))
+            })
+        else {
+            self.errors.push(format!(
+                "[tracked-sources] {}: 编译源码必须是未被 .gitignore 排除的 .rs 文件；生成代码请写到 OUT_DIR，再用 include!(concat!(env!(\"OUT_DIR\"), ...)) 引入",
+                relative.display()
+            ));
+            return;
+        };
         if !file.is_file() {
             return;
         }
-        let resolved = resolve(file);
         if !self
             .visited
             .insert((resolved.clone(), module.clone(), kind))
         {
             return;
         }
-        let source = fs::read_to_string(file)
-            .map_err(|error| error.to_string())
-            .and_then(|source| syn::parse_file(&source).map_err(|error| error.to_string()));
-        match source {
-            Ok(source) => {
-                let path = resolved.strip_prefix(&self.resolved_root).ok();
-                let kind = kind.in_test(&source.attrs);
-                if let Some(path) = path {
-                    self.test_scopes.record(path, &source, kind);
-                }
-                ModulePaths {
-                    sources: self,
-                    file,
-                    directory: file.parent().expect("absolute Rust source path"),
-                    module,
-                    kind,
-                }
-                .visit_file(&source);
+        let source = match fs::read_to_string(file) {
+            Ok(source) => source,
+            Err(error) => {
+                self.errors
+                    .push(format!("[module-paths] {}: {error}", relative.display()));
+                return;
             }
-            Err(error) => self.errors.push(format!(
-                "[module-paths] {}: {error}",
-                file.strip_prefix(self.root).unwrap_or(file).display()
-            )),
+        };
+        let Ok(source) = syn::parse_file(&source) else {
+            return;
+        };
+        let kind = kind.in_test(&source.attrs);
+        self.test_scopes.record(path, &source, kind);
+        ModulePaths {
+            sources: self,
+            file,
+            directory: file.parent().expect("absolute Rust source path"),
+            module,
+            kind,
         }
+        .visit_file(&source);
     }
 }
 
-pub(super) fn check_source(path: &str, source: &str, errors: &mut Vec<String>) -> Result {
-    let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
-    SourceRules { path, errors }.check_tokens(file.into_token_stream());
-    Ok(())
+pub(super) fn check_source(path: &str, source: &str, errors: &mut Vec<String>) -> bool {
+    match syn::parse_file(source) {
+        Ok(file) => {
+            SourceRules { path, errors }.check_tokens(file.into_token_stream());
+            true
+        }
+        Err(error) => {
+            errors.push(format!("[module-paths] {path}: {error}"));
+            false
+        }
+    }
 }
 
 struct SourceRules<'a> {
@@ -261,7 +308,7 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
                     if let Some((_, items)) = &item.content {
                         self.visit_inline(&target, items, kind);
                     } else {
-                        self.sources.visit_file(&target, None, kind);
+                        self.sources.visit_module(&target, None, kind);
                     }
                 }
             }
@@ -280,8 +327,8 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
             self.visit_inline(&child, items, kind);
         } else {
             self.sources
-                .visit_file(&child.with_extension("rs"), Some(name), kind);
-            self.sources.visit_file(&child.join("mod.rs"), None, kind);
+                .visit_module(&child.with_extension("rs"), Some(name), kind);
+            self.sources.visit_module(&child.join("mod.rs"), None, kind);
         }
     }
 }
@@ -323,17 +370,95 @@ fn resolve(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-    fn diagnostics(root: &Path, crate_dir: &Path, entry: &Path) -> Vec<String> {
+    fn diagnostics(root: &Path, crate_dir: &Path, entry: &Path, tracked: &[&str]) -> Vec<String> {
         let mut errors = Vec::new();
         check(
             root,
             crate_dir,
             [(entry, SourceKind::Production)].into_iter(),
+            &tracked.iter().map(Path::new).collect(),
             &mut Index::default(),
             &mut errors,
         )
         .unwrap();
         errors
+    }
+
+    #[test]
+    fn compiled_sources_must_be_tracked_rust_files() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("src/generated")).unwrap();
+        fs::write(root.join("src/entry.inc"), "").unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            r#"#[path = "generated/helper.rs"] mod helper;"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/generated/helper.rs"), "").unwrap();
+
+        for (entry, tracked, rejected) in [
+            (
+                "src/entry.inc",
+                ["src/entry.inc"].as_slice(),
+                Some("src/entry.inc"),
+            ),
+            (
+                "src/lib.rs",
+                ["src/lib.rs"].as_slice(),
+                Some("src/generated/helper.rs"),
+            ),
+            (
+                "src/lib.rs",
+                ["src/lib.rs", "src/generated/helper.rs"].as_slice(),
+                None,
+            ),
+        ] {
+            let errors = diagnostics(root, root, &root.join(entry), tracked);
+            assert_eq!(errors.len(), usize::from(rejected.is_some()), "{errors:?}");
+            if let Some(path) = rejected {
+                assert!(
+                    errors[0]
+                        .replace('\\', "/")
+                        .starts_with(&format!("[tracked-sources] {path}:")),
+                    "{errors:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reports_syntax_errors_once_and_checks_other_files() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let entry = root.join("lib.rs");
+        fs::write(
+            &entry,
+            r#"mod broken; #[path = "./broken.rs"] mod alias; mod other;"#,
+        )
+        .unwrap();
+        fs::write(root.join("broken.rs"), "impl Drop for {").unwrap();
+        fs::write(root.join("other.rs"), r#"include!("x.rs");"#).unwrap();
+
+        let tracked = ["broken.rs", "lib.rs", "other.rs"];
+        let mut errors = diagnostics(root, root, &entry, &tracked);
+        let (_, invalid_sources) = super::super::check_files(
+            root,
+            &tracked.map(str::to_owned),
+            &Index::default(),
+            &mut errors,
+        )
+        .unwrap();
+        assert_eq!(invalid_sources, BTreeSet::from(["broken.rs".to_owned()]));
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors[0].starts_with("[module-paths] broken.rs:"),
+            "{errors:?}"
+        );
+        assert!(
+            errors[1].starts_with("[no-source-include] other.rs:1:"),
+            "{errors:?}"
+        );
     }
 
     #[test]
@@ -368,15 +493,20 @@ const BYTES: &[u8] = include_bytes!("b.bin");
 macro_rules! declare { ($a:meta) => { #[$a] mod backend; } }
 macro_rules! helper { () => { "mod" } }"#;
         fs::write(root.join("platform.rs"), source).unwrap();
-        fs::write(root.join("helpers.inc"), "").unwrap();
         fs::write(
             root.join("unreferenced.rs"),
             r#"#[path = "helpers.inc"] mod helpers;"#,
         )
         .unwrap();
-        let mut errors = diagnostics(root, root, &entry);
-        let paths = ["helpers.inc", "lib.rs", "platform.rs", "unreferenced.rs"].map(str::to_owned);
-        super::super::check_files(root, &paths, &Index::default(), &mut errors).unwrap();
+        let paths = ["lib.rs", "platform.rs", "unreferenced.rs"];
+        let mut errors = diagnostics(root, root, &entry, &paths);
+        super::super::check_files(
+            root,
+            &paths.map(str::to_owned),
+            &Index::default(),
+            &mut errors,
+        )
+        .unwrap();
         let expected = [
             "[conditional-module-path] platform.rs:2:",
             "[conditional-module-path] platform.rs:3:",
@@ -430,7 +560,18 @@ mod nested {
         )
         .unwrap();
         fs::write(src.join("visible.rs"), "").unwrap();
-        let errors = diagnostics(root.path(), &crate_dir, &entry);
+        let errors = diagnostics(
+            root.path(),
+            &crate_dir,
+            &entry,
+            &[
+                "app/src/lib.rs",
+                "app/shared.rs",
+                "app/src/local.rs",
+                "app/src/visible.rs",
+                "other.rs",
+            ],
+        );
         assert_eq!(errors.len(), 3, "{errors:?}");
         assert!(errors[0].contains("lib.rs:3"));
         assert!(errors[1].contains("lib.rs:4"));
@@ -459,7 +600,12 @@ mod nested {
         )
         .unwrap();
 
-        let errors = diagnostics(root.path(), &crate_dir, &entry);
+        let errors = diagnostics(
+            root.path(),
+            &crate_dir,
+            &entry,
+            &["app/src/lib.rs", "app/src/inside.rs", "outside.rs"],
+        );
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("lib.rs:2"), "{errors:?}");
     }
@@ -490,7 +636,16 @@ mod nested {
         fs::write(support.join("lib.rs"), "").unwrap();
         fs::write(src.join("nested/inside.rs"), "").unwrap();
 
-        let errors = diagnostics(root.path(), &crate_dir, &entry);
+        let errors = diagnostics(
+            root.path(),
+            &crate_dir,
+            &entry,
+            &[
+                "emp-updater/src/lib.rs",
+                "emp-updater/src/nested/inside.rs",
+                "emp-test-support/src/lib.rs",
+            ],
+        );
         assert_eq!(errors.len(), 7, "{errors:?}");
         for (error, line) in errors.iter().zip([2, 3, 5, 6, 7, 8, 9]) {
             assert!(error.contains(&format!("lib.rs:{line}:")), "{error}");
@@ -520,7 +675,12 @@ mod nested {
         )
         .unwrap();
 
-        let errors = diagnostics(root.path(), &crate_dir, &entry);
+        let errors = diagnostics(
+            root.path(),
+            &crate_dir,
+            &entry,
+            &["app/src/lib.rs", "app/src/inside.rs", "other/src/lib.rs"],
+        );
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("lib.rs:2:"), "{errors:?}");
     }

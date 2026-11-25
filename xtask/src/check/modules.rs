@@ -80,8 +80,8 @@ fn without_lints(manifest: &str) -> Vec<&str> {
         .lines()
         .filter(|line| {
             let trimmed = line.trim();
-            if trimmed.starts_with('[') {
-                lints = trimmed == "[lints]" || trimmed.starts_with("[lints.");
+            if let Some(section) = trimmed.strip_prefix('[') {
+                lints = section == "lints]" || section.starts_with("lints.");
             }
             !lints && !trimmed.is_empty()
         })
@@ -91,8 +91,8 @@ fn without_lints(manifest: &str) -> Vec<&str> {
 fn version<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
     let mut package = key == "VERSION";
     for line in contents.lines().map(str::trim) {
-        if line.starts_with('[') {
-            package = line == "[package]";
+        if let Some(section) = line.strip_prefix('[') {
+            package = section == "package]";
         }
         if package
             && let Some((name, value)) = line.split_once('=')

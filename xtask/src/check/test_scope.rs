@@ -232,6 +232,20 @@ mod shared;
         let mut errors = Vec::new();
         let library = root.join("src/lib.rs");
         let contract = root.join("tests/contract.rs");
+        let tracked = [
+            "src/lib.rs",
+            "tests/contract.rs",
+            "src/fixtures/suite.rs",
+            "src/checks.rs",
+            "src/checks/nested.rs",
+            "src/feature_checks.rs",
+            "src/fixtures/moved.rs",
+            "src/platform.rs",
+            "src/shared.rs",
+        ]
+        .map(Path::new)
+        .into_iter()
+        .collect();
         module_paths::check(
             root,
             root,
@@ -240,6 +254,7 @@ mod shared;
                 (contract.as_path(), SourceKind::Integration),
             ]
             .into_iter(),
+            &tracked,
             &mut scopes,
             &mut errors,
         )

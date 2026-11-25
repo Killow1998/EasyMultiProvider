@@ -91,6 +91,7 @@ pub(super) type TestTargets = BTreeMap<String, BTreeSet<String>>;
 
 pub(super) fn check(
     root: &Path,
+    tracked_paths: &BTreeSet<&Path>,
     errors: &mut Vec<String>,
 ) -> Result<(test_scope::Index, TestTargets)> {
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
@@ -139,7 +140,14 @@ pub(super) fn check(
             };
             Some((file, kind))
         });
-        module_paths::check(root, directory, files, &mut test_scopes, errors)?;
+        module_paths::check(
+            root,
+            directory,
+            files,
+            tracked_paths,
+            &mut test_scopes,
+            errors,
+        )?;
     }
     Ok((test_scopes, test_targets))
 }
