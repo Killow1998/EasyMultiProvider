@@ -137,7 +137,7 @@ fn merge_commits<'a>(root: &Path, merges: &[&'a str]) -> Result<Vec<(&'a str, St
     let mut seen = BTreeSet::new();
     let mut commits = Vec::new();
     for &merge in merges {
-        let id = git(Command::new("git").current_dir(root).args([
+        let id = git(git_in(root).args([
             "rev-parse",
             "--verify",
             "--end-of-options",
@@ -149,15 +149,8 @@ fn merge_commits<'a>(root: &Path, merges: &[&'a str]) -> Result<Vec<(&'a str, St
         if !seen.insert(id.clone()) {
             continue;
         }
-        let parents = git(Command::new("git").current_dir(root).args([
-            "rev-list",
-            "--parents",
-            "-n",
-            "1",
-            &id,
-            "--",
-        ]))
-        .map_err(|error| format!("--subtract-merge {merge:?}: {error}"))?;
+        let parents = git(git_in(root).args(["rev-list", "--parents", "-n", "1", &id, "--"]))
+            .map_err(|error| format!("--subtract-merge {merge:?}: {error}"))?;
         if String::from_utf8_lossy(&parents)
             .split_ascii_whitespace()
             .nth(2)
@@ -200,6 +193,28 @@ fn print_path(path: &str, base: Lines, head: Lines) {
     );
 }
 
+/// Git environment that would point a child at another repository or index
+/// (set by hooks and wrapper tools); `root` alone selects the repository.
+const GIT_LOCATION_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+];
+
+fn git_in(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.current_dir(root);
+    for name in GIT_LOCATION_ENV {
+        command.env_remove(name);
+    }
+    command
+}
+
 fn git(command: &mut Command) -> Result<Vec<u8>> {
     let output = command
         .output()
@@ -237,13 +252,7 @@ fn git_with_input(command: &mut Command, input: Vec<u8>) -> Result<Vec<u8>> {
 }
 
 fn read_tree(root: &Path, rev: &str) -> Result<Files<String>> {
-    let output = git(Command::new("git").current_dir(root).args([
-        "ls-tree",
-        "-rz",
-        "--full-tree",
-        rev,
-        "--",
-    ]))?;
+    let output = git(git_in(root).args(["ls-tree", "-rz", "--full-tree", rev, "--"]))?;
     let mut blobs = Vec::new();
     for entry in output
         .split(|&byte| byte == 0)
@@ -281,9 +290,7 @@ fn read_tree(root: &Path, rev: &str) -> Result<Files<String>> {
         .map(|(_, oid)| format!("{oid}\n"))
         .collect::<String>();
     let output = git_with_input(
-        Command::new("git")
-            .current_dir(root)
-            .args(["cat-file", "--batch"]),
+        git_in(root).args(["cat-file", "--batch"]),
         requests.into_bytes(),
     )?;
     let mut batch = Cursor::new(output);

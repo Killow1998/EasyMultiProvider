@@ -166,6 +166,9 @@ fn dependencies(
                 continue;
             }
             let dev = dependency["kind"].as_str() == Some("dev");
+            if to == "emp-test-support" {
+                websocket_fixture_consumer(package, from, dependency, errors);
+            }
             if !dev && enables_test_support(&dependency["features"]) {
                 errors.push(format!("[arch] {} [dependencies]: {from} → {to} 在正常依赖里打开了 test-support；测试钩子只能由 [dev-dependencies] 或本 crate 的 test-support 特性打开", package["manifest_path"].as_str().unwrap_or("Cargo.toml")));
             }
@@ -192,6 +195,47 @@ fn enables_test_support(features: &Value) -> bool {
             .as_str()
             .is_some_and(|feature| feature.rsplit('/').next() == Some(TEST_SUPPORT))
     })
+}
+
+/// The WebSocket fixtures pull the whole transport stack (reqwest, TLS,
+/// compression) into a consumer's test build; only the crates that drive
+/// WebSocket traffic may enable them.
+const WEBSOCKET_FIXTURE_CONSUMERS: &[&str] = &["emp-app", "emp-transport"];
+
+fn websocket_fixture_consumer(
+    package: &Value,
+    from: &str,
+    dependency: &Value,
+    errors: &mut Vec<String>,
+) {
+    if WEBSOCKET_FIXTURE_CONSUMERS.contains(&from) {
+        return;
+    }
+    let name = dependency["rename"].as_str().unwrap_or("emp-test-support");
+    let direct = dependency["features"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|feature| feature == "websocket");
+    let forwarded = package["features"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(_, features)| features.as_array())
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|feature| {
+            feature.split_once('/').is_some_and(|(dep, enabled)| {
+                dep.trim_end_matches('?') == name && enabled == "websocket"
+            })
+        });
+    if direct || forwarded {
+        errors.push(format!(
+            "[arch] {}: {from} 打开了 emp-test-support 的 websocket 特性；只有 {} 可以使用 WebSocket 夹具",
+            package["manifest_path"].as_str().unwrap_or("Cargo.toml"),
+            WEBSOCKET_FIXTURE_CONSUMERS.join("、"),
+        ));
+    }
 }
 
 fn websocket_transport(package: &Value, dependency: &Value, errors: &mut Vec<String>) {
@@ -368,6 +412,34 @@ mod tests {
         let errors = check(json!("dev"), json!({"default": ["emp-files/test-support"]}));
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("[features] default"));
+    }
+
+    #[test]
+    fn websocket_fixtures_are_enabled_only_by_their_assigned_consumers() {
+        let check = |from: &str, dependency_features: Value, features: Value| {
+            let metadata = json!({"workspace_members": [from, "emp-test-support"], "packages": [
+                {"id": from, "name": from, "manifest_path": format!("/workspace/{from}/Cargo.toml"),
+                 "dependencies": [{"name": "emp-test-support", "path": "/workspace/emp-test-support",
+                                   "kind": "dev", "features": dependency_features}],
+                 "features": features},
+                {"id": "emp-test-support", "name": "emp-test-support",
+                 "manifest_path": "/workspace/emp-test-support/Cargo.toml", "dependencies": []}
+            ]});
+            let mut errors = Vec::new();
+            dependencies(&metadata, &[], &mut errors).unwrap();
+            errors
+        };
+        assert!(check("emp-app", json!(["websocket"]), json!({})).is_empty());
+        assert!(check("emp-files", json!([]), json!({})).is_empty());
+        for (dependency_features, features) in [
+            (json!(["websocket"]), json!({})),
+            (json!([]), json!({"extra": ["emp-test-support/websocket"]})),
+            (json!([]), json!({"extra": ["emp-test-support?/websocket"]})),
+        ] {
+            let errors = check("emp-files", dependency_features, features);
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert!(errors[0].contains("emp-files 打开了 emp-test-support 的 websocket 特性"));
+        }
     }
 
     #[test]

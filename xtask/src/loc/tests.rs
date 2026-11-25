@@ -118,21 +118,53 @@ fn validates_merge_revisions_and_deduplicates_short_and_full_ids() {
     assert!(error.contains(missing), "{error}");
 }
 
-#[cfg(unix)]
 #[test]
 fn counts_rust_when_the_git_tree_has_a_non_utf8_non_rust_path() {
-    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
-
+    // Built with mktree so every platform sees the raw path bytes; some file
+    // systems (APFS) refuse to create such a name on disk.
     let repo = fixture_repository();
     let root = repo.path();
-    fs::write(root.join("lib.rs"), "fn example() {}\n").unwrap();
-    fs::write(root.join(OsStr::from_bytes(b"image-\xff.dat")), b"data").unwrap();
-    fixture_git(root, &["add", "--force", "--all"]);
-    let tree = fixture_git(root, &["write-tree"]);
+    let source = fixture_blob(root, b"fn example() {}\n");
+    let image = fixture_blob(root, b"data");
+    let mut entries = Vec::new();
+    entries.extend_from_slice(format!("100644 blob {source}\tlib.rs\0").as_bytes());
+    entries.extend_from_slice(format!("100644 blob {image}\timage-").as_bytes());
+    entries.extend_from_slice(b"\xff.dat\0");
+    let tree = git_with_input(git_in(root).args(["mktree", "-z"]), entries).unwrap();
+    let tree = String::from_utf8(tree).unwrap().trim().to_owned();
 
     let counts = Counter::new().count(&read_tree(root, &tree).unwrap());
     assert_eq!(counts.len(), 1);
     assert_eq!(counts["lib.rs"].production, 1);
+}
+
+#[test]
+fn git_children_drop_the_callers_repository_location() {
+    // Hooks export GIT_DIR / GIT_INDEX_FILE; a child inheriting them would
+    // read or stage into the caller's repository instead of `root`.
+    let command = git_in(Path::new("."));
+    let removed = command
+        .get_envs()
+        .filter(|(_, value)| value.is_none())
+        .map(|(name, _)| name.to_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+    ] {
+        assert!(removed.contains(name), "{name} reaches git children");
+    }
+}
+
+fn fixture_blob(root: &Path, contents: &[u8]) -> String {
+    let id = git_with_input(
+        git_in(root).args(["hash-object", "-w", "--stdin"]),
+        contents.to_vec(),
+    )
+    .unwrap();
+    String::from_utf8(id).unwrap().trim().to_owned()
 }
 
 fn fixture_repository() -> tempfile::TempDir {
@@ -142,8 +174,7 @@ fn fixture_repository() -> tempfile::TempDir {
 }
 
 fn fixture_git(root: &Path, args: &[&str]) -> String {
-    let output = git(Command::new("git")
-        .current_dir(root)
+    let output = git(git_in(root)
         .env("GIT_AUTHOR_NAME", "Fixture")
         .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
         .env("GIT_COMMITTER_NAME", "Fixture")
