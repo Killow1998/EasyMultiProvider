@@ -119,6 +119,7 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
     );
 
     let session = "m04-session";
+    let prompt = "Implement and verify the change";
     let result = http(
         emp.port,
         "POST",
@@ -128,7 +129,7 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
             ("Content-Type", "application/json"),
             ("session-id", session),
         ],
-        json!({"model":"aero/M04 Pair", "input":"Implement and verify the change",
+        json!({"model":"aero/M04 Pair", "input":prompt,
             "stream":true})
         .to_string()
         .as_bytes(),
@@ -256,7 +257,18 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
                     .any(|item| item["name"] == tool),
                 "{body}"
             );
-            if role == "executor" {
+            if role == "planner" {
+                let mut users = input_items.iter().filter(|item| item["role"] == "user");
+                let user = users
+                    .next()
+                    .expect("planner input must include the user message");
+                assert!(users.next().is_none(), "{body}");
+                assert_eq!(
+                    user["content"],
+                    json!([{"type":"input_text", "text":prompt}]),
+                    "{body}"
+                );
+            } else {
                 assert!(
                     input_items
                         .iter()

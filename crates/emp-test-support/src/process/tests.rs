@@ -5,16 +5,16 @@ use std::{
     net::TcpStream,
 };
 
+pub(crate) mod isolated;
+
 const CASE: &str = "EMP_TEST_OWNED_CHILD_CASE";
 pub(super) const ADDRESS: &str = "EMP_TEST_OWNED_CHILD_ADDRESS";
 const PIPE_PAYLOAD: usize = 1_048_576;
 const PAYLOAD_START: &[u8] = b"EMP-PIPE-PAYLOAD\0";
 
 pub(super) fn fixture(case: &str) -> Command {
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args(["--exact", "process::tests::child_fixture", "--nocapture"])
-        .env(CASE, case);
+    let mut command = isolated::command("process::tests::child_fixture");
+    command.env(CASE, case);
     command
 }
 
@@ -47,7 +47,9 @@ fn child_fixture() {
             let lifetime = Deadline::after(test_timeout(Duration::from_secs(10)));
             let _ = lifetime.io(&socket).read(&mut [0]);
         }
-        "capture-escaped-child" => super::capture::tests::check_escaped_child_capture(),
+        "capture-escaped-child" => {
+            isolated::report(super::capture::tests::check_escaped_child_capture());
+        }
         "escaped" => {
             #[cfg(unix)]
             rustix::process::setsid().unwrap();
@@ -78,6 +80,7 @@ fn child_fixture() {
                     .or_else(|| panic.downcast_ref::<String>().map(String::as_str)),
                 Some("EMP_TEST_TIME_SCALE must be a number between 0.0625 and 64 inclusive")
             );
+            isolated::report(Ok(()));
         }
         _ => panic!("unknown child fixture"),
     }
@@ -140,17 +143,9 @@ fn invalid_time_scale_panics_during_construction_without_aborting() {
     for scale in ["bad", "2e18"] {
         let mut command = fixture("invalid-time-scale");
         command.env("EMP_TEST_TIME_SCALE", scale);
-        let output = OwnedChild::output(
+        isolated::run(
             command,
             Deadline::after(test_timeout(Duration::from_secs(5))),
-        )
-        .unwrap();
-        assert!(
-            output.status.success(),
-            "scale {scale}: {}\n{}\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

@@ -20,7 +20,7 @@ impl Response {
         Self::read_before(stream, &Deadline::after(io_timeout()))
     }
 
-    pub(super) fn read_before(stream: TcpStream, deadline: &Deadline) -> io::Result<Self> {
+    pub(crate) fn read_before(stream: TcpStream, deadline: &Deadline) -> io::Result<Self> {
         let (status_line, headers, body) = read_message(&mut deadline.io(stream), true)?;
         let mut parts = status_line.split_whitespace();
         let status = parts
@@ -78,13 +78,12 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-fn parse_head(head: &str) -> (String, BTreeMap<String, String>) {
+fn parse_head(head: &str) -> (String, impl Iterator<Item = (String, String)> + '_) {
     let mut lines = head.split("\r\n");
     let first = lines.next().unwrap_or_default().to_owned();
     let headers = lines
         .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
-        .collect();
+        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()));
     (first, headers)
 }
 
@@ -188,12 +187,31 @@ pub(crate) fn read_message(
     };
     let head = std::str::from_utf8(&raw[..separator])
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let (first, headers) = parse_head(head);
-    let length = headers
-        .get("content-length")
-        .map(|length| length.parse::<usize>())
-        .transpose()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let (first, fields) = parse_head(head);
+    let mut headers = BTreeMap::new();
+    let mut length = None;
+    for (name, value) in fields {
+        if name == "content-length" {
+            let declared = value
+                .parse::<usize>()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            if let Some(previous) = length.replace(declared)
+                && previous != declared
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "conflicting Content-Length fields",
+                ));
+            }
+        }
+        headers.insert(name, value);
+    }
+    if length.is_some() && headers.contains_key("transfer-encoding") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Content-Length and Transfer-Encoding cannot be combined",
+        ));
+    }
     let chunked = headers
         .get("transfer-encoding")
         .is_some_and(|value| value.eq_ignore_ascii_case("chunked"));
@@ -309,7 +327,7 @@ impl SseClient {
         )
     }
 
-    fn read_head(stream: TcpStream, deadline: &Deadline) -> Self {
+    pub(crate) fn read_head(stream: TcpStream, deadline: &Deadline) -> Self {
         let mut input = BufReader::new(deadline.io(stream));
         let mut head = String::new();
         loop {
@@ -320,7 +338,8 @@ impl SseClient {
                 break;
             }
         }
-        let (status, headers) = parse_head(&head);
+        let (status, fields) = parse_head(&head);
+        let headers: BTreeMap<_, _> = fields.collect();
         assert!(status.starts_with("HTTP/1.1 200 "), "{head}");
         assert!(
             headers["content-type"].contains("text/event-stream"),
@@ -394,6 +413,7 @@ impl SseClient {
         Ok(Some(byte[0]))
     }
 
+    #[allow(dead_code, reason = "Used by the standalone HTTP and Linux Aero tests")]
     pub fn expect_eof(&mut self, deadline: &Deadline) -> io::Result<()> {
         self.input.get_mut().set_deadline(deadline);
         if self.byte()?.is_some() {
@@ -436,116 +456,6 @@ impl SseClient {
                 frame.push_str(&line);
                 frame.push('\n');
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::net::TcpListener;
-
-    #[test]
-    fn empty_and_truncated_responses_return_errors() {
-        for response in [
-            b"".as_slice(),
-            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n",
-            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nx",
-            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n",
-        ] {
-            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-            let (mut server, _) = listener.accept().unwrap();
-            server.write_all(response).unwrap();
-            drop(server);
-            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-            assert!(
-                matches!(
-                    Response::read_before(client, &deadline),
-                    Err(error) if error.kind() == io::ErrorKind::UnexpectedEof
-                ),
-                "{response:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn fixed_length_response_finishes_while_peer_is_open() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
-        server
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
-            .unwrap();
-
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-        let response = Response::read_before(client, &deadline).unwrap();
-        assert_eq!(response.status, 200);
-        assert_eq!(response.body, b"{}");
-        drop(server);
-    }
-
-    #[test]
-    fn both_chunk_readers_reject_invalid_trailer_fields() {
-        let body = b"0\r\ngarbage\r\n\r\n";
-        assert_eq!(
-            dechunk(body).unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
-
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
-        server.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
-        server.write_all(body).unwrap();
-
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-        let mut reader = SseClient::read_head(client, &deadline);
-        assert_eq!(
-            reader.expect_eof(&deadline).unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
-    }
-
-    #[test]
-    fn chunked_sse_requires_the_final_empty_line_even_after_completion() {
-        for complete in [true, false] {
-            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-            let (mut server, _) = listener.accept().unwrap();
-            let event = b"data: {\"type\":\"response.completed\"}\n\n";
-            write!(
-                server,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n",
-                event.len()
-            )
-            .unwrap();
-            server.write_all(event).unwrap();
-            server
-                .write_all(b"\r\n0\r\nX-Fixture: trailer\r\n")
-                .unwrap();
-            if complete {
-                server.write_all(b"\r\n").unwrap();
-            }
-
-            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-            let mut client = SseClient::read_head(client, &deadline);
-            assert_eq!(
-                client.next_event(&deadline).unwrap().unwrap()["type"],
-                "response.completed"
-            );
-            let deadline = if complete {
-                deadline
-            } else {
-                Deadline::after(test_timeout(Duration::from_millis(100)))
-            };
-            let eof = client.expect_eof(&deadline);
-            if complete {
-                eof.unwrap();
-            } else {
-                assert_eq!(eof.unwrap_err().kind(), io::ErrorKind::TimedOut);
-            }
-            drop(server);
         }
     }
 }

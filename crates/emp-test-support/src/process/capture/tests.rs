@@ -1,7 +1,7 @@
 use super::{
     super::{
         OwnedChild,
-        tests::{ADDRESS, fixture},
+        tests::{ADDRESS, fixture, isolated},
     },
     *,
 };
@@ -52,17 +52,13 @@ fn deadline_terminates_a_descendant_and_joins_both_output_readers() {
 
 #[test]
 fn capture_timeout_joins_readers_and_closes_pipes_held_by_an_escaped_child() {
-    let output = fixture("capture-escaped-child").output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    isolated::run(
+        fixture("capture-escaped-child"),
+        Deadline::after(test_timeout(Duration::from_secs(15))),
     );
 }
 
-pub(in crate::process) fn check_escaped_child_capture() {
+pub(in crate::process) fn check_escaped_child_capture() -> Result<(), &'static str> {
     use super::super::tests::assert_payload;
     use std::{io::Write, process::Child};
 
@@ -97,8 +93,7 @@ pub(in crate::process) fn check_escaped_child_capture() {
             io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
         )
     }) {
-        eprintln!("Windows runner does not permit CREATE_BREAKAWAY_FROM_JOB");
-        return;
+        return Err("Windows runner does not permit CREATE_BREAKAWAY_FROM_JOB");
     }
     let mut child = EscapedChild(launched.unwrap());
     let stdout = Capture::start(child.0.stdout.take().unwrap()).unwrap();
@@ -127,4 +122,5 @@ pub(in crate::process) fn check_escaped_child_capture() {
         status.success(),
         "escaped child pipe probe failed: {status} (24: pipe open, 25: probe not received)"
     );
+    Ok(())
 }

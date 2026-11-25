@@ -16,6 +16,8 @@ use crate::{Result, project_root};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use syn::spanned::Spanned as _;
+use syn::visit::Visit;
 use syn::{Expr, Macro, Token, parse::Parser as _, punctuated::Punctuated};
 
 pub fn run(args: &[String]) -> Result {
@@ -48,6 +50,7 @@ pub fn run(args: &[String]) -> Result {
             single_http_driver(&path, source, &mut errors);
             production_sockets::check(&path, source, &mut errors)?;
             test_drop::check(&path, source, &mut errors)?;
+            shared_test_module(&path, source, &mut errors)?;
         }
         if path.starts_with("crates/") && path.split('/').nth(2) == Some("tests") {
             test_boundary(&path, &bytes, &mut errors);
@@ -59,7 +62,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop passed"
+            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
         );
         Ok(())
     } else {
@@ -132,9 +135,72 @@ fn test_boundary(path: &str, bytes: &[u8], errors: &mut Vec<String>) {
     }
 }
 
+fn shared_test_module(path: &str, source: &str, errors: &mut Vec<String>) -> Result {
+    if !path.ends_with(".rs")
+        || !matches!(
+            path.splitn(5, '/').collect::<Vec<_>>().as_slice(),
+            ["crates", _, "tests", "support", _]
+        )
+    {
+        return Ok(());
+    }
+
+    struct TestAttributes<'a> {
+        file: &'a str,
+        errors: &'a mut Vec<String>,
+    }
+
+    impl<'ast> Visit<'ast> for TestAttributes<'_> {
+        fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
+            let path = attribute.path();
+            if path.is_ident("test")
+                || (path.segments.len() == 2
+                    && path.segments[0].ident == "tokio"
+                    && path.segments[1].ident == "test")
+            {
+                let file = self.file;
+                let line = attribute.span().start().line;
+                self.errors.push(format!(
+                    "[shared-test-module] {file}:{line}: 共享测试辅助模块不能注册用例；请将用例移到独立的集成测试目标"
+                ));
+            }
+        }
+    }
+
+    let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
+    TestAttributes { file: path, errors }.visit_file(&file);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_test_attributes_only_in_shared_integration_modules() {
+        let source = r##"#[test]
+fn sync_case() {}
+mod nested {
+    #[::tokio::test(flavor = "current_thread")]
+    async fn async_case() {}
+}
+const TEXT: &str = "#[test]";
+"##;
+        let mut errors = Vec::new();
+        for path in [
+            "crates/example/tests/suite.rs",
+            "crates/example/tests/support.rs",
+        ] {
+            shared_test_module(path, source, &mut errors).unwrap();
+        }
+        assert!(errors.is_empty());
+
+        let path = "crates/example/tests/support/nested/wire.rs";
+        shared_test_module(path, source, &mut errors).unwrap();
+        assert_eq!(errors.len(), 2);
+        assert!(errors[0].starts_with(&format!("[shared-test-module] {path}:1:")));
+        assert!(errors[1].starts_with(&format!("[shared-test-module] {path}:4:")));
+    }
 
     #[test]
     fn test_boundary_checks_binary_and_http_access() {

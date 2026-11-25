@@ -235,6 +235,7 @@ pub fn write_executable(path: &std::path::Path, script: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::tests::isolated;
     use std::net::TcpListener;
 
     #[test]
@@ -249,22 +250,25 @@ mod tests {
                     }
                 }
             }
-            let _fixture = FailingFixture(Some(thread::spawn(|| panic!("fixture worker failed"))));
-            panic!("original test failed");
+            let panic = std::panic::catch_unwind(|| {
+                let _fixture =
+                    FailingFixture(Some(thread::spawn(|| panic!("fixture worker failed"))));
+                panic!("original test failed");
+            })
+            .unwrap_err();
+            assert_eq!(
+                panic.downcast_ref::<&str>().copied(),
+                Some("original test failed")
+            );
+            isolated::report(Ok(()));
+            return;
         }
 
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "tests::drop_failure_during_unwind_does_not_abort",
-                "--nocapture",
-            ])
-            .env(CASE, "1");
+        let mut command = isolated::command("tests::drop_failure_during_unwind_does_not_abort");
+        command.env(CASE, "1");
         let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-        let output = OwnedChild::output(command, deadline).unwrap();
+        let output = isolated::run(command, deadline);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(101), "{stderr}");
         assert!(stderr.contains("original test failed"), "{stderr}");
         assert!(stderr.contains("join failing fixture"), "{stderr}");
     }
