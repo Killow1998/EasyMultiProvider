@@ -8,7 +8,12 @@ const ALLOWED: &[(&str, &str)] = &[(
 
 pub(super) fn strip_comment(line: &str) -> &str {
     line.match_indices('#')
-        .find(|(index, _)| *index == 0 || line[..*index].ends_with(char::is_whitespace))
+        .find(|(index, _)| {
+            *index == 0
+                || line[..*index].ends_with(|character: char| {
+                    character.is_whitespace() || ";&|()<>".contains(character)
+                })
+        })
         .map_or(line, |(index, _)| &line[..index])
 }
 

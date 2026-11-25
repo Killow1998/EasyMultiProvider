@@ -167,11 +167,31 @@ mod tests {
 
     #[test]
     fn requires_bare_workflow_profile_names() {
-        for (command, valid) in [
-            ("run: cargo xtask ci \"native-tls\"", false),
-            ("run: cargo xtask ci native-tls", true),
-            ("run: cargo xtask ci native-tls#验收", false),
-            ("run: cargo xtask ci native-tls # 验收", true),
+        let mut errors = Vec::new();
+        let mut referenced = BTreeSet::new();
+        check_references(
+            "workflow.yml",
+            "run: cargo xtask ci \"native-tls\"\nrun: cargo xtask ci native-tls",
+            crate::ci::PROFILES,
+            &mut referenced,
+            &mut errors,
+        );
+        assert_eq!(referenced, ["native-tls"].into());
+        assert_eq!(
+            errors,
+            ["[ci-profiles] workflow.yml:1: profile 名不加引号，使用 [a-z0-9-]+"]
+        );
+    }
+
+    #[test]
+    fn recognizes_workflow_comment_boundaries() {
+        for (command, expected_profile) in [
+            ("run: cargo xtask ci native-tls#验收", None),
+            ("run: cargo xtask ci native-tls # 验收", Some("native-tls")),
+            (
+                "cargo xtask ci native-memory;# cargo xtask ci native-tls",
+                Some("native-memory"),
+            ),
         ] {
             let mut errors = Vec::new();
             let mut referenced = BTreeSet::new();
@@ -182,11 +202,14 @@ mod tests {
                 &mut referenced,
                 &mut errors,
             );
-            if valid {
-                assert_eq!(referenced, ["native-tls"].into(), "{command}");
+            assert_eq!(
+                referenced,
+                expected_profile.into_iter().collect(),
+                "{command}"
+            );
+            if expected_profile.is_some() {
                 assert!(errors.is_empty(), "{command}: {errors:?}");
             } else {
-                assert!(referenced.is_empty(), "{command}: {referenced:?}");
                 assert_eq!(
                     errors,
                     ["[ci-profiles] workflow.yml:1: profile 名不加引号，使用 [a-z0-9-]+"],
