@@ -2,6 +2,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use crate::app::ServerState;
+use crate::services::configuration::{CommittedChange, after_commit};
 use emp_codex::account_auth_headers;
 use emp_codex::quota::QuotaError;
 mod credentials;
@@ -35,7 +36,7 @@ pub(crate) fn account_allows_refresh(state: &ServerState, account_id: &str) -> b
         })
 }
 
-pub(crate) fn account_catalog_headers(
+pub(crate) fn subscription_auth_headers(
     account: &serde_json::Map<String, Value>,
     vault: &VaultStore,
 ) -> Option<BTreeMap<String, String>> {
@@ -179,7 +180,7 @@ pub(super) fn replacing_account_credentials<T>(
             }
         }
         for id in previous_ids.iter().chain(current_ids.iter()) {
-            state.catalog_refresh.account_changed(id);
+            let _ = after_commit(state, CommittedChange::AccountSource(id));
         }
         for (path, before) in pending_files.iter().zip(before) {
             if std::fs::read(path).ok() != before {

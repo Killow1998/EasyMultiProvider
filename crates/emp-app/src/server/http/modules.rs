@@ -6,7 +6,13 @@ use super::{
     raw_head,
 };
 use crate::{
-    app::ServerState, http::request::Request, server::run_blocking, services::modules::Action,
+    app::ServerState,
+    http::request::Request,
+    server::run_blocking,
+    services::{
+        configuration::{CommittedChange, after_commit},
+        modules::Action,
+    },
 };
 use axum::{
     Router,
@@ -171,11 +177,7 @@ impl ModuleAction {
         };
         match result {
             Ok(()) => {
-                if matches!(module, Module::Aggregate | Module::Team | Module::Aero)
-                    && crate::services::catalog::refresh_catalog(state).is_err()
-                {
-                    crate::services::account_catalog::request_refresh(state, false);
-                }
+                let _ = after_commit(state, CommittedChange::Module(module));
                 module_status(state)
             }
             Err(error) => {

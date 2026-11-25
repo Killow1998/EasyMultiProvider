@@ -3,6 +3,7 @@ use super::{
     duplicate_accounts, notify_quota_update, quota_refresh_cancellation, quota_refresh_locks,
 };
 use crate::app::ServerState;
+use crate::services::configuration::{CommittedChange, after_commit};
 use emp_state::FileTransaction;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -164,7 +165,7 @@ pub(crate) fn delete_account_state(
             receipt.check("account_and_configuration_committed", Some(true));
             for (id, path) in ids.iter().zip(&expected) {
                 state.backend.accounts.forget_pending_rotation(path);
-                state.catalog_refresh.account_changed(id);
+                let _ = after_commit(state, CommittedChange::AccountSource(id));
             }
             drop(config);
             for id in &ids {

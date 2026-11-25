@@ -1,38 +1,27 @@
 use crate::app::ServerState;
-use crate::services::accounts::account_catalog_headers;
-use emp_state::filesystem::write_catalog_json;
+use crate::services::accounts::subscription_auth_headers;
 use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(crate) mod discovery;
+mod accounts;
+mod discovery;
 mod provider_models;
 mod selection;
 mod sources;
 mod validation;
-pub(crate) use selection::select_models;
+#[cfg(all(test, unix))]
+pub(crate) use accounts::tests::assert_subscription_refresh_receipt;
+pub(crate) use accounts::{
+    CatalogRefreshError, CatalogState, account_source_changed, refresh_catalog,
+    refresh_subscription, request_refresh, run_refresh_worker, stop_refresh_worker,
+};
+pub(crate) use discovery::{
+    DiscoveryError, ProviderDiscovery, discover, metadata as model_metadata,
+    saved_models as saved_provider_models,
+};
 use sources::CatalogSources;
 pub(super) use validation::validate_update;
-
-pub(crate) fn refresh_catalog(state: &ServerState) -> Result<(PathBuf, usize), ()> {
-    let config = state.backend.configuration.read().map_err(|_| ())?;
-    state.catalog_refresh.mark_catalog_publication_pending();
-    let catalog = client_catalog(state, &config);
-    let path = generated_catalog_path(state);
-    let previous = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    let changed = previous.as_ref() != Some(&catalog);
-    if changed {
-        write_catalog_json(&path, &catalog).map_err(|_| ())?;
-    }
-    state.catalog_refresh.catalog_publication_succeeded();
-    drop(config);
-    if changed {
-        crate::services::runtime::mark_active_pending(state, "EMP model catalog changed");
-    }
-    Ok((path, catalog["models"].as_array().map_or(0, Vec::len)))
-}
 
 pub(crate) fn generated_catalog_path(state: &ServerState) -> PathBuf {
     let home = state
@@ -136,7 +125,7 @@ pub(crate) fn subscription_options(
         emp_codex::cached_subscription_catalog(
             config.as_object().expect("config"),
             auth_path,
-            || super::account_catalog::catalog_headers(state, config, account),
+            || accounts::catalog_headers(state, config, account),
         )
     };
     Ok(catalog.as_ref().map_or_else(Vec::new, |catalog| {
@@ -153,7 +142,7 @@ pub(crate) fn subscription_model(
     let catalog_auth_path =
         account.and_then(|account| account.get("_emp_catalog_auth_file")?.as_str());
     emp_codex::subscription_route_model(config, slug, account, catalog_auth_path, |account| {
-        account_catalog_headers(account, &state.backend.configuration.vault)
+        subscription_auth_headers(account, &state.backend.configuration.vault)
     })
 }
 
@@ -169,7 +158,7 @@ pub(crate) fn refresh_for_management(
         |receipt| {
             let result = receipt.step("publish_catalog", || refresh_catalog(state))?;
             receipt.check("catalog_published", Some(true));
-            crate::services::account_catalog::request_refresh(state, false);
+            request_refresh(state, false);
             receipt.fact("subscription_refresh", "scheduled");
             receipt.check("runtime_catalog_matches_target", None);
             Ok(result)

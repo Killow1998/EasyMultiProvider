@@ -2,6 +2,7 @@ use super::{
     account_public_snapshot, native_auth_document, notify_quota_update, quota_refresh_lock,
 };
 use crate::app::ServerState;
+use crate::services::configuration::{CommittedChange, after_commit};
 use emp_state::{
     FileTransaction, VaultStore, config::normalize_configuration_with_registry, normalize_account,
     validate_auth_json,
@@ -310,7 +311,7 @@ fn import_credentials(
             {
                 cancellations.insert(account_id.to_owned(), Arc::new(AtomicBool::new(false)));
             }
-            state.catalog_refresh.account_changed(account_id);
+            let _ = after_commit(state, CommittedChange::AccountSource(account_id));
             drop(config);
             notify_quota_update(state, account_id, None);
             receipt.step("read_account_result", || {

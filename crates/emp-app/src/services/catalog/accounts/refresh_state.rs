@@ -3,14 +3,14 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const CATALOG_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-pub(crate) const CATALOG_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+const CATALOG_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
 const BASE_RETRY: Duration = Duration::from_secs(30);
 const MAX_RETRY: Duration = Duration::from_secs(10 * 60);
 const AUTH_RETRY: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Default)]
-pub(crate) struct CatalogRefreshState {
+pub(super) struct CatalogRefreshState {
     queue: Mutex<QueueState>,
     wake: Condvar,
     poll_gate: Mutex<()>,
@@ -36,7 +36,7 @@ struct PollState {
 }
 
 impl CatalogRefreshState {
-    pub(crate) fn request(&self, force: bool) {
+    pub(super) fn request(&self, force: bool) {
         if let Ok(mut queue) = self.queue.lock() {
             if !queue.running || !force {
                 queue.pending = true;
@@ -48,7 +48,7 @@ impl CatalogRefreshState {
         }
     }
 
-    pub(crate) fn account_changed(&self, id: &str) {
+    pub(super) fn account_changed(&self, id: &str) {
         if let Ok(mut queue) = self.queue.lock() {
             let generation = queue.account_generations.entry(id.to_owned()).or_default();
             *generation = generation.wrapping_add(1);
@@ -59,7 +59,7 @@ impl CatalogRefreshState {
         }
     }
 
-    pub(crate) fn account_generation(&self, id: &str) -> u64 {
+    pub(super) fn account_generation(&self, id: &str) -> u64 {
         self.queue
             .lock()
             .ok()
@@ -67,11 +67,11 @@ impl CatalogRefreshState {
             .unwrap_or_default()
     }
 
-    pub(crate) fn poll_gate(&self) -> Option<MutexGuard<'_, ()>> {
+    pub(super) fn poll_gate(&self) -> Option<MutexGuard<'_, ()>> {
         self.poll_gate.lock().ok()
     }
 
-    pub(crate) fn wait_for_work(&self, stopping: impl Fn() -> bool) -> Option<bool> {
+    pub(super) fn wait_for_work(&self, stopping: impl Fn() -> bool) -> Option<bool> {
         let mut queue = self.queue.lock().ok()?;
         loop {
             if stopping() {
@@ -96,38 +96,38 @@ impl CatalogRefreshState {
         }
     }
 
-    pub(crate) fn finish_pass(&self) {
+    pub(super) fn finish_pass(&self) {
         if let Ok(mut queue) = self.queue.lock() {
             queue.running = false;
             self.wake.notify_all();
         }
     }
 
-    pub(crate) fn stop(&self) {
+    pub(super) fn stop(&self) {
         if let Ok(_queue) = self.queue.lock() {
             self.wake.notify_all();
         }
     }
 
-    pub(crate) fn mark_catalog_publication_pending(&self) {
+    pub(super) fn mark_catalog_publication_pending(&self) {
         if let Ok(mut queue) = self.queue.lock() {
             queue.catalog_publication_pending = true;
         }
     }
 
-    pub(crate) fn catalog_publication_pending(&self) -> bool {
+    pub(super) fn catalog_publication_pending(&self) -> bool {
         self.queue
             .lock()
             .is_ok_and(|queue| queue.catalog_publication_pending)
     }
 
-    pub(crate) fn catalog_publication_succeeded(&self) {
+    pub(super) fn catalog_publication_succeeded(&self) {
         if let Ok(mut queue) = self.queue.lock() {
             queue.catalog_publication_pending = false;
         }
     }
 
-    pub(crate) fn due(
+    pub(super) fn due(
         &self,
         id: &str,
         fingerprint: &str,
@@ -153,7 +153,7 @@ impl CatalogRefreshState {
         force || poll.expires_at.is_none_or(|expires| now >= expires)
     }
 
-    pub(crate) fn completed(&self, id: &str, success: bool, unauthorized: bool, now: Instant) {
+    pub(super) fn completed(&self, id: &str, success: bool, unauthorized: bool, now: Instant) {
         if let Ok(mut queue) = self.queue.lock() {
             let Some(poll) = queue.polls.get_mut(id) else {
                 return;
@@ -176,7 +176,7 @@ impl CatalogRefreshState {
         }
     }
 
-    pub(crate) fn mark_fresh(&self, id: &str, fingerprint: &str, generation: u64, now: Instant) {
+    pub(super) fn mark_fresh(&self, id: &str, fingerprint: &str, generation: u64, now: Instant) {
         if let Ok(mut queue) = self.queue.lock() {
             queue.polls.insert(
                 id.to_owned(),
@@ -192,86 +192,12 @@ impl CatalogRefreshState {
         }
     }
 
-    pub(crate) fn retain_sources(&self, present: &std::collections::BTreeSet<String>) {
+    pub(super) fn retain_sources(&self, present: &std::collections::BTreeSet<String>) {
         if let Ok(mut queue) = self.queue.lock() {
             queue.polls.retain(|id, _| present.contains(id));
         }
     }
-
-    #[cfg(all(test, unix))]
-    pub(crate) fn wait_until_idle(&self, timeout: Duration) -> bool {
-        let Ok(mut queue) = self.queue.lock() else {
-            return false;
-        };
-        let deadline = Instant::now() + timeout;
-        while queue.running || queue.pending {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return false;
-            }
-            let Ok((next, result)) = self.wake.wait_timeout(queue, remaining) else {
-                return false;
-            };
-            queue = next;
-            if result.timed_out() && (queue.running || queue.pending) {
-                return false;
-            }
-        }
-        true
-    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::CatalogRefreshState;
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn successful_refresh_waits_a_day_unless_forced_or_the_source_changes() {
-        let state = CatalogRefreshState::default();
-        let now = Instant::now();
-        assert!(state.due("account", "owner-a", 0, false, now));
-        state.completed("account", true, false, now);
-        let day = Duration::from_secs(86_400);
-        let before_expiry = now + day - Duration::from_secs(1);
-        assert!(!state.due("account", "owner-a", 0, false, before_expiry));
-        assert!(state.due("account", "owner-a", 0, true, before_expiry));
-        assert!(state.due("account", "owner-a", 0, false, now + day));
-        state.mark_fresh("account", "owner-a", 0, now + day);
-        assert!(!state.due("account", "owner-a", 0, false, now + day));
-        assert!(state.due("account", "owner-b", 0, false, now + day));
-    }
-
-    #[test]
-    fn authentication_failures_back_off_and_source_changes_retry_immediately() {
-        let state = CatalogRefreshState::default();
-        let now = Instant::now();
-        assert!(state.due("account", "owner-a", 0, false, now));
-        state.completed("account", false, true, now);
-        assert!(!state.due(
-            "account",
-            "owner-a",
-            0,
-            false,
-            now + Duration::from_secs(60)
-        ));
-        assert!(state.due(
-            "account",
-            "owner-a",
-            0,
-            false,
-            now + Duration::from_secs(5 * 60)
-        ));
-
-        let changed_source = CatalogRefreshState::default();
-        assert!(changed_source.due("account", "owner-a", 0, false, now));
-        changed_source.completed("account", false, true, now);
-        assert!(changed_source.due(
-            "account",
-            "owner-b",
-            0,
-            false,
-            now + Duration::from_secs(60)
-        ));
-    }
-}
+mod tests;

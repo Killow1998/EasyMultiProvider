@@ -11,7 +11,10 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+mod publication;
 pub(crate) mod settings;
+
+pub(crate) use publication::{CommittedChange, after_commit};
 
 pub(crate) fn load_server_configuration(
     path: &Path,

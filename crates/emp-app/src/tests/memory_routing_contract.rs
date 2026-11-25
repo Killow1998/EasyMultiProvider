@@ -1,5 +1,5 @@
 //! Exercise routing with real EMP HTTP and synthetic subscription credentials.
-use super::auto_review_contract::{make_review_server, write_owned_account_catalog};
+use super::auto_review_contract::{make_review_server, write_owned_subscription_catalog};
 use super::*;
 
 pub(super) fn fixture(base_url: &str) -> (TempDir, ServerHandle) {
@@ -17,7 +17,7 @@ pub(super) fn fixture(base_url: &str) -> (TempDir, ServerHandle) {
         serde_json::to_vec(&json!({"models":models})).unwrap(),
     )
     .unwrap();
-    write_owned_account_catalog(&server, &config["accounts"][0], base_url, models);
+    write_owned_subscription_catalog(&server, &config["accounts"][0], base_url, models);
     let mut preferences = server
         .state
         .backend

@@ -5,7 +5,7 @@ use crate::app::ServerState;
 use crate::http::request::{Request, query_values};
 use crate::server::http::error::JsonReply;
 use crate::services::accounts::{
-    account_catalog_headers, native_subscription_headers, quota_owner_key,
+    native_subscription_headers, quota_owner_key, subscription_auth_headers,
 };
 use crate::util::system_now;
 use emp_state::usage::{

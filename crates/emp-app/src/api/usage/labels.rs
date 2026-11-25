@@ -32,7 +32,8 @@ pub(super) fn enrich(state: &ServerState, config: &Value, payload: &mut Value) {
         .collect();
     accounts.sort_by_key(|account| account.get("workspace_shared") != Some(&Value::Bool(true)));
     for account in accounts {
-        if let Some(headers) = account_catalog_headers(account, &state.backend.configuration.vault)
+        if let Some(headers) =
+            subscription_auth_headers(account, &state.backend.configuration.vault)
         {
             let owner = account_owner(&headers);
             if owner.is_empty() {

@@ -2,11 +2,11 @@ use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::request::{percent_decode, query_values};
 use crate::server::http::error::{EntryError, JsonReply};
-use crate::services::account_catalog::{self, CatalogRefreshError};
 use crate::services::accounts::{
     AccountImport, delete_account_state, import_parsed_account, native_account_snapshot,
     project_public_accounts,
 };
+use crate::services::catalog::{CatalogRefreshError, refresh_subscription};
 use crate::services::configuration::{ChangeError, settings};
 use crate::services::cpa_quota;
 use crate::services::quota::commands::{self, CommandError, QuotaCommand};
@@ -117,7 +117,7 @@ impl AccountWrite {
                 };
             }
             Self::RefreshModels(account) => {
-                account_catalog::refresh(id, state, &account).map_err(|error| match error {
+                refresh_subscription(id, state, &account).map_err(|error| match error {
                     CatalogRefreshError::Upstream(error) => {
                         super::failure_response::router_error_reply(error)
                     }

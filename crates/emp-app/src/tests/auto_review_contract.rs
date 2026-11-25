@@ -124,7 +124,7 @@ pub(super) fn make_review_server(
         reason = "The account catalog fixture is shared with tests gated to Unix"
     )
 )]
-pub(super) fn write_owned_account_catalog(
+pub(super) fn write_owned_subscription_catalog(
     server: &ServerHandle,
     account: &Value,
     base_url: &str,
@@ -322,7 +322,7 @@ fn compact_keeps_the_requested_account_even_when_review_would_choose_another() {
 
 #[cfg(unix)]
 #[test]
-fn http_auto_review_skips_symlink_native_and_missing_account_catalog_without_leaking_auth() {
+fn http_auto_review_skips_symlink_native_and_missing_subscription_catalog_without_leaking_auth() {
     let upstream = OneShotUpstream::start(json!({
         "id":"auto-review-http","object":"response","status":"completed",
         "model":"codex-auto-review","output":[]
@@ -336,7 +336,7 @@ fn http_auto_review_skips_symlink_native_and_missing_account_catalog_without_lea
     assert!(!crate::services::accounts::regular_file(
         &server.state.backend.codex.auth_path
     ));
-    write_owned_account_catalog(
+    write_owned_subscription_catalog(
         &server,
         &config["accounts"][0],
         &upstream.base_url(),

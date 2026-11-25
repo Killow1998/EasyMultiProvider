@@ -1,4 +1,4 @@
-use super::auto_review_contract::{make_review_server, write_owned_account_catalog};
+use super::auto_review_contract::{make_review_server, write_owned_subscription_catalog};
 use crate::services::{
     request_outcome::RequestOutcome,
     request_preparation::{RequestOperation, prepare_request},
@@ -29,7 +29,7 @@ fn subscription_balance_keeps_affinity_and_follows_actual_account_after_native_l
         if account["id"] == "b" {
             account_models[0]["context_window"] = json!(64000);
         }
-        write_owned_account_catalog(&server, account, endpoint, account_models);
+        write_owned_subscription_catalog(&server, account, endpoint, account_models);
     }
     let quota = |used| json!({"plan_type":"pro","rate_limits":{"primary":{"usedPercent":used}}});
     server
@@ -131,7 +131,7 @@ fn subscription_balance_keeps_affinity_and_follows_actual_account_after_native_l
         .vault
         .write_encrypted_json(b_path, &old_native)
         .unwrap();
-    write_owned_account_catalog(&server, &config["accounts"][1], endpoint, models);
+    write_owned_subscription_catalog(&server, &config["accounts"][1], endpoint, models);
     let moved = prepare("auto/priority", "native-thread");
     assert_eq!(moved.provider_id, "b");
     assert_eq!(

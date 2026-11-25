@@ -185,7 +185,7 @@ pub(crate) fn sync_runtime(
 pub(crate) fn compatibility_snapshot(state: &ServerState, refresh: bool) -> Value {
     let snapshot = state.backend.integration.inventory.snapshot(refresh);
     if refresh {
-        crate::services::account_catalog::request_refresh(state, false);
+        crate::services::catalog::request_refresh(state, false);
     }
     snapshot
 }
@@ -363,7 +363,7 @@ pub(crate) fn watch_runtime(state: &ServerState) {
         let before = state.backend.integration.runtime.snapshot()["state"].clone();
         let checked = sync_runtime(state, None, false, true).ok();
         if checked.is_some() {
-            crate::services::account_catalog::request_refresh(state, false);
+            crate::services::catalog::request_refresh(state, false);
         }
         last_check = Some(Instant::now());
         if checked.is_some_and(|result| before != result.state) {

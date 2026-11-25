@@ -4,8 +4,7 @@ use crate::http::request::percent_decode;
 use crate::http::request::query_values;
 use crate::http::response::json_error_body;
 use crate::server::http::error::{EntryError, JsonReply};
-use crate::services::catalog::discovery::{self, DiscoveryError};
-use crate::services::catalog::server_catalog;
+use crate::services::catalog::{self, DiscoveryError, server_catalog};
 use emp_codex::preserve_native_catalog;
 use serde_json::Value;
 use serde_json::json;
@@ -30,7 +29,7 @@ pub(crate) fn metadata_request(
     state: &ServerState,
     body: &Value,
 ) -> JsonReply {
-    discovery_reply(discovery::metadata(request_id, state, body), |error| {
+    discovery_reply(catalog::model_metadata(request_id, state, body), |error| {
         if error.status() == 500 && error.to_string() == "internal server error" {
             EntryError::internal().reply()
         } else {
@@ -48,7 +47,7 @@ pub(crate) fn models_request(
         Err(_) => return Err(EntryError::internal()),
     };
     if request.raw_path() == "/v1/models" {
-        crate::services::account_catalog::request_refresh(state, false);
+        crate::services::catalog::request_refresh(state, false);
     }
     let versions = query_values(request.target, "client_version");
     let client_version = versions
@@ -105,7 +104,7 @@ pub(crate) fn read_configuration(state: &ServerState) -> JsonReply {
 
 pub(crate) fn provider_models_request(id: Option<&str>, state: &ServerState) -> JsonReply {
     let result = match id {
-        Some(id) => discovery::saved_models(state, &percent_decode(id, false)),
+        Some(id) => catalog::saved_provider_models(state, &percent_decode(id, false)),
         None if state.backend.configuration.read().is_err() => Err(DiscoveryError::Unavailable),
         None => Err(DiscoveryError::Invalid(
             "Subscription account is unavailable".into(),

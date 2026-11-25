@@ -1,9 +1,8 @@
-use super::ChangeError;
+use super::{ChangeError, CommittedChange, ConfigurationEdit, after_commit};
 use crate::app::ServerState;
-use crate::services::catalog::{refresh_catalog, validate_update};
+use crate::services::catalog::validate_update;
 use emp_state::{canonicalize_private_paths, config::merge_web_update_with_registry};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn update(
     request_id: Option<&str>,
@@ -92,20 +91,16 @@ pub(crate) fn update(
                 return Err(ChangeError::Unavailable);
             }
             receipt.check("configuration_committed", Some(true));
-            for id in changed_account_ids(&before, &current) {
-                state.catalog_refresh.account_changed(&id);
-            }
-            drop(current);
-            crate::services::account_catalog::request_refresh(state, false);
-            receipt.fact("subscription_refresh", "requested");
-            if let Ok(id) = receipt.step("queue_usage_scan", || {
-                state.backend.usage.queue_scan(state).ok_or(())
-            }) {
-                receipt.number("usage_scan_command_id", id);
-            }
-            receipt.check("runtime_catalog_matches_target", None);
-            crate::services::runtime::mark_active_pending(state, "EMP configuration changed");
-            Ok(())
+            let ConfigurationEdit { current, .. } = current;
+            after_commit(
+                state,
+                CommittedChange::Settings {
+                    before: &before,
+                    current,
+                    receipt,
+                },
+            )
+            .map_err(|_| ChangeError::Unavailable)
         },
     )
 }
@@ -140,60 +135,16 @@ pub(crate) fn context_preference(
                     .map(|actual| actual == show_context),
             );
             drop(current);
-            let refreshed = receipt.step("publish_catalog", || refresh_catalog(state));
-            crate::services::account_catalog::request_refresh(state, false);
-            receipt.fact("subscription_refresh", "requested");
-            refreshed.map_err(|_| ChangeError::Unavailable)?;
-            receipt.check("catalog_published", Some(true));
-            receipt.check("runtime_catalog_matches_target", None);
+            after_commit(state, CommittedChange::ContextPreference(receipt))
+                .map_err(|_| ChangeError::Unavailable)?;
             Ok(show_context)
         },
     )
 }
 
-fn changed_account_ids(before: &Value, after: &Value) -> BTreeSet<String> {
-    fn source_identities(config: &Value) -> BTreeMap<String, Vec<(String, bool, String)>> {
-        let mut accounts_by_id = BTreeMap::<String, Vec<(String, bool, String)>>::new();
-        for account in config
-            .get("accounts")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if let Some(id) = account.get("id").and_then(Value::as_str) {
-                accounts_by_id.entry(id.to_owned()).or_default().push((
-                    account
-                        .get("auth_file")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    account.get("enabled") != Some(&Value::Bool(false)),
-                    account
-                        .get("credential_status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown")
-                        .to_owned(),
-                ));
-            }
-        }
-        accounts_by_id
-    }
-
-    let before = source_identities(before);
-    let after = source_identities(after);
-    before
-        .keys()
-        .chain(after.keys())
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .filter(|id| before.get(id) != after.get(id))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::changed_account_ids;
+    use super::super::publication::changed_account_ids;
     use serde_json::json;
 
     #[test]

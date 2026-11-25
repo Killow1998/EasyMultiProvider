@@ -197,13 +197,7 @@ fn discover_inner(
         );
     };
     match receipt.step("commit_selection", || {
-        crate::services::catalog::select_models(
-            state,
-            provider_id,
-            &saved.models,
-            selected,
-            &provider,
-        )
+        super::selection::select_models(state, provider_id, &saved.models, selected, &provider)
     }) {
         Ok(selected) => {
             receipt.check("configuration_and_catalog_committed", Some(true));

@@ -176,8 +176,8 @@ async fn assert_catalog_refresh_queued(fixture: &Fixture) {
         let stop = stop.clone();
         move || {
             state
-                .catalog_refresh
-                .wait_for_work(|| stop.load(Ordering::Acquire))
+                .catalog
+                .wait_for_refresh_request(|| stop.load(Ordering::Acquire))
         }
     });
     let result = timeout(
@@ -187,11 +187,11 @@ async fn assert_catalog_refresh_queued(fixture: &Fixture) {
     .await;
     if result.is_err() {
         stop.store(true, Ordering::Release);
-        state.catalog_refresh.stop();
+        crate::services::catalog::stop_refresh_worker(&state);
         pending.await.unwrap();
     }
     assert_eq!(result.unwrap().unwrap(), Some(false));
-    state.catalog_refresh.finish_pass();
+    state.catalog.finish_refresh_pass();
 }
 
 #[test]

@@ -236,17 +236,6 @@ impl LoginStart {
     }
 }
 
-fn native_login_changed(state: &ServerState) {
-    crate::services::runtime::mark_active_pending(
-        state,
-        "Codex login changed; restart Codex Runtime",
-    );
-    state
-        .backend
-        .management_events
-        .publish(crate::services::management_events::Change::Integration);
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

@@ -6,21 +6,21 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-pub(crate) struct RefreshSource {
-    pub(crate) id: String,
-    pub(crate) path: PathBuf,
-    pub(crate) base: String,
-    pub(crate) headers: BTreeMap<String, String>,
-    pub(crate) owner: String,
+pub(super) struct RefreshSource {
+    pub(super) id: String,
+    pub(super) path: PathBuf,
+    pub(super) base: String,
+    pub(super) headers: BTreeMap<String, String>,
+    pub(super) owner: String,
     credential_fingerprint: String,
-    pub(crate) client_version: String,
-    pub(crate) generation: u64,
-    pub(crate) native: bool,
-    pub(crate) worker_eligible: bool,
+    pub(super) client_version: String,
+    pub(super) generation: u64,
+    pub(super) native: bool,
+    pub(super) worker_eligible: bool,
 }
 
 impl RefreshSource {
-    pub(crate) fn native(
+    pub(super) fn native(
         state: &ServerState,
         config: &Value,
         base: &str,
@@ -44,7 +44,7 @@ impl RefreshSource {
         })
     }
 
-    pub(crate) fn account(
+    pub(super) fn account(
         state: &ServerState,
         config: &Value,
         account: &Value,
@@ -72,7 +72,7 @@ impl RefreshSource {
         })
     }
 
-    pub(crate) fn fingerprint(&self) -> String {
+    pub(super) fn fingerprint(&self) -> String {
         format!(
             "{}\0{}\0{}\0{}\0{}\0{}",
             self.base,
@@ -98,20 +98,20 @@ fn credential_fingerprint(headers: &BTreeMap<String, String>) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PersistError {
+pub(super) enum PersistError {
     RuntimeChanged,
     SourceChanged,
     Internal,
 }
 
-pub(crate) enum FetchAndPersistOutcome {
+pub(super) enum FetchAndPersistOutcome {
     Persisted(Value),
     UpstreamError(emp_router::RouterError),
     PersistenceError(PersistError),
     Stopped,
 }
 
-pub(crate) fn fetch_and_persist(
+pub(super) fn fetch_and_persist(
     state: &ServerState,
     source: &RefreshSource,
 ) -> FetchAndPersistOutcome {
@@ -169,7 +169,7 @@ fn fetch_and_persist_inner(state: &ServerState, source: &RefreshSource) -> Fetch
     }
 }
 
-pub(crate) fn persist_fetched_catalog(
+pub(super) fn persist_fetched_catalog(
     state: &ServerState,
     source: &RefreshSource,
     mut catalog: Value,
@@ -217,7 +217,7 @@ pub(crate) fn persist_fetched_catalog(
             .map(emp_codex::native_catalog_owner);
         if current_path.as_ref() != Some(&source.path)
             || current_owner.as_deref() != Some(&source.owner)
-            || state.catalog_refresh.account_generation(&source.id) != source.generation
+            || state.catalog.refresh.account_generation(&source.id) != source.generation
         {
             return Err(PersistError::SourceChanged);
         }
@@ -253,7 +253,7 @@ pub(crate) fn persist_fetched_catalog(
     catalog["base_url"] = json!(source.base);
     let changed = previous != catalog;
     if changed {
-        state.catalog_refresh.mark_catalog_publication_pending();
+        state.catalog.refresh.mark_catalog_publication_pending();
         emp_state::filesystem::write_catalog_json(&path, &catalog)
             .map_err(|_| PersistError::Internal)?;
     }
@@ -307,7 +307,7 @@ fn retain_known_models(catalog: &mut Value, previous: &Value, source: &RefreshSo
     models.len() - fresh_count
 }
 
-pub(crate) fn catalog_headers(
+pub(in crate::services::catalog) fn catalog_headers(
     state: &ServerState,
     config: &Value,
     account: &Value,
@@ -318,13 +318,13 @@ pub(crate) fn catalog_headers(
         .team
         .replacement_subscription(state, accounts, account)
         .unwrap_or(account);
-    crate::services::accounts::account_catalog_headers(
+    crate::services::accounts::subscription_auth_headers(
         source.as_object()?,
         &state.backend.configuration.vault,
     )
 }
 
-pub(crate) fn managed_account_catalog_path(
+pub(super) fn managed_account_catalog_path(
     state: &ServerState,
     config: &Value,
     account: &Value,
@@ -343,13 +343,13 @@ pub(crate) fn managed_account_catalog_path(
     Some(expected.parent()?.join("models_cache.json"))
 }
 
-pub(crate) fn publish_pending_catalog(state: &ServerState) -> Result<(), ()> {
-    let path = crate::services::catalog::generated_catalog_path(state);
-    if !state.catalog_refresh.catalog_publication_pending() && path.is_file() {
+pub(super) fn publish_pending_catalog(state: &ServerState) -> Result<(), ()> {
+    let path = super::generated_catalog_path(state);
+    if !state.catalog.refresh.catalog_publication_pending() && path.is_file() {
         return Ok(());
     }
-    state.catalog_refresh.mark_catalog_publication_pending();
-    let result = crate::services::catalog::refresh_catalog(state).map(|_| ());
+    state.catalog.refresh.mark_catalog_publication_pending();
+    let result = super::refresh_catalog(state).map(|_| ());
     state.backend.diagnostics.journal.event(
         if result.is_ok() { "info" } else { "warning" },
         "catalog_publication",
@@ -359,49 +359,4 @@ pub(crate) fn publish_pending_catalog(state: &ServerState) -> Result<(), ()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn known_models_do_not_cross_accounts_or_override_explicit_upstream_updates() {
-        let source = RefreshSource {
-            id: "@native".into(),
-            path: PathBuf::from("native.json"),
-            base: "https://catalog.example/v1".into(),
-            headers: BTreeMap::new(),
-            owner: "owner-a".into(),
-            credential_fingerprint: String::new(),
-            client_version: "0.159.2".into(),
-            generation: 0,
-            native: true,
-            worker_eligible: false,
-        };
-        let mut previous = json!({"account_owner":"owner-a", "base_url":source.base,
-            "models":[{"slug":"known"}, {"slug":"disabled","supported_in_api":true}]});
-        for (owner, base, retain) in [
-            ("owner-a", "https://catalog.example/v1", true),
-            ("owner-b", "https://catalog.example/v1", false),
-            ("owner-a", "https://other.example/v1", false),
-        ] {
-            previous["account_owner"] = json!(owner);
-            previous["base_url"] = json!(base);
-            let mut fresh = json!({"models":[{"slug":"disabled", "supported_in_api":false}]});
-            retain_known_models(&mut fresh, &previous, &source);
-            assert_eq!(
-                fresh["models"].as_array().unwrap().len(),
-                if retain { 2 } else { 1 }
-            );
-            assert_eq!(fresh["models"][0]["supported_in_api"], false);
-            if retain {
-                assert_eq!(fresh["models"][1]["_emp_catalog_retained"], true);
-            }
-            let mut reappeared = json!({"models":[{"slug":"known", "visibility":"list"}]});
-            retain_known_models(&mut reappeared, &fresh, &source);
-            assert!(
-                reappeared["models"][0]
-                    .get("_emp_catalog_retained")
-                    .is_none()
-            );
-        }
-    }
-}
+mod tests;

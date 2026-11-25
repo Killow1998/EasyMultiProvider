@@ -1,25 +1,65 @@
 //! Refresh one subscription's entitlements, checking ownership before persistence.
+use super::{client_catalog, generated_catalog_path};
 use crate::app::ServerState;
+use emp_state::filesystem::write_catalog_json;
 use serde_json::{Value, json};
-use std::time::Instant;
+use std::{path::PathBuf, time::Instant};
 
 mod pipeline;
 mod refresh_state;
 mod worker;
 
-pub(crate) use pipeline::catalog_headers;
+pub(super) use pipeline::catalog_headers;
 use pipeline::{
     FetchAndPersistOutcome, PersistError, RefreshSource, fetch_and_persist, publish_pending_catalog,
 };
-pub(crate) use refresh_state::CatalogRefreshState;
-pub(crate) use worker::{request_refresh, run as run_refresh_worker};
+use refresh_state::CatalogRefreshState;
+pub(crate) use worker::run_refresh_worker;
+
+#[derive(Default)]
+pub(crate) struct CatalogState {
+    refresh: CatalogRefreshState,
+}
+
+pub(crate) fn request_refresh(state: &ServerState, force: bool) {
+    state.catalog.refresh.request(force);
+}
+
+pub(crate) fn account_source_changed(state: &ServerState, id: &str) {
+    state.catalog.refresh.account_changed(id);
+}
+
+pub(crate) fn stop_refresh_worker(state: &ServerState) {
+    state.catalog.refresh.stop();
+}
+
+pub(crate) fn refresh_catalog(state: &ServerState) -> Result<(PathBuf, usize), ()> {
+    let config = state.backend.configuration.read().map_err(|_| ())?;
+    state.catalog.refresh.mark_catalog_publication_pending();
+    let catalog = client_catalog(state, &config);
+    let path = generated_catalog_path(state);
+    let previous = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let changed = previous.as_ref() != Some(&catalog);
+    if changed {
+        write_catalog_json(&path, &catalog).map_err(|_| ())?;
+    }
+    state.catalog.refresh.catalog_publication_succeeded();
+    drop(config);
+    if changed {
+        crate::services::runtime::mark_active_pending(state, "EMP model catalog changed");
+    }
+    Ok((path, catalog["models"].as_array().map_or(0, Vec::len)))
+}
+
 #[derive(Debug)]
 pub(crate) enum CatalogRefreshError {
     Invalid(&'static str),
     Internal,
     Upstream(emp_router::RouterError),
 }
-pub(crate) fn refresh(
+pub(crate) fn refresh_subscription(
     request_id: Option<&str>,
     state: &ServerState,
     id: &str,
@@ -32,7 +72,8 @@ pub(crate) fn refresh(
             receipt.subject(id);
             receipt.check("runtime_catalog_matches_target", None);
             let _poll = state
-                .catalog_refresh
+                .catalog
+                .refresh
                 .poll_gate()
                 .ok_or(CatalogRefreshError::Internal)?;
             let (config, generation) = {
@@ -44,7 +85,7 @@ pub(crate) fn refresh(
                 let generation = if id == "@native" {
                     0
                 } else {
-                    state.catalog_refresh.account_generation(id)
+                    state.catalog.refresh.account_generation(id)
                 };
                 (current.clone(), generation)
             };
@@ -104,7 +145,7 @@ pub(crate) fn refresh(
                 }
             })?;
             receipt.check("account_catalog_persisted", Some(true));
-            state.catalog_refresh.mark_fresh(
+            state.catalog.refresh.mark_fresh(
                 &source.id,
                 &source.fingerprint(),
                 source.generation,
@@ -122,4 +163,4 @@ pub(crate) fn refresh(
 }
 
 #[cfg(all(test, unix))]
-mod tests;
+pub(super) mod tests;

@@ -40,7 +40,7 @@ fn catalog_reads_preserve_visibility_etag_and_auth() {
         let rich_path = "/v1/models?client_version=&client_version=0.130.0";
         #[cfg(unix)]
         {
-            let refresh = &server.state.catalog_refresh;
+            let refresh = &server.state.catalog;
             assert!(refresh.wait_until_idle(Duration::ZERO));
             let rich = request(port, "GET", rich_path, &[], b"");
             assert_status(&exchange_wire(endpoint, &rich, false).await, 200);

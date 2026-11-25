@@ -10,6 +10,7 @@ mod subscriptions;
 mod transport;
 
 use crate::app::ServerState;
+use crate::services::configuration::{CommittedChange, after_commit};
 use emp_modules::{
     Module,
     team::{BudgetStatuses, IdentityKey, IdentityPlan, Operation, ReportPlan, Request},
@@ -338,7 +339,7 @@ impl TeamState {
             session.identity = identity;
             self.save_store(state, store)?;
             if membership_changed {
-                super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
+                after_commit(state, CommittedChange::Team).map_err(|_| Failure::unavailable())?;
             }
         }
         Ok(plan)

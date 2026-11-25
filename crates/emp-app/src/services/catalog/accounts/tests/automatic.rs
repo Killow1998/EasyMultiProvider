@@ -198,7 +198,7 @@ fn add_account(server: &ServerHandle, id: &str, prefix: &str, token: &str) -> Pa
             &json!({"tokens":{"access_token":token,"account_id":id}}),
         )
         .expect("write account credentials");
-    server.state.catalog_refresh.account_changed(id);
+    server.state.catalog.refresh.account_changed(id);
     auth_path
 }
 
@@ -279,13 +279,13 @@ fn partial_native_catalog_refresh_keeps_a_known_model_routable() {
     )
     .unwrap();
     for _ in 0..2 {
-        crate::services::account_catalog::request_refresh(&server.state, true);
+        crate::services::catalog::request_refresh(&server.state, true);
         let request = upstream.take_request();
         assert!(request.starts_with("GET /v1/models?client_version=0.159.2"));
         assert!(
             server
                 .state
-                .catalog_refresh
+                .catalog
                 .wait_until_idle(std::time::Duration::from_secs(10))
         );
         let catalog = http_json(&http_request(
@@ -350,7 +350,7 @@ fn automatic_http_refresh_publishes_capabilities_etag_and_isolated_account_catal
         .expect("temporary directory");
     let (server, first_auth) = start_server(&directory, &upstream.address, "0.159.2");
     let second_auth = add_account(&server, "second", "second", "second-secret");
-    crate::services::account_catalog::request_refresh(&server.state, false);
+    crate::services::catalog::request_refresh(&server.state, false);
 
     let mut requests = [upstream.take_request(), upstream.take_request()];
     requests.sort();
@@ -372,7 +372,7 @@ fn automatic_http_refresh_publishes_capabilities_etag_and_isolated_account_catal
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
 
@@ -421,7 +421,7 @@ fn automatic_http_refresh_publishes_capabilities_etag_and_isolated_account_catal
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
     assert!(
@@ -434,7 +434,7 @@ fn automatic_http_refresh_publishes_capabilities_etag_and_isolated_account_catal
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
     assert!(
@@ -444,13 +444,13 @@ fn automatic_http_refresh_publishes_capabilities_etag_and_isolated_account_catal
 
     let merged_path = crate::services::catalog::generated_catalog_path(&server.state);
     let merged_inode = std::fs::metadata(&merged_path).unwrap().ino();
-    crate::services::account_catalog::request_refresh(&server.state, true);
+    crate::services::catalog::request_refresh(&server.state, true);
     let _ = upstream.take_request();
     let _ = upstream.take_request();
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
     assert_eq!(
@@ -488,7 +488,7 @@ fn automatic_http_refresh_publishes_capabilities_etag_and_isolated_account_catal
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
     server.shutdown().expect("shutdown");
@@ -520,13 +520,13 @@ fn credential_rotation_with_same_owner_invalidates_cached_refresh() {
         )
         .expect("write first test credential");
 
-    crate::services::account_catalog::request_refresh(&server.state, false);
+    crate::services::catalog::request_refresh(&server.state, false);
     let first_request = upstream.take_request();
     assert!(first_request.contains(&format!("Bearer {first_token}")));
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
     let cache_path = auth_path.parent().unwrap().join("models_cache.json");
@@ -543,13 +543,13 @@ fn credential_rotation_with_same_owner_invalidates_cached_refresh() {
             &json!({"tokens":{"access_token":rotated_token,"account_id":"selected-owner"}}),
         )
         .expect("rotate credential outside config save");
-    crate::services::account_catalog::request_refresh(&server.state, false);
+    crate::services::catalog::request_refresh(&server.state, false);
     let rotated_request = upstream.take_request();
     assert!(rotated_request.contains(&format!("Bearer {rotated_token}")));
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
     let after: Value = serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
@@ -568,13 +568,13 @@ fn automatic_refresh_uses_the_newly_observed_selected_runtime_version() {
         .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let (server, _auth_path) = start_server(&directory, &upstream.address, "0.158.6");
-    crate::services::account_catalog::request_refresh(&server.state, false);
+    crate::services::catalog::request_refresh(&server.state, false);
     let first_request = upstream.take_request();
     assert!(first_request.starts_with("GET /v1/models?client_version=0.158.6 HTTP/1.1\r\n"));
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
 
@@ -602,7 +602,7 @@ fn automatic_refresh_uses_the_newly_observed_selected_runtime_version() {
     );
     assert_eq!(inventory["helper_source"], "configured");
 
-    crate::services::account_catalog::request_refresh(&server.state, false);
+    crate::services::catalog::request_refresh(&server.state, false);
     let second_request = upstream.take_request();
     let lowered = second_request.to_ascii_lowercase();
     assert!(second_request.starts_with("GET /v1/models?client_version=0.159.2 HTTP/1.1\r\n"));
@@ -610,7 +610,7 @@ fn automatic_refresh_uses_the_newly_observed_selected_runtime_version() {
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
     server.shutdown().expect("shutdown");
@@ -624,16 +624,16 @@ fn overlapping_refresh_requests_coalesce_and_failed_refresh_retains_last_good_ca
         .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let (server, auth_path) = start_server(&directory, &upstream.address, "0.159.2");
-    crate::services::account_catalog::request_refresh(&server.state, false);
+    crate::services::catalog::request_refresh(&server.state, false);
     let first_request = upstream.take_request();
     assert!(first_request.contains("Bearer selected-secret"));
-    crate::services::account_catalog::request_refresh(&server.state, true);
-    crate::services::account_catalog::request_refresh(&server.state, true);
+    crate::services::catalog::request_refresh(&server.state, true);
+    crate::services::catalog::request_refresh(&server.state, true);
     upstream.release_first.as_ref().unwrap().send(()).unwrap();
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
     assert!(
@@ -644,13 +644,13 @@ fn overlapping_refresh_requests_coalesce_and_failed_refresh_retains_last_good_ca
     let cache_path = auth_path.parent().unwrap().join("models_cache.json");
     let last_good = std::fs::read(&cache_path).expect("last good account cache");
     upstream.set_status(503);
-    crate::services::account_catalog::request_refresh(&server.state, true);
+    crate::services::catalog::request_refresh(&server.state, true);
     let failed_request = upstream.take_request();
     assert!(failed_request.contains("Bearer selected-secret"));
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
     assert_eq!(std::fs::read(&cache_path).unwrap(), last_good);
@@ -679,7 +679,7 @@ fn delete_and_reimport_during_refresh_rejects_the_stale_response() {
         .tempdir_in(emp_test_support::fixture_root().expect("resolve test fixture root"))
         .expect("temporary directory");
     let (server, auth_path) = start_server(&directory, &upstream.address, "0.159.2");
-    crate::services::account_catalog::request_refresh(&server.state, false);
+    crate::services::catalog::request_refresh(&server.state, false);
     let first_request = upstream.take_request();
     assert!(first_request.contains("Bearer selected-secret"));
     let deleted = http_request(&server, "DELETE", "/api/accounts/demo", &[], true);
@@ -698,7 +698,7 @@ fn delete_and_reimport_during_refresh_rejects_the_stale_response() {
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(10))
     );
 

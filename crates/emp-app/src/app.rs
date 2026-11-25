@@ -28,7 +28,7 @@ use tokio::runtime::Runtime;
 
 pub(crate) struct ServerState {
     pub(crate) lifecycle: Arc<crate::server::ServerControl>,
-    pub(crate) catalog_refresh: crate::services::account_catalog::CatalogRefreshState,
+    pub(crate) catalog: crate::services::catalog::CatalogState,
     pub(crate) sessions: Arc<SessionStore>,
     pub(crate) bootstrap: BootstrapToken,
     pub(crate) reopen_bootstrap: Mutex<Option<BootstrapToken>>,

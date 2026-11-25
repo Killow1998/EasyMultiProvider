@@ -2,7 +2,10 @@ use super::{
     Failure, Result, Session, TeamState, plan_identity,
     transport::{plan_endpoint, request, send},
 };
-use crate::{app::ServerState, services::catalog};
+use crate::{
+    app::ServerState,
+    services::configuration::{CommittedChange, after_commit},
+};
 use emp_modules::{Module, team::Operation, workspace::NATIVE_SHARE};
 use serde_json::{Value, json};
 
@@ -143,7 +146,7 @@ impl TeamState {
                 store.recovery_required = false;
                 self.save_store(state, store)?;
                 self.events.notify_one();
-                catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
+                after_commit(state, CommittedChange::Team).map_err(|_| Failure::unavailable())?;
                 return self.local_status();
             }
             command => command,

@@ -1,4 +1,4 @@
-use super::refresh;
+use super::refresh_subscription;
 use crate::lifecycle::ServerHandle;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -121,7 +121,7 @@ fn start_server(
     assert!(
         server
             .state
-            .catalog_refresh
+            .catalog
             .wait_until_idle(std::time::Duration::from_secs(5))
     );
     assert!(
@@ -160,7 +160,8 @@ fn model_refresh_uses_each_selected_runtime_version_for_query_and_user_agent() {
         assert_eq!(inventory_snapshot["helper_source"], "configured");
         assert_eq!(observed_version.as_deref(), Some(version));
 
-        let result = refresh(None, &server.state, "demo").expect("refresh subscription catalog");
+        let result = refresh_subscription(None, &server.state, "demo")
+            .expect("refresh subscription catalog");
         assert!(result["models"].is_array());
         let request = catalog.requests.recv().expect("catalog request");
         assert!(
@@ -213,7 +214,7 @@ fn model_refresh_rechecks_account_ownership_after_the_upstream_request() {
         Some("0.159.2")
     );
     let state = std::sync::Arc::clone(&server.state);
-    let refresh_worker = thread::spawn(move || refresh(None, &state, "demo"));
+    let refresh_worker = thread::spawn(move || refresh_subscription(None, &state, "demo"));
     let request = catalog
         .requests
         .recv_timeout(std::time::Duration::from_secs(5))
@@ -257,7 +258,7 @@ fn missing_engine_version_preserves_cached_catalog_and_refuses_refresh() {
     let cache = auth_path.parent().unwrap().join("models_cache.json");
     let cached = br#"{"models":[{"slug":"preserved"}]}"#;
     std::fs::write(&cache, cached).unwrap();
-    let response = refresh(None, &server.state, "demo");
+    let response = refresh_subscription(None, &server.state, "demo");
     assert!(matches!(
         response.expect_err("no synthetic client version"),
         CatalogRefreshError::Invalid(
@@ -268,3 +269,17 @@ fn missing_engine_version_preserves_cached_catalog_and_refuses_refresh() {
     server.shutdown().unwrap();
 }
 use super::CatalogRefreshError;
+
+pub(crate) fn assert_subscription_refresh_receipt(records: &[serde_json::Value]) {
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| {
+                record["event"] == "operation_finished"
+                    && record["fields"]["operation"] == "subscription_catalog_refresh"
+                    && record["fields"]["checks"]["account_catalog_persisted"] == true
+            })
+            .count(),
+        1,
+    );
+}

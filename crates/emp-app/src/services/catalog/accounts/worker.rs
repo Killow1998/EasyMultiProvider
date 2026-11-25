@@ -8,25 +8,22 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-pub(crate) fn request_refresh(state: &ServerState, force: bool) {
-    state.catalog_refresh.request(force);
-}
-
-pub(crate) fn run(state: &ServerState) {
+pub(crate) fn run_refresh_worker(state: &ServerState) {
     loop {
         let Some(force) = state
-            .catalog_refresh
+            .catalog
+            .refresh
             .wait_for_work(|| state.lifecycle.shutdown.load(Ordering::Acquire))
         else {
             return;
         };
         refresh_due_sources(state, force);
-        state.catalog_refresh.finish_pass();
+        state.catalog.refresh.finish_pass();
     }
 }
 
 fn refresh_due_sources(state: &ServerState, force: bool) {
-    let Some(_poll) = state.catalog_refresh.poll_gate() else {
+    let Some(_poll) = state.catalog.refresh.poll_gate() else {
         return;
     };
     let sources = refresh_sources(state);
@@ -39,7 +36,7 @@ fn refresh_due_sources(state: &ServerState, force: bool) {
             return;
         }
         let fingerprint = source.fingerprint();
-        if !state.catalog_refresh.due(
+        if !state.catalog.refresh.due(
             &source.id,
             &fingerprint,
             source.generation,
@@ -51,11 +48,12 @@ fn refresh_due_sources(state: &ServerState, force: bool) {
         match fetch_and_persist(state, &source) {
             FetchAndPersistOutcome::Persisted(_) => {
                 state
-                    .catalog_refresh
+                    .catalog
+                    .refresh
                     .completed(&source.id, true, false, Instant::now());
             }
             FetchAndPersistOutcome::UpstreamError(error) => {
-                state.catalog_refresh.completed(
+                state.catalog.refresh.completed(
                     &source.id,
                     false,
                     matches!(error.status(), 401 | 403),
@@ -68,16 +66,17 @@ fn refresh_due_sources(state: &ServerState, force: bool) {
             ) => {}
             FetchAndPersistOutcome::PersistenceError(PersistError::Internal) => {
                 state
-                    .catalog_refresh
+                    .catalog
+                    .refresh
                     .completed(&source.id, false, false, Instant::now());
             }
         }
     }
-    state.catalog_refresh.retain_sources(&present);
+    state.catalog.refresh.retain_sources(&present);
 
-    let generated_catalog = crate::services::catalog::generated_catalog_path(state);
+    let generated_catalog = super::generated_catalog_path(state);
     if !generated_catalog.is_file() {
-        state.catalog_refresh.mark_catalog_publication_pending();
+        state.catalog.refresh.mark_catalog_publication_pending();
     }
     let _ = publish_pending_catalog(state);
 }
@@ -92,7 +91,7 @@ fn refresh_sources(state: &ServerState) -> Vec<RefreshSource> {
                 .into_iter()
                 .flatten()
                 .filter_map(|account| account.get("id")?.as_str())
-                .map(|id| (id.to_owned(), state.catalog_refresh.account_generation(id)))
+                .map(|id| (id.to_owned(), state.catalog.refresh.account_generation(id)))
                 .collect::<BTreeMap<_, _>>();
             (config, generations)
         }

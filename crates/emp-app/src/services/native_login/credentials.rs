@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::configuration::{CommittedChange, after_commit};
 
 pub(super) enum Source {
     ApiKey(String),
@@ -66,7 +67,7 @@ pub(super) fn install(
         .relation
         .eq("applied")
         || crate::services::integration::enable::apply(state).is_ok_and(|result| result.ok());
-    native_login_changed(state);
+    let _ = after_commit(state, CommittedChange::NativeLogin);
     Ok(
         json!({"status":"completed","restart_required":true,"integration_updated":integration_updated}),
     )
@@ -101,7 +102,7 @@ pub(super) fn use_local_key(
     let integration_updated = !active
         || (manager.restore().is_ok_and(|result| result.ok())
             && crate::services::integration::enable::apply(state).is_ok_and(|result| result.ok()));
-    native_login_changed(state);
+    let _ = after_commit(state, CommittedChange::NativeLogin);
     Ok(
         json!({"status":"completed", "restart_required":true, "integration_updated":integration_updated}),
     )

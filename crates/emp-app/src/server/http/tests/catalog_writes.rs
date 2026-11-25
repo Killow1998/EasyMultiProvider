@@ -643,8 +643,8 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
         let stopped = Arc::clone(&stopped);
         tokio::task::spawn_blocking(move || {
             state
-                .catalog_refresh
-                .wait_for_work(|| stopped.load(Ordering::Acquire))
+                .catalog
+                .wait_for_refresh_request(|| stopped.load(Ordering::Acquire))
         })
     };
     let found = timeout(
@@ -654,11 +654,11 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
     .await;
     if found.is_err() {
         stopped.store(true, Ordering::Release);
-        state.catalog_refresh.stop();
+        crate::services::catalog::stop_refresh_worker(state);
         pending.await.unwrap();
     }
     assert_eq!(found.unwrap().unwrap(), Some(false));
-    state.catalog_refresh.finish_pass();
+    state.catalog.finish_refresh_pass();
 }
 
 #[test]

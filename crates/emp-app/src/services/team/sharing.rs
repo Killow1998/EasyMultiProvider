@@ -41,7 +41,7 @@ impl TeamState {
         session.identity = identity;
         if !permissions.sync_allowed {
             self.save_store(state, store)?;
-            super::super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
+            after_commit(state, CommittedChange::Team).map_err(|_| Failure::unavailable())?;
             return Err(Failure(403, "workspace_permission_required".into()));
         }
         let snapshot = request(
@@ -188,7 +188,7 @@ impl TeamState {
                 .map_err(|_| Failure::unavailable())?;
             *self.store.lock().map_err(|_| Failure::unavailable())? = Some(store);
             drop(config);
-            super::super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
+            after_commit(state, CommittedChange::Team).map_err(|_| Failure::unavailable())?;
         }
         Ok(json!({
             "synced": changed,
@@ -219,7 +219,7 @@ impl TeamState {
         *self.store.lock().map_err(|_| Failure::unavailable())? = Some(store);
         drop(config);
         self.discovery.stop();
-        let _ = super::super::catalog::refresh_catalog(state);
+        let _ = after_commit(state, CommittedChange::Team);
         Ok(())
     }
 }

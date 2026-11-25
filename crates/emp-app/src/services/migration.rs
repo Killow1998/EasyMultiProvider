@@ -1,4 +1,5 @@
 use crate::app::ServerState;
+use crate::services::configuration::{CommittedChange, after_commit};
 use crate::services::observation::operation::{OperationObservation, observe};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -219,11 +220,9 @@ fn finish_import(
     receipt: &mut OperationObservation,
 ) -> Result<Value, MigrationError> {
     receipt.check("bundle_committed", Some(true));
-    let (path, _) = receipt.step("publish_catalog", || {
-        crate::services::catalog::refresh_catalog(state).map_err(|_| MigrationError::Internal)
-    })?;
-    receipt.check("catalog_published", Some(true));
-    receipt.check("runtime_catalog_matches_target", None);
+    after_commit(state, CommittedChange::Migration(receipt))
+        .map_err(|_| MigrationError::Internal)?;
+    let path = crate::services::catalog::generated_catalog_path(state);
     let mut result = serde_json::json!({"status":"ok","accounts":summary.accounts,"providers":summary.providers,"models":summary.models,"catalog_path":path.to_string_lossy()});
     if summary.renamed_accounts > 0 {
         result["renamed_accounts"] = summary.renamed_accounts.into();

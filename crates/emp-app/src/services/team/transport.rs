@@ -1,5 +1,6 @@
 use super::{Failure, Result};
 use crate::app::ServerState;
+use crate::services::configuration::{CommittedChange, after_commit};
 use emp_modules::{
     Command, Module,
     team::{Endpoint, MAX_BACKUP_WIRE_BYTES, Method, Operation, Request},
@@ -156,7 +157,7 @@ pub(super) fn send(
                 team.write(&state.backend.configuration.vault, store)
                     .map_err(|_| Failure::unavailable())?;
                 drop(locked);
-                let _ = super::super::catalog::refresh_catalog(state);
+                let _ = after_commit(state, CommittedChange::Team);
             }
         }
         return Err(Failure(status, code.into()));

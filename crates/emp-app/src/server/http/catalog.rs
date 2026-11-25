@@ -15,10 +15,7 @@ use crate::{
     http::request::percent_decode,
     server::run_blocking,
     services::{
-        catalog::{
-            discovery::{self, DiscoveryError, ProviderDiscovery},
-            refresh_for_management,
-        },
+        catalog::{DiscoveryError, ProviderDiscovery, discover, refresh_for_management},
         configuration::{ChangeError, settings},
         provider_balance,
     },
@@ -179,10 +176,9 @@ enum CatalogWrite {
 impl CatalogWrite {
     fn execute(self, state: &ServerState, request_id: Option<&str>) -> JsonReply {
         match self {
-            Self::Discover(operation) => discovery_reply(
-                discovery::discover(request_id, state, operation),
-                router_error_reply,
-            ),
+            Self::Discover(operation) => {
+                discovery_reply(discover(request_id, state, operation), router_error_reply)
+            }
             Self::DecisionModels(operation) => discovery_reply(
                 operation.and_then(|operation| decisions::discover(state, operation)),
                 router_error_reply,

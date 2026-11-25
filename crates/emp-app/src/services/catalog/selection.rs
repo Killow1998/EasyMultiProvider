@@ -7,15 +7,15 @@ use emp_state::filesystem::write_catalog_json;
 use serde_json::Value;
 use std::path::PathBuf;
 
-pub(crate) struct ModelSelection {
-    pub(crate) available: usize,
-    pub(crate) added: usize,
-    pub(crate) hidden: usize,
-    pub(crate) catalog_path: PathBuf,
-    pub(crate) model_count: usize,
+pub(super) struct ModelSelection {
+    pub(super) available: usize,
+    pub(super) added: usize,
+    pub(super) hidden: usize,
+    pub(super) catalog_path: PathBuf,
+    pub(super) model_count: usize,
 }
 
-pub(crate) fn select_models(
+pub(super) fn select_models(
     state: &ServerState,
     provider_id: &str,
     discovered: &[Value],

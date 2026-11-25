@@ -376,7 +376,7 @@ impl ServerHandle {
         let state = Arc::new(ServerState {
             test_sideband_address: Default::default(),
             lifecycle,
-            catalog_refresh: crate::services::account_catalog::CatalogRefreshState::default(),
+            catalog: crate::services::catalog::CatalogState::default(),
             sessions,
             bootstrap: BootstrapToken {
                 token: URL_SAFE_NO_PAD.encode(random),
@@ -409,9 +409,9 @@ impl ServerHandle {
     fn spawn_workers(&mut self, enable_catalog_refresh_worker: bool) -> Result<(), AppError> {
         if enable_catalog_refresh_worker {
             self.spawn_worker("emp-catalog-refresh", |state| {
-                crate::services::account_catalog::run_refresh_worker(&state);
+                crate::services::catalog::run_refresh_worker(&state);
             })?;
-            crate::services::account_catalog::request_refresh(&self.state, false);
+            crate::services::catalog::request_refresh(&self.state, false);
         }
         self.spawn_worker("emp-team-usage", |state| {
             crate::services::team::TeamState::run(&state);

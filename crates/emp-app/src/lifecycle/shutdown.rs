@@ -135,7 +135,7 @@ impl ServerHandle {
 
     pub(super) fn signal_worker_stop(&self, workers: WorkerStop) {
         if matches!(workers, WorkerStop::Catalog | WorkerStop::All) {
-            self.state.catalog_refresh.stop();
+            crate::services::catalog::stop_refresh_worker(&self.state);
         }
         if matches!(workers, WorkerStop::Services | WorkerStop::All) {
             self.state.backend.usage.stop();

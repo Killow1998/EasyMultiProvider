@@ -284,14 +284,7 @@ fn account_writes_persist_configuration_and_credentials() {
         assert!(timeout(Duration::ZERO, upstream.accept()).await.is_err());
         assert_eq!(models, fixture.read(ACCOUNT_READ).await);
         assert_eq!(commits.get(), 1, "account catalog commits");
-        assert_eq!(
-            fixture.flushed_journal().await.iter().filter(|record| {
-                record["event"] == "operation_finished"
-                    && record["fields"]["operation"] == "subscription_catalog_refresh"
-                    && record["fields"]["checks"]["account_catalog_persisted"] == true
-            }).count(),
-            1,
-        );
+        crate::services::catalog::assert_subscription_refresh_receipt(&fixture.flushed_journal().await);
         assert_eq!(models["models"][0]["id"], "persisted-model");
         let config = json!({
             "codex_base_url": format!("http://{}/v1", upstream.local_addr().unwrap()),

@@ -1,7 +1,7 @@
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::server::http::error::HttpReply;
-use crate::services::catalog::discovery::DiscoveryError;
+use crate::services::catalog::DiscoveryError;
 use emp_modules::decision::{
     self, ContextHeader, DiscoveryPlan, ModelChoice, ModelInput, PlanError, PlanReply, Protocol,
     Service, ServiceAccess,
