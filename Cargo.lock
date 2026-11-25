@@ -858,6 +858,7 @@ dependencies = [
  "emp-codex",
  "emp-context",
  "emp-domain",
+ "emp-files",
  "emp-mod-aggregate",
  "emp-mod-decision",
  "emp-mod-gateway",
@@ -911,6 +912,7 @@ version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "emp-context",
+ "emp-files",
  "emp-state",
  "emp-storage",
  "emp-test-support",

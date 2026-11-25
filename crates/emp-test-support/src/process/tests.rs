@@ -1,9 +1,11 @@
 use super::*;
-use crate::{TestBudget, isolated, test_timeout};
+use crate::{TestBudget, test_timeout};
 use std::{
     io::{Read, Write},
     net::TcpStream,
 };
+
+pub(crate) mod isolated;
 
 const CASE: &str = "EMP_TEST_OWNED_CHILD_CASE";
 pub(super) const ADDRESS: &str = "EMP_TEST_OWNED_CHILD_ADDRESS";

@@ -11,7 +11,6 @@ mod prose;
 mod test_deadlines;
 mod test_drop;
 mod test_fixture_root;
-mod test_flock_isolated;
 mod test_scope;
 mod test_thread_observations;
 mod workflows;
@@ -53,7 +52,6 @@ const RULES: &[&str] = &[
     "test-deadlines",
     "test-drop",
     "test-fixture-root",
-    "test-flock-isolated",
     "test-socket-timeouts",
     "test-thread-observations",
     "tracked-sources",
@@ -142,7 +140,6 @@ fn check_files(
             single_http_driver(path, source, errors);
             production_sockets::check(path, source, scopes, errors)?;
             test_drop::check(path, source, scopes, errors)?;
-            test_flock_isolated::check(path, source, scopes, errors)?;
             shared_test_module(path, source, errors)?;
             comments::check_source(path, source, scopes, errors)?;
         }

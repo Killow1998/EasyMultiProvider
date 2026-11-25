@@ -30,7 +30,7 @@ fn idle_restore_distinguishes_unchecked_history_from_confirmed_pending_checkpoin
     fs::create_dir_all(&directory).unwrap();
     fs::write(directory.join(COORDINATION_LOCK), []).unwrap();
     let writer = File::create(directory.join(format!("{busy_id}.lock"))).unwrap();
-    writer.lock().unwrap();
+    let writer = FileLock::acquire(writer).unwrap();
 
     let (lock, report) = repair_idle_before_native_restore(&fixture.home).unwrap();
     let report = serde_json::to_value(report).unwrap();
@@ -55,19 +55,6 @@ fn idle_restore_distinguishes_unchecked_history_from_confirmed_pending_checkpoin
 
 #[test]
 fn stale_paths_find_existing_history_and_a_later_restore_discovers_returned_history() {
-    const CASE: &str = "EMP_TEST_REPAIR_STALE_PATHS";
-    if std::env::var_os(CASE).is_none() {
-        let mut command = isolated::command(
-            "sessions::repair::tests::restore_delay::stale_paths_find_existing_history_and_a_later_restore_discovers_returned_history",
-        );
-        command.env(CASE, "1");
-        isolated::run(
-            command,
-            Deadline::after(test_timeout(Duration::from_secs(5))),
-        );
-        return;
-    }
-
     let fixture = fixture(false, true, false);
     let missing = fixture.home.join("sessions/removed.jsonl");
     Connection::open(fixture.home.join("state_1.sqlite"))
@@ -111,7 +98,6 @@ fn stale_paths_find_existing_history_and_a_later_restore_discovers_returned_hist
                     .contains("Portable EMP summary: keep the task plan")
             })
     );
-    isolated::report(Ok(()));
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! Real server contract tests.
 mod migration_preview;
 use super::*;
+use emp_files::lock::FileLock;
 #[cfg(unix)]
 use std::sync::Mutex;
 
@@ -261,7 +262,7 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     std::fs::create_dir_all(&locks).unwrap();
     let writer =
         std::fs::File::create(locks.join("11111111-1111-4111-8111-111111111111.lock")).unwrap();
-    writer.lock().unwrap();
+    let writer = FileLock::acquire(writer).unwrap();
     // An idle native connection must drain without requiring the user to
     // close the entire desktop application or restart the computer.
     let mut idle = std::net::TcpStream::connect(server.local_addr()).unwrap();

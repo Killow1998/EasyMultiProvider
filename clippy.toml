@@ -1,3 +1,7 @@
 disallowed-methods = [
     { path = "std::thread::sleep", reason = "用条件等待（测试用 tests/support/modules.rs 的 eventually）或真实的事件通知替代，不要用空 channel 的 recv_timeout 伪装；确实需要固定间隔时用 #[expect(clippy::disallowed_methods, reason = \"…\")] 写明原因" },
+    { path = "std::fs::File::lock", reason = "用 emp_files 的锁守卫，Drop 时显式解锁" },
+    { path = "std::fs::File::try_lock", reason = "用 emp_files 的锁守卫，Drop 时显式解锁" },
+    { path = "std::fs::File::lock_shared", reason = "用 emp_files 的锁守卫，Drop 时显式解锁" },
+    { path = "std::fs::File::try_lock_shared", reason = "用 emp_files 的锁守卫，Drop 时显式解锁" },
 ]

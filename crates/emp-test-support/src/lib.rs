@@ -17,7 +17,7 @@ mod process;
 #[cfg(feature = "websocket")]
 pub mod websocket;
 pub use observation::{Observation, ObservationResult, Probe};
-pub use process::{ChildError, OwnedChild, isolated};
+pub use process::{ChildError, OwnedChild};
 
 pub fn join_check<T>(worker: thread::JoinHandle<T>, label: &str) -> Option<T> {
     match worker.join() {
@@ -273,6 +273,7 @@ pub fn write_executable(path: &std::path::Path, script: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::tests::isolated;
     use std::net::TcpListener;
 
     #[test]

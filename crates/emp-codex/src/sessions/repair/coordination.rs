@@ -5,8 +5,9 @@ use super::paths::RolloutPaths;
 use super::replay::load_rollout_header;
 use super::transaction::RepairManifest;
 use crate::sessions::read::{MAX_LINEAGE_SEGMENTS as MAX_LINEAGE_DEPTH, uuid_shape};
+use emp_files::lock::FileLock;
 use std::collections::BTreeSet;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 
 pub(super) const LOCK_DIRECTORY: &str = "thread-writer-locks";
@@ -15,13 +16,13 @@ pub(super) const COORDINATION_LOCK: &str = ".coordination.lock";
 /// Holds Codex's writer coordination lock through configuration restoration.
 #[derive(Debug)]
 pub struct HistoryRepairLock {
-    pub(super) _coordination: Option<File>,
+    pub(super) _coordination: Option<FileLock>,
 }
 
 pub(super) fn acquire_coordination_lock(
     home: &Path,
     nonblocking: bool,
-) -> Result<File, HistoryRepairError> {
+) -> Result<FileLock, HistoryRepairError> {
     let directory = home.join(LOCK_DIRECTORY);
     match fs::symlink_metadata(&directory) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -49,17 +50,16 @@ pub(super) fn acquire_coordination_lock(
         .open(path)
         .map_err(|_| HistoryRepairError::new("writer_coordination_lock_unavailable"))?;
     if nonblocking {
-        file.try_lock().map_err(|error| {
+        FileLock::try_acquire(file).map_err(|error| {
             HistoryRepairError::new(match error {
-                std::fs::TryLockError::WouldBlock => "active_codex_writer",
-                std::fs::TryLockError::Error(_) => "writer_coordination_lock_unavailable",
+                TryLockError::WouldBlock => "active_codex_writer",
+                TryLockError::Error(_) => "writer_coordination_lock_unavailable",
             })
-        })?;
+        })
     } else {
-        file.lock()
-            .map_err(|_| HistoryRepairError::new("writer_coordination_lock_unavailable"))?;
+        FileLock::acquire(file)
+            .map_err(|_| HistoryRepairError::new("writer_coordination_lock_unavailable"))
     }
-    Ok(file)
 }
 
 /// Probe writer locks without waiting while holding the coordination lock.
@@ -115,12 +115,12 @@ pub(super) fn probe_codex_writers(
             .write(true)
             .open(path)
             .map_err(|_| HistoryRepairError::new("writer_lock_unavailable"))?;
-        match file.try_lock() {
-            Ok(()) => drop(file),
-            Err(std::fs::TryLockError::WouldBlock) => {
+        match FileLock::try_acquire(file) {
+            Ok(lock) => drop(lock),
+            Err(TryLockError::WouldBlock) => {
                 active.insert(thread_id.clone());
             }
-            Err(std::fs::TryLockError::Error(_)) => {
+            Err(TryLockError::Error(_)) => {
                 return Err(HistoryRepairError::new("writer_lock_unavailable"));
             }
         }

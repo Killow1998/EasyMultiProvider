@@ -1,6 +1,5 @@
 use super::*;
 use emp_state::filesystem::{create_private_directory, write_new_private_file};
-use emp_test_support::{Deadline, isolated, test_timeout};
 use serde_json::json;
 use std::fs;
 
@@ -467,19 +466,6 @@ fn recovery_wire_contract_before_reset_or_exit() {
 fn recovery_accept_failure_returns_from_startup_and_releases_service_lock() {
     use std::{io, sync::mpsc, time::Duration};
 
-    const CASE: &str = "EMP_TEST_RECOVERY_SERVICE_LOCK_RELEASE";
-    if std::env::var_os(CASE).is_none() {
-        let mut command = isolated::command(
-            "startup_recovery::tests::recovery_accept_failure_returns_from_startup_and_releases_service_lock",
-        );
-        command.env(CASE, "1");
-        isolated::run(
-            command,
-            Deadline::after(test_timeout(Duration::from_secs(5))),
-        );
-        return;
-    }
-
     let (directory, config, _) = fixture();
     let path = directory.path().join("state/service.lock");
     let owner =
@@ -504,5 +490,4 @@ fn recovery_accept_failure_returns_from_startup_and_releases_service_lock() {
     );
     worker.join().unwrap();
     assert!(emp_state::IntegrationFileLock::acquire(&path, Duration::ZERO, Duration::ZERO).is_ok());
-    isolated::report(Ok(()));
 }

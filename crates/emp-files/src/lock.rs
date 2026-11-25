@@ -2,7 +2,8 @@ use std::env;
 #[cfg(unix)]
 use std::ffi::CString;
 use std::fmt;
-use std::fs::{self, File};
+use std::fs::{self, File, TryLockError};
+use std::io;
 use std::path::{Path, PathBuf, absolute};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -184,20 +185,81 @@ enum TryLock {
     Contended,
 }
 
-#[cfg(unix)]
-fn try_lock(file: &File) -> Result<TryLock, LockError> {
-    // SAFETY: the descriptor remains owned by `file` for the call duration.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-        return Ok(TryLock::Acquired);
+#[derive(Debug)]
+pub struct FileLock {
+    file: File,
+    #[cfg(windows)]
+    first_byte_only: bool,
+}
+
+impl FileLock {
+    #[expect(clippy::disallowed_methods, reason = "锁守卫在 Drop 时显式解锁")]
+    pub fn acquire(file: File) -> io::Result<Self> {
+        file.lock()?;
+        Ok(Self::whole_file(file))
     }
-    match std::io::Error::last_os_error().raw_os_error() {
-        Some(code) if code == libc::EACCES || code == libc::EAGAIN => Ok(TryLock::Contended),
-        _ => Err(LockError::AcquireFailed),
+
+    pub fn try_acquire(file: File) -> Result<Self, TryLockError> {
+        Self::try_lock(&file)?;
+        Ok(Self::whole_file(file))
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "取得的锁由守卫在 Drop 时显式解锁"
+    )]
+    fn try_lock(file: &File) -> Result<(), TryLockError> {
+        file.try_lock()
+    }
+
+    fn whole_file(file: File) -> Self {
+        Self {
+            file,
+            #[cfg(windows)]
+            first_byte_only: false,
+        }
+    }
+
+    fn unlock(&self) {
+        #[cfg(windows)]
+        if self.first_byte_only {
+            let mut overlapped = OVERLAPPED::default();
+            // SAFETY: this unlocks the same live handle and byte range acquired above.
+            let _ = unsafe {
+                UnlockFileEx(
+                    self.file.as_raw_handle() as HANDLE,
+                    0,
+                    1,
+                    0,
+                    &mut overlapped,
+                )
+            };
+            return;
+        }
+        let _ = self.file.unlock();
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        self.unlock();
+    }
+}
+
+#[cfg(unix)]
+fn try_lock_integration(file: &File) -> Result<TryLock, LockError> {
+    match FileLock::try_lock(file) {
+        Ok(()) => Ok(TryLock::Acquired),
+        Err(TryLockError::WouldBlock) => Ok(TryLock::Contended),
+        Err(TryLockError::Error(error)) if error.raw_os_error() == Some(libc::EACCES) => {
+            Ok(TryLock::Contended)
+        }
+        Err(TryLockError::Error(_)) => Err(LockError::AcquireFailed),
     }
 }
 
 #[cfg(windows)]
-fn try_lock(file: &File) -> Result<TryLock, LockError> {
+fn try_lock_integration(file: &File) -> Result<TryLock, LockError> {
     let mut overlapped = OVERLAPPED::default();
     let handle = file.as_raw_handle() as HANDLE;
     // SAFETY: handle is live; the byte range and zeroed synchronous OVERLAPPED remain valid through the call.
@@ -223,29 +285,13 @@ fn try_lock(file: &File) -> Result<TryLock, LockError> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn try_lock(_: &File) -> Result<TryLock, LockError> {
+fn try_lock_integration(_: &File) -> Result<TryLock, LockError> {
     Err(LockError::Unsupported)
 }
 
-#[cfg(unix)]
-fn unlock(file: &File) {
-    // SAFETY: the descriptor is live until this function returns.
-    let _ = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
-}
-
-#[cfg(windows)]
-fn unlock(file: &File) {
-    let mut overlapped = OVERLAPPED::default();
-    // SAFETY: this unlocks the same live handle and byte range acquired above.
-    let _ = unsafe { UnlockFileEx(file.as_raw_handle() as HANDLE, 0, 1, 0, &mut overlapped) };
-}
-
-#[cfg(not(any(unix, windows)))]
-fn unlock(_: &File) {}
-
 /// An exclusive lock released on drop; uses POSIX `flock` or a one-byte Windows lock.
 pub struct IntegrationFileLock {
-    file: File,
+    _lock: FileLock,
     path: PathBuf,
 }
 
@@ -259,8 +305,17 @@ impl IntegrationFileLock {
         let started = Instant::now();
         let poll_interval = poll_interval.max(Duration::from_millis(1));
         loop {
-            match try_lock(&file)? {
-                TryLock::Acquired => return Ok(Self { file, path }),
+            match try_lock_integration(&file)? {
+                TryLock::Acquired => {
+                    return Ok(Self {
+                        _lock: FileLock {
+                            file,
+                            #[cfg(windows)]
+                            first_byte_only: true,
+                        },
+                        path,
+                    });
+                }
                 TryLock::Contended if started.elapsed() >= timeout => {
                     return Err(LockError::TimedOut(timeout));
                 }
@@ -281,8 +336,24 @@ impl IntegrationFileLock {
     }
 }
 
-impl Drop for IntegrationFileLock {
-    fn drop(&mut self) {
-        unlock(&self.file);
+#[cfg(all(test, any(unix, windows)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_lock_releases_it_with_a_duplicate_still_open() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let path = directory.path().join("writer.lock");
+        let lock = FileLock::acquire(File::create(&path).unwrap()).unwrap();
+        let duplicate = lock.file.try_clone().unwrap();
+        let open = || File::options().read(true).write(true).open(&path).unwrap();
+
+        assert!(matches!(
+            FileLock::try_acquire(open()),
+            Err(TryLockError::WouldBlock)
+        ));
+        drop(lock);
+        let _lock = FileLock::try_acquire(open()).unwrap();
+        drop(duplicate);
     }
 }

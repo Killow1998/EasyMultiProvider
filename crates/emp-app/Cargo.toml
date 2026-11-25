@@ -57,6 +57,7 @@ hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 path = "src/lib.rs"
 
 [dev-dependencies]
+emp-files = { path = "../emp-files" }
 emp-storage = { path = "../emp-storage", features = ["test-support"] }
 emp-test-support = { path = "../emp-test-support", features = ["websocket"] }
 emp-state = { path = "../emp-state", features = ["test-support"] }

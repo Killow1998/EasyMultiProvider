@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 base64 = "0.22"
+emp-files = { path = "../emp-files" }
 emp-state = { path = "../emp-state" }
 emp-storage = { path = "../emp-storage" }
 emp-context = { path = "../emp-context" }

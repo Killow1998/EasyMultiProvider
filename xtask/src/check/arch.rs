@@ -14,6 +14,7 @@ const NORMAL_BUILD: &[(&str, &str)] = &[
     ("emp-app", "emp-transport"),
     ("emp-app", "emp-updater"),
     ("emp-codex", "emp-context"),
+    ("emp-codex", "emp-files"),
     ("emp-codex", "emp-state"),
     ("emp-codex", "emp-storage"),
     ("emp-codex", "emp-transport"),
@@ -44,6 +45,7 @@ const NORMAL_BUILD: &[(&str, &str)] = &[
 ];
 
 const DEV: &[(&str, &str)] = &[
+    ("emp-app", "emp-files"),
     ("emp-app", "emp-mod-aggregate"),
     ("emp-app", "emp-mod-decision"),
     ("emp-app", "emp-mod-gateway"),
