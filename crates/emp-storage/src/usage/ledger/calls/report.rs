@@ -199,12 +199,25 @@ fn query(
         SqlValue::Integer(filter.limit as i64),
         SqlValue::Integer(filter.offset.min(i64::MAX as usize) as i64),
     ];
-    let mut statement = connection.prepare(&format!("SELECT json(facts),delivery,
+    let mut statement = connection.prepare(&format!(
+        "WITH page AS MATERIALIZED (
+            SELECT * FROM {calls} ORDER BY started_at DESC,request_id DESC,operation LIMIT ? OFFSET ?
+        ), recoveries AS (
+            SELECT page.request_id AS rejected_id, page.operation, retry.request_id,
+                ROW_NUMBER() OVER (PARTITION BY page.request_id,page.operation
+                                   ORDER BY retry.finished_at DESC,retry.request_id DESC) AS rank
+            FROM main.call_records AS retry JOIN page ON retry.operation=page.operation
+              AND json_extract(retry.facts,'$.continuation_recovery_from')=page.request_id
+            WHERE retry.state='completed' AND page.state='recovery_required'
+        )
+        SELECT json(page.facts),page.delivery,
             (SELECT json_object('cost_nanos',cost_nanos,'price_issue',price_issue,'price_key',price_key)
-             FROM accounted_usage WHERE id=json_extract(call_records.facts,'$.usage_event_id') LIMIT 1), state
-            FROM (SELECT * FROM {calls}
-                ORDER BY started_at DESC,request_id DESC,operation LIMIT ? OFFSET ?) AS call_records
-            ORDER BY started_at DESC,request_id DESC,operation"))?;
+             FROM accounted_usage WHERE id=json_extract(page.facts,'$.usage_event_id') LIMIT 1),
+            page.state,recoveries.request_id
+        FROM page LEFT JOIN recoveries ON recoveries.rejected_id=page.request_id
+          AND recoveries.operation=page.operation AND recoveries.rank=1
+        ORDER BY page.started_at DESC,page.request_id DESC,page.operation"
+    ))?;
     let records = statement
         .query_map(params_from_iter(args), |row| {
             Ok((
@@ -212,10 +225,11 @@ fn query(
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?
         .map(|row| {
-            let (raw, delivery, cost, state) = row?;
+            let (raw, delivery, cost, state, recovery) = row?;
             let mut value: Value = serde_json::from_str(&raw).map_err(|_| UsageError)?;
             value["state"] = json!(state);
             if let Some(delivery) = delivery {
@@ -232,7 +246,12 @@ fn query(
             if let Some(cost) = cost {
                 value["pricing"] = serde_json::from_str::<Value>(&cost).map_err(|_| UsageError)?;
             }
-            value.as_object_mut().unwrap().remove("usage_event_id");
+            if let Some(recovery) = recovery {
+                value["recovery_request_id"] = json!(recovery);
+            }
+            let facts = value.as_object_mut().unwrap();
+            facts.remove("usage_event_id");
+            facts.remove("team_estimated_usd_nanos");
             Ok(value)
         })
         .collect::<Result<Vec<_>>>()?;

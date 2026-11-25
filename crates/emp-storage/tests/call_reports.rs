@@ -157,10 +157,11 @@ fn team_completion_commits_usage_receipt_and_pending_together() {
              FROM usage_events u
              JOIN call_records c ON u.id=json_extract(c.facts,'$.usage_event_id')
              JOIN usage_sessions s ON u.id=s.event_id AND s.session_id=c.session_id
-             JOIN call_records prior ON json_extract(prior.facts,'$.recovery_request_id')=c.request_id
+             JOIN call_records prior ON prior.request_id=json_extract(c.facts,'$.continuation_recovery_from')
              WHERE c.request_id='offline-completion' AND c.operation='responses'
                AND c.state='completed' AND c.account_id=?1 AND s.session_id=?2
-               AND prior.request_id='rejected' AND prior.operation='responses'",
+               AND prior.request_id='rejected' AND prior.operation='responses'
+               AND json_type(prior.facts,'$.recovery_request_id') IS NULL",
             [account, response],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
@@ -179,6 +180,72 @@ fn team_completion_commits_usage_receipt_and_pending_together() {
                 "estimated_usd_nanos":cost, "actual_usd_nanos":null,
             })
         )]
+    );
+}
+
+#[test]
+fn team_receipt_only_completion_uses_the_persisted_receipt_and_original_event_id() {
+    let root = emp_test_support::fixture_dir().unwrap();
+    let path = root.path().join("usage.sqlite3");
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    let model = "team-shared-fixture-model";
+    prices.replace(
+        json!({(model): {
+            "input_cost_per_token":"0.000001", "output_cost_per_token":"0.000002"
+        }}),
+        1.0,
+    );
+    let ledger = UsageLedger::new(path.clone(), prices);
+    ledger.query_calls(&filter()).unwrap();
+    let db = rusqlite::Connection::open(path).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER adjust_receipt AFTER INSERT ON call_records
+         WHEN NEW.operation='history_summary'
+            AND json_extract(NEW.facts,'$.team_estimated_usd_nanos')=13000
+         BEGIN
+            UPDATE call_records SET facts=json_set(facts,
+                '$.input_tokens',11,'$.cached_input_tokens',4,'$.output_tokens',8,
+                '$.team_estimated_usd_nanos',25000)
+            WHERE request_id=NEW.request_id AND operation=NEW.operation;
+         END;",
+    )
+    .unwrap();
+    let event = json!({
+        "request_id":"summary", "route":"history_summary", "usage_category":"subscription",
+        "usage_owner":"account:shared-identity", "upstream_model":model,
+        "usage_response_id":"resp_summary", "attempts":1, "success":true,
+        "input_tokens":7, "output_tokens":3,
+        "team_usage":{"scope":"workspace-member-device","share":"shared-account"}
+    });
+    ledger
+        .record_completion(&event, 100.0, 98.0, 100.0)
+        .unwrap();
+    let (count, id): (i64, String) = db
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM usage_events),json_extract(facts,'$.usage_event_id')
+             FROM call_records WHERE request_id='summary' AND operation='history_summary'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let expected_id = "ede15c5aadb95157255d233f825cd2ab2c6d98b4325321b66db8a0d238c1deef";
+    assert_eq!((count, id.as_str()), (0, expected_id));
+    assert_eq!(
+        ledger.team_events("workspace-member-device").unwrap(),
+        [(
+            expected_id.into(),
+            json!({
+                "id":expected_id, "share":"shared-account", "model":model, "finished_at":100,
+                "input_tokens":11, "cached_input_tokens":4, "output_tokens":8,
+                "estimated_usd_nanos":25_000, "actual_usd_nanos":null,
+            })
+        )]
+    );
+    let report = ledger.query_calls(&filter()).unwrap();
+    assert!(
+        report["records"][0]
+            .get("team_estimated_usd_nanos")
+            .is_none()
     );
 }
 

@@ -279,38 +279,45 @@ impl UsageLedger {
             record["usage_event_id"] = json!(usage.id);
         }
         let state = crate::usage::call_state(event);
+        let operation = text(event, "route", "responses");
         record["state"] = json!(state);
         record["started_at"] = json!(started);
         record["finished_at"] = json!(finished);
         let session = text(&record, "thread_id", text(&record, "session_id", "")).to_owned();
         record["session_id"] = json!(session);
+        let team = match (
+            event["team_usage"]["scope"].as_str(),
+            event["team_usage"]["share"].as_str(),
+            usage,
+        ) {
+            (Some(scope), Some(share), Some(usage))
+                if event["attempts"]
+                    .as_u64()
+                    .is_some_and(|attempts| attempts > 0)
+                    && !emp_domain::MODEL_TEST_OPERATIONS.contains(&operation) =>
+            {
+                let has_usage: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM usage_events WHERE id=?)",
+                    [&usage.id],
+                    |row| row.get(0),
+                )?;
+                if !has_usage && usage.quote["price_issue"].is_null() {
+                    record["team_estimated_usd_nanos"] = usage.quote["cost_nanos"].clone();
+                }
+                Some((scope, share))
+            }
+            _ => None,
+        };
         transaction.execute("INSERT INTO call_records
             (request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts)
             VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id,operation) DO UPDATE SET
             started_at=excluded.started_at,finished_at=excluded.finished_at,provider_id=excluded.provider_id,
             account_id=excluded.account_id,model_id=excluded.model_id,session_id=excluded.session_id,
-            state=excluded.state,facts=excluded.facts", params![id, text(event,"route","responses"),
+            state=excluded.state,facts=excluded.facts", params![id, operation,
             started, finished, text(event,"provider_id",""), text(event,"account_id",""),
             text(event,"model_id",""), &session, state, record.to_string()])?;
-        if state == "completed"
-            && let Some(prior) = event["continuation_recovery_from"].as_str()
-        {
-            transaction.execute(
-                "UPDATE call_records SET facts=json_set(facts,'$.recovery_request_id',?)
-                 WHERE request_id=? AND operation=? AND state='recovery_required'",
-                params![id, prior, text(event, "route", "responses")],
-            )?;
-        }
-        if let (Some(scope), Some(share), Some(usage)) = (
-            event["team_usage"]["scope"].as_str(),
-            event["team_usage"]["share"].as_str(),
-            usage,
-        ) && event["attempts"]
-            .as_u64()
-            .is_some_and(|attempts| attempts > 0)
-            && !emp_domain::MODEL_TEST_OPERATIONS.contains(&text(event, "route", ""))
-        {
-            Self::insert_team_event(transaction, scope, share, &usage.id, event, finished)?;
+        if let Some((scope, share)) = team {
+            Self::insert_team_event(transaction, scope, share, id, operation, event)?;
         }
         Ok(())
     }

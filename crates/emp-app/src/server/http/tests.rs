@@ -1527,6 +1527,66 @@ fn report_stream_selection_obeys_accept_header() {
 }
 
 #[test]
+fn call_reports_link_recoveries_in_either_commit_order_and_read_legacy_links() {
+    let fixture = Fixture::new();
+    let ledger = &fixture.server.state.backend.usage.ledger;
+    let rejection = |id: &str| json!({"request_id":id,"route":"responses","error_code":"previous_response_not_found"});
+    for (prior, retry, retry_first) in [
+        ("rejection-first", "retry-second", false),
+        ("rejection-second", "retry-first", true),
+    ] {
+        let reject = || {
+            ledger
+                .record_completion(&rejection(prior), 1.5, 1.0, 1.5)
+                .unwrap();
+        };
+        let complete = || {
+            let event = json!({
+                "request_id":retry,"route":"responses","success":true,
+                "continuation_recovery_from":prior
+            });
+            ledger.record_completion(&event, 3.5, 3.0, 3.5).unwrap();
+        };
+        if retry_first {
+            complete();
+            reject();
+        } else {
+            reject();
+            complete();
+        }
+    }
+    ledger
+        .record_call(&rejection("legacy-rejection"), 1.0, 1.5)
+        .unwrap();
+    let database =
+        rusqlite::Connection::open(fixture.directory.path().join("state/usage.sqlite3")).unwrap();
+    database
+        .execute_batch(
+            "UPDATE call_records SET facts=json_set(facts,'$.recovery_request_id','legacy-retry')
+             WHERE request_id IN ('legacy-rejection','rejection-first')",
+        )
+        .unwrap();
+    drop(database);
+    fixture.run_wire(async |fixture, address| {
+        let session = fixture.session();
+        for (prior, retry) in [
+            ("rejection-first", "retry-second"),
+            ("rejection-second", "retry-first"),
+            ("legacy-rejection", "legacy-retry"),
+        ] {
+            let path = format!("/api/calls?start=1&end=2&request={prior}");
+            let wire = request(fixture.port(), "GET", &path, &[&session], b"");
+            let reply = exchange_wire(address, &wire, false).await;
+            let body = wire_contract::assert_json_read(&path, &reply, None);
+            assert_eq!(body["total"], 1, "{path}");
+            assert_eq!(body["records"][0]["request_id"], prior);
+            assert_eq!(body["records"][0]["state"], "recovery_required");
+            assert_eq!(body["records"][0]["recovery_request_id"], retry, "{path}");
+        }
+    });
+}
+
+#[test]
 fn closing_report_input_cancels_json_queries() {
     let fixture = Fixture::new();
     let ledger = &fixture.server.state.backend.usage.ledger;
