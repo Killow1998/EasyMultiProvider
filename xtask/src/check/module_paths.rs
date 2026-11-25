@@ -1,49 +1,50 @@
 use super::{
-    Path, Result, fs,
+    Path, Result, contains_ident, fs,
     test_scope::{Index, SourceKind},
-    visit_macro_attributes,
 };
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use proc_macro2::{Span, TokenStream, TokenTree};
+use quote::ToTokens as _;
 use std::{
     collections::BTreeSet,
     path::{Component, PathBuf},
 };
 use syn::{
-    Expr, Lit, LitStr, Meta,
+    Expr, Lit, LitStr, Macro, MacroDelimiter, Meta, Token,
     ext::IdentExt,
+    parse::ParseStream,
+    punctuated::Punctuated,
     spanned::Spanned,
     visit::{self, Visit},
 };
 
-fn contains_path_assignment(tokens: TokenStream) -> bool {
-    let mut tokens = tokens.into_iter().peekable();
-    while let Some(token) = tokens.next() {
-        match token {
-            TokenTree::Ident(name)
-                if name.unraw() == "path"
-                    && matches!(tokens.peek(), Some(TokenTree::Punct(eq)) if eq.as_char() == '=') =>
-            {
-                return true;
-            }
-            TokenTree::Group(group) if contains_path_assignment(group.stream()) => return true,
-            _ => {}
-        }
-    }
-    false
+fn path_is(path: &syn::Path, name: &str) -> bool {
+    matches!(path.get_ident(), Some(ident) if ident.unraw() == name)
+}
+
+fn conditional_path(meta: &Meta) -> bool {
+    let Meta::List(list) = meta else { return false };
+    path_is(&list.path, "cfg_attr")
+        && matches!(list.delimiter, MacroDelimiter::Paren(_))
+        && list
+            .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            .is_ok_and(|parts| {
+                parts.iter().skip(1).any(|part| match part {
+                    Meta::NameValue(attr) => path_is(&attr.path, "path"),
+                    _ => conditional_path(part),
+                })
+            })
 }
 
 fn explicit_path(meta: &Meta) -> Option<&LitStr> {
-    if let Meta::NameValue(attr) = meta
-        && attr
-            .path
-            .get_ident()
-            .is_some_and(|name| name.unraw() == "path")
-        && let Expr::Lit(value) = &attr.value
-        && let Lit::Str(path) = &value.lit
-    {
-        Some(path)
-    } else {
-        None
+    match meta {
+        Meta::NameValue(attr) if path_is(&attr.path, "path") => match &attr.value {
+            Expr::Lit(value) => match &value.lit {
+                Lit::Str(path) => Some(path),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -51,6 +52,7 @@ pub(super) fn check<'a>(
     root: &Path,
     crate_dir: &Path,
     targets: impl Iterator<Item = (&'a Path, SourceKind)>,
+    checked: &mut BTreeSet<PathBuf>,
     test_scopes: &mut Index,
     errors: &mut Vec<String>,
 ) -> Result {
@@ -61,6 +63,7 @@ pub(super) fn check<'a>(
             .canonicalize()
             .map_err(|error| format!("{}: {error}", crate_dir.display()))?,
         visited: BTreeSet::new(),
+        checked,
         test_scopes,
         errors,
     };
@@ -75,6 +78,7 @@ struct CrateSources<'a> {
     resolved_root: PathBuf,
     crate_dir: PathBuf,
     visited: BTreeSet<(PathBuf, Option<String>, SourceKind)>,
+    checked: &'a mut BTreeSet<PathBuf>,
     test_scopes: &'a mut Index,
     errors: &'a mut Vec<String>,
 }
@@ -96,8 +100,17 @@ impl CrateSources<'_> {
             .and_then(|source| syn::parse_file(&source).map_err(|error| error.to_string()));
         match source {
             Ok(source) => {
+                let path = resolved.strip_prefix(&self.resolved_root).ok();
+                if self.checked.insert(resolved.clone()) {
+                    let mut rules = SourceRules {
+                        file: path.unwrap_or(&resolved),
+                        errors: self.errors,
+                    };
+                    rules.visit_file(&source);
+                    rules.check_macros(source.to_token_stream());
+                }
                 let kind = kind.in_test(&source.attrs);
-                if let Ok(path) = resolved.strip_prefix(&self.resolved_root) {
+                if let Some(path) = path {
                     self.test_scopes.record(path, &source, kind);
                 }
                 ModulePaths {
@@ -117,6 +130,96 @@ impl CrateSources<'_> {
     }
 }
 
+struct SourceRules<'a> {
+    file: &'a Path,
+    errors: &'a mut Vec<String>,
+}
+
+impl SourceRules<'_> {
+    fn report(&mut self, rule: &str, span: Span, message: &str) {
+        let line = span.start().line;
+        self.errors.push(format!(
+            "[{rule}] {}:{line}: {message}",
+            self.file.display()
+        ));
+    }
+
+    fn check_macros(&mut self, tokens: TokenStream) {
+        let tokens: Vec<_> = tokens.into_iter().collect();
+        for (index, token) in tokens.iter().enumerate() {
+            if let TokenTree::Group(group) = token {
+                self.check_macros(group.stream());
+            }
+            let [TokenTree::Ident(name), TokenTree::Punct(bang), tail @ ..] = &tokens[index..]
+            else {
+                continue;
+            };
+            if bang.as_char() != '!' {
+                continue;
+            }
+            let (rule, message) = match tail {
+                [TokenTree::Group(args), ..]
+                    if name.unraw() == "include" && !out_dir_include(args.stream()) =>
+                {
+                    (
+                        "no-source-include",
+                        "工作区源码用 mod 声明，不要用 include! 拼接；只有构建脚本生成到 OUT_DIR 的代码可以用 include!",
+                    )
+                }
+                [TokenTree::Ident(_), TokenTree::Group(body), ..]
+                    if name == "macro_rules" && contains_ident(body.stream(), "mod") =>
+                {
+                    (
+                        "no-mod-in-macro",
+                        "模块声明必须直接写出，不能由 macro_rules! 生成",
+                    )
+                }
+                _ => continue,
+            };
+            self.report(rule, name.span(), message);
+        }
+    }
+}
+
+fn out_dir_include(tokens: TokenStream) -> bool {
+    syn::parse2::<Macro>(tokens).is_ok_and(|concat| {
+        concat.path.is_ident("concat")
+            && matches!(concat.delimiter, MacroDelimiter::Paren(_))
+            && concat
+                .parse_body_with(|input: ParseStream| {
+                    let env: Macro = input.parse()?;
+                    input.parse::<Token![,]>()?;
+                    input.parse::<LitStr>()?;
+                    Ok(env.path.is_ident("env")
+                        && matches!(env.delimiter, MacroDelimiter::Paren(_))
+                        && env
+                            .parse_body::<LitStr>()
+                            .is_ok_and(|name| name.value() == "OUT_DIR"))
+                })
+                .unwrap_or(false)
+    })
+}
+
+impl<'ast> Visit<'ast> for SourceRules<'_> {
+    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
+        if let Some(path) = explicit_path(&attr.meta) {
+            let value = path.value();
+            if !value.ends_with(".rs") {
+                self.report("module-path-extension", path.span(), &format!("#[path = {value:?}] 的目标文件必须以 .rs 结尾；请将文件改名为 .rs 并更新 #[path]"));
+            }
+        }
+    }
+
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        for attr in &item.attrs {
+            if conditional_path(&attr.meta) {
+                self.report("conditional-module-path", attr.span(), "禁止通过 cfg_attr 设置模块的 path；请用 #[cfg(...)] 分别声明两个 mod，或把差异放到同一文件内的 cfg 块中");
+            }
+        }
+        visit::visit_item_mod(self, item);
+    }
+}
+
 struct ModulePaths<'a, 'source> {
     sources: &'a mut CrateSources<'source>,
     file: &'a Path,
@@ -126,42 +229,7 @@ struct ModulePaths<'a, 'source> {
 }
 
 impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
-    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
-        if let Meta::List(list) = &attr.meta
-            && matches!(list.delimiter, syn::MacroDelimiter::Paren(_))
-            && list
-                .path
-                .get_ident()
-                .is_some_and(|name| name.unraw() == "cfg_attr")
-        {
-            self.check_conditional(list.tokens.clone(), attr.span().start().line);
-        } else if let Some(path) = explicit_path(&attr.meta) {
-            self.check_extension(path);
-        }
-        visit::visit_attribute(self, attr);
-    }
-
-    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        visit_macro_attributes(invocation.tokens.clone(), &mut |tokens, line| {
-            let mut parts = tokens.clone().into_iter();
-            if let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group))) =
-                (parts.next(), parts.next())
-                && name.unraw() == "cfg_attr"
-                && group.delimiter() == Delimiter::Parenthesis
-            {
-                self.check_conditional(group.stream(), line);
-            } else if let Ok(meta) = syn::parse2(tokens)
-                && let Some(path) = explicit_path(&meta)
-            {
-                self.check_extension(path);
-            }
-        });
-    }
-
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        for attr in &item.attrs {
-            self.visit_attribute(attr);
-        }
         let kind = self.kind.in_test(&item.attrs);
         let explicit = item
             .attrs
@@ -230,34 +298,6 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
 }
 
 impl ModulePaths<'_, '_> {
-    fn check_extension(&mut self, path: &LitStr) {
-        let value = path.value();
-        if !value.ends_with(".rs") {
-            let file = self
-                .file
-                .strip_prefix(self.sources.root)
-                .unwrap_or(self.file);
-            self.sources.errors.push(format!(
-                "[module-path-extension] {}:{}: #[path = {value:?}] 的目标文件必须以 .rs 结尾；请将文件改名为 .rs 并更新 #[path]",
-                file.display(),
-                path.span().start().line,
-            ));
-        }
-    }
-
-    fn check_conditional(&mut self, tokens: TokenStream, line: usize) {
-        if contains_path_assignment(tokens) {
-            let file = self
-                .file
-                .strip_prefix(self.sources.root)
-                .unwrap_or(self.file);
-            self.sources.errors.push(format!(
-                "[conditional-module-path] {}:{line}: 禁止通过 cfg_attr 设置模块的 path；请用 #[cfg(...)] 分别声明两个 mod，或把差异放到同一文件内的 cfg 块中",
-                file.display()
-            ));
-        }
-    }
-
     fn visit_inline(&mut self, directory: &Path, items: &[syn::Item], kind: SourceKind) {
         let mut visitor = ModulePaths {
             sources: self.sources,
@@ -294,28 +334,61 @@ fn resolve(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-    #[test]
-    fn rejects_module_paths_without_a_rust_extension() {
-        let directory = emp_test_support::fixture_dir().unwrap();
-        let root = directory.path();
-        let entry = root.join("lib.rs");
-        fs::write(&entry, r#"#[path = "helpers.inc"] mod helpers;"#).unwrap();
-        fs::write(root.join("helpers.inc"), "").unwrap();
-
+    fn diagnostics(root: &Path, crate_dir: &Path, entry: &Path) -> Vec<String> {
         let mut errors = Vec::new();
         check(
             root,
-            root,
-            std::iter::once((entry.as_path(), SourceKind::Production)),
+            crate_dir,
+            [(entry, SourceKind::Production)].into_iter(),
+            &mut BTreeSet::new(),
             &mut Index::default(),
             &mut errors,
         )
         .unwrap();
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(
-            errors[0].starts_with("[module-path-extension] lib.rs:1:"),
-            "{errors:?}"
-        );
+        errors
+    }
+
+    #[test]
+    fn checks_source_rules_once_across_module_paths() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let entry = root.join("lib.rs");
+        fs::write(
+            &entry,
+            r#"#[path = "./platform.rs"] mod alternate; mod platform;"#,
+        )
+        .unwrap();
+        let source = r#"
+#[cfg_attr(unix, allow(dead_code), path = "unix.rs")] mod backend;
+mod fixtures { #[cfg_attr(unix, r#cfg_attr(test, path = "platform_tests.rs"))] mod platform; }
+#[cfg_attr(unix, path = "fixture.rs")] fn probe() {}
+#[cfg(unix)] #[path = "native.rs"] mod native;
+#[cfg_attr(test, allow(dead_code))] mod support;
+#[path = "helpers.inc"] mod helpers;
+include!("platform.rs");
+include!(concat!(env!("OUT_DIR"), "/x.rs"));
+const TEXT: &str = include_str!("a.txt");
+const BYTES: &[u8] = include_bytes!("b.bin");
+macro_rules! declare { ($a:meta) => { #[$a] mod backend; } }
+macro_rules! helper { () => { "mod" } }"#;
+        fs::write(root.join("platform.rs"), source).unwrap();
+        fs::write(root.join("helpers.inc"), "").unwrap();
+        let errors = diagnostics(root, root, &entry);
+        let expected = [
+            ("conditional-module-path", 2),
+            ("conditional-module-path", 3),
+            ("module-path-extension", 7),
+            ("no-source-include", 8),
+            ("no-mod-in-macro", 12),
+        ];
+        assert_eq!(errors.len(), expected.len(), "{errors:?}");
+        for (rule, line) in expected {
+            let prefix = format!("[{rule}] platform.rs:{line}:");
+            assert!(
+                errors.iter().any(|error| error.starts_with(&prefix)),
+                "{errors:?}"
+            );
+        }
     }
 
     #[test]
@@ -349,15 +422,7 @@ mod nested {
         )
         .unwrap();
         fs::write(src.join("visible.rs"), "").unwrap();
-        let mut errors = Vec::new();
-        check(
-            root.path(),
-            &crate_dir,
-            std::iter::once((entry.as_path(), SourceKind::Production)),
-            &mut Index::default(),
-            &mut errors,
-        )
-        .unwrap();
+        let errors = diagnostics(root.path(), &crate_dir, &entry);
         assert_eq!(errors.len(), 3, "{errors:?}");
         assert!(errors[0].contains("lib.rs:3"));
         assert!(errors[1].contains("lib.rs:4"));
@@ -386,15 +451,7 @@ mod nested {
         )
         .unwrap();
 
-        let mut errors = Vec::new();
-        check(
-            root.path(),
-            &crate_dir,
-            std::iter::once((entry.as_path(), SourceKind::Production)),
-            &mut Index::default(),
-            &mut errors,
-        )
-        .unwrap();
+        let errors = diagnostics(root.path(), &crate_dir, &entry);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("lib.rs:2"), "{errors:?}");
     }
@@ -425,15 +482,7 @@ mod nested {
         fs::write(support.join("lib.rs"), "").unwrap();
         fs::write(src.join("nested/inside.rs"), "").unwrap();
 
-        let mut errors = Vec::new();
-        check(
-            root.path(),
-            &crate_dir,
-            std::iter::once((entry.as_path(), SourceKind::Production)),
-            &mut Index::default(),
-            &mut errors,
-        )
-        .unwrap();
+        let errors = diagnostics(root.path(), &crate_dir, &entry);
         assert_eq!(errors.len(), 7, "{errors:?}");
         for (error, line) in errors.iter().zip([2, 3, 5, 6, 7, 8, 9]) {
             assert!(error.contains(&format!("lib.rs:{line}:")), "{error}");
@@ -463,15 +512,7 @@ mod nested {
         )
         .unwrap();
 
-        let mut errors = Vec::new();
-        check(
-            root.path(),
-            &crate_dir,
-            [(entry.as_path(), SourceKind::Production)].into_iter(),
-            &mut Index::default(),
-            &mut errors,
-        )
-        .unwrap();
+        let errors = diagnostics(root.path(), &crate_dir, &entry);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("lib.rs:2:"), "{errors:?}");
     }

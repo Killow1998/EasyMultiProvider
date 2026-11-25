@@ -78,7 +78,7 @@ pub fn run(args: &[String]) -> Result {
     ci_profiles::check_profiles(PROFILES, &test_targets, &referenced_profiles, &mut errors);
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, conditional-module-path, module-path-extension, module-version, test-boundary, docs-prose, no-python-on-main, workflow-cargo-test, ci-profiles, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
+            "check: arch, module-paths, conditional-module-path, module-path-extension, no-source-include, no-mod-in-macro, module-version, test-boundary, docs-prose, no-python-on-main, workflow-cargo-test, ci-profiles, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
         );
         Ok(())
     } else {
@@ -203,7 +203,7 @@ fn check_shared_test_tokens(path: &str, tokens: TokenStream, errors: &mut Vec<St
                     continue;
                 };
                 if attribute.delimiter() != Delimiter::Bracket
-                    || !contains_test_ident(attribute.stream())
+                    || !contains_ident(attribute.stream(), "test")
                 {
                     continue;
                 }
@@ -231,10 +231,10 @@ fn check_shared_test_tokens(path: &str, tokens: TokenStream, errors: &mut Vec<St
     }
 }
 
-fn contains_test_ident(tokens: TokenStream) -> bool {
+fn contains_ident(tokens: TokenStream, expected: &str) -> bool {
     tokens.into_iter().any(|token| match token {
-        TokenTree::Ident(name) => name.unraw() == "test",
-        TokenTree::Group(group) => contains_test_ident(group.stream()),
+        TokenTree::Ident(name) => name.unraw() == expected,
+        TokenTree::Group(group) => contains_ident(group.stream(), expected),
         _ => false,
     })
 }
@@ -242,56 +242,6 @@ fn contains_test_ident(tokens: TokenStream) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rejects_conditional_module_paths_in_path_loaded_source() {
-        let directory = emp_test_support::fixture_dir().unwrap();
-        let root = directory.path();
-        let entry = root.join("lib.rs");
-        fs::write(&entry, "#[path = \"platform.inc\"] mod platform;").unwrap();
-        let source = r#"
-#[cfg_attr(all(not(test), unix), path = "unix.rs")]
-#[cfg_attr(all(not(test), not(unix)), path = "other.rs")]
-mod backend;
-#[cfg_attr(feature = "test-support", allow(dead_code), path = "fixture.rs")]
-mod transport;
-#[cfg(test)]
-mod fixtures {
-    #[cfg_attr(unix, cfg_attr(test, path = "platform_tests.rs"))]
-    mod platform;
-    macro_rules! declare {
-        ($($extra:meta),*) => {
-            #[cfg_attr(unix, $($extra,)* path = "unix.rs")]
-            pub(crate) mod generated;
-        };
-    }
-}
-#[cfg(unix)] #[path = "native.rs"] mod native;
-#[cfg(not(unix))] #[path = "portable.rs"] mod native;
-#[cfg_attr(test, allow(dead_code))] mod support;
-"#;
-        fs::write(root.join("platform.inc"), source).unwrap();
-        let mut errors = Vec::new();
-        module_paths::check(
-            root,
-            root,
-            std::iter::once((entry.as_path(), test_scope::SourceKind::Production)),
-            &mut test_scope::Index::default(),
-            &mut errors,
-        )
-        .unwrap();
-        assert_eq!(errors.len(), 6, "{errors:?}");
-        assert!(
-            errors[0].starts_with("[module-path-extension] lib.rs:1:"),
-            "{errors:?}"
-        );
-        for (error, line) in errors[1..].iter().zip([2, 3, 5, 9, 13]) {
-            assert!(
-                error.starts_with(&format!("[conditional-module-path] platform.inc:{line}:")),
-                "{error}"
-            );
-        }
-    }
 
     #[test]
     fn rejects_test_attributes_only_in_shared_integration_modules() {

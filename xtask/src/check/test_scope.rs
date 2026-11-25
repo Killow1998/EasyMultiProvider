@@ -240,6 +240,7 @@ mod shared;
                 (contract.as_path(), SourceKind::Integration),
             ]
             .into_iter(),
+            &mut Default::default(),
             &mut scopes,
             &mut errors,
         )
