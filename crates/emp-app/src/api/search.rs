@@ -33,7 +33,7 @@ pub(crate) fn execute(request: Request<'_>, body: Value, state: &ServerState) ->
     let mut denied = false;
     let team = &state.backend.team;
     let team_active = state.backend.modules.active(emp_modules::Module::Team);
-    let credentials = native_subscription_headers(&state.backend.accounts.native_auth_path)
+    let credentials = native_subscription_headers(&state.backend.codex.auth_path)
         .map(|headers| (headers, None))
         .or_else(|| {
             config["accounts"]
@@ -70,8 +70,7 @@ pub(crate) fn execute(request: Request<'_>, body: Value, state: &ServerState) ->
         }
         headers.extend(credentials);
     } else if denied
-        || emp_codex::configuration::local_auth::mode(&state.backend.accounts.native_auth_path)
-            == "local_key"
+        || emp_codex::configuration::local_auth::mode(&state.backend.codex.auth_path) == "local_key"
     {
         return HttpReply::error(
             503,

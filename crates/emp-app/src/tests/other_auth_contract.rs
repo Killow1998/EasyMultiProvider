@@ -1,7 +1,9 @@
 #![cfg(unix)]
 
 use super::*;
-use crate::services::accounts::{account_allows_refresh, import_emp_login_account_state};
+use crate::services::accounts::{
+    AccountState, account_allows_refresh, import_emp_login_account_state,
+};
 use crate::services::quota::{consume_quota_reset_for_account, refresh_account_serialized};
 use std::os::unix::fs::PermissionsExt;
 
@@ -145,16 +147,10 @@ fn shared_quota_reads_and_resets_use_snapshots_without_persisting() {
         }
         let original = std::fs::read(&fixture.auth_path).unwrap();
         let failing_path = fixture.auth_path.to_str().unwrap().to_owned();
-        crate::services::quota::FAIL_ROTATION_SAVES_TO
-            .lock()
-            .unwrap()
-            .insert(failing_path.clone());
+        AccountState::test_fail_rotation_saves_to(&failing_path, true);
         let read = refresh_account_serialized(&fixture.server.state, "demo");
         let reset = fixture.reset();
-        crate::services::quota::FAIL_ROTATION_SAVES_TO
-            .lock()
-            .unwrap()
-            .remove(&failing_path);
+        AccountState::test_fail_rotation_saves_to(&failing_path, false);
         assert!(read.is_ok(), "{read:?}");
         assert_eq!(reset.unwrap(), "reset");
         assert_eq!(fixture.account()["credential_status"], "valid");
@@ -174,10 +170,7 @@ fn shared_quota_reads_and_resets_use_snapshots_without_persisting() {
                 .state
                 .backend
                 .accounts
-                .pending_rotations
-                .lock()
-                .unwrap()
-                .is_empty()
+                .test_pending_rotations_empty()
         );
         fixture.server.shutdown().unwrap();
     }

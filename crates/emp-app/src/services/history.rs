@@ -18,8 +18,7 @@ pub(crate) fn prepare_history(
     body: Value,
     incoming: &BTreeMap<String, String>,
 ) -> Result<Value, HistoryError> {
-    let reader =
-        emp_codex::history::CodexHomeHistoryReader::new(&state.backend.accounts.codex_home);
+    let reader = emp_codex::history::CodexHomeHistoryReader::new(&state.backend.codex.home);
     emp_context::prepare_owned(
         body,
         incoming,

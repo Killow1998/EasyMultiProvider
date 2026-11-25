@@ -36,13 +36,7 @@ fn image_turn(edit: bool, sign_in: SignIn) {
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
     let (_directory, server) = image_server(&format!("http://{address}/backend-api/codex"));
-    let home = server
-        .state
-        .backend
-        .accounts
-        .native_auth_path
-        .parent()
-        .unwrap();
+    let home = server.state.backend.codex.auth_path.parent().unwrap();
     let input_path = home.join("reference.png");
     std::fs::write(&input_path, STANDARD.decode(PNG).unwrap()).unwrap();
     let claims = json!({"email":"image-fixture@example.test","exp":2100000000,

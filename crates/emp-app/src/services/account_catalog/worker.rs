@@ -121,7 +121,7 @@ fn refresh_sources(state: &ServerState) -> Vec<RefreshSource> {
     let duplicates = duplicate_accounts(
         &config,
         &state.backend.configuration.vault,
-        &state.backend.accounts.native_auth_path,
+        &state.backend.codex.auth_path,
     );
     let accounts = config["accounts"].as_array().map_or(&[][..], Vec::as_slice);
     let mut counts = BTreeMap::new();

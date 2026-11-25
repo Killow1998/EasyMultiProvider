@@ -1,6 +1,5 @@
 use super::{
-    account_public_snapshot, forget_pending_rotation, native_auth_document, notify_quota_update,
-    quota_refresh_lock,
+    account_public_snapshot, native_auth_document, notify_quota_update, quota_refresh_lock,
 };
 use crate::app::ServerState;
 use emp_state::{
@@ -103,7 +102,7 @@ fn resolve(state: &ServerState, input: AccountImport) -> Result<ResolvedImport, 
         resolved["prefix"] = Value::String(id);
     }
     resolved["name"] = Value::String(name);
-    if native_auth_document(&state.backend.accounts.native_auth_path)
+    if native_auth_document(&state.backend.codex.auth_path)
         .is_some_and(|native| emp_state::same_account_auth(&native, &auth))
     {
         resolved["hidden_models"] = config["native_hidden_models"].clone();
@@ -306,7 +305,7 @@ fn import_credentials(
                     .map_err(|error| error.to_string())
             })?;
             receipt.check("account_and_configuration_committed", Some(true));
-            forget_pending_rotation(state, &auth_path);
+            state.backend.accounts.forget_pending_rotation(&auth_path);
             if let Ok(mut cancellations) = state.backend.accounts.quota_refresh_cancellations.lock()
             {
                 cancellations.insert(account_id.to_owned(), Arc::new(AtomicBool::new(false)));

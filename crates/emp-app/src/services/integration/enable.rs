@@ -51,7 +51,7 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
         return Err(EnableError::EmptyCatalog);
     }
     let (catalog_path, _) = refresh_catalog(state).map_err(|_| EnableError::Unavailable(503))?;
-    let dynamic = native_subscription_headers(&state.backend.accounts.native_auth_path).is_some();
+    let dynamic = native_subscription_headers(&state.backend.codex.auth_path).is_some();
     let base_url = &state.base_url;
     let path = catalog_path.to_string_lossy();
     if dynamic {
@@ -77,7 +77,7 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
             }
         }
     }
-    let auth_path = &state.backend.accounts.native_auth_path;
+    let auth_path = &state.backend.codex.auth_path;
     let created =
         emp_codex::configuration::local_auth::ensure(auth_path, &state.backend.gateway_key)
             .map_err(|_| EnableError::Unavailable(409))?;

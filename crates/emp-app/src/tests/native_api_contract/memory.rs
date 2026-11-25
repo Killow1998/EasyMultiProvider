@@ -5,8 +5,12 @@ use super::*;
 fn memory_websocket_pause_keeps_the_connection_usable_for_normal_turns() {
     let (_directory, server) =
         crate::tests::memory_routing_contract::fixture("http://127.0.0.1:9/v1");
-    *server.state.backend.accounts.native_quota.lock().unwrap() =
-        Some(json!({"rate_limits":{"primary":{"usedPercent":100}}}));
+    server
+        .state
+        .backend
+        .quota
+        .set_native_quota(Some(json!({"rate_limits":{"primary":{"usedPercent":100}}})))
+        .unwrap();
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
     let cookie = session_header(&server);
     let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\n\r\n",server.local_addr().port()).into_bytes();

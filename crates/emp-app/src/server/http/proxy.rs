@@ -179,7 +179,7 @@ pub(crate) fn proxy_identity(
         || state.sessions.contains(supplied_session.as_deref(), now)
         || valid_caller_authorization(
             request.header("Authorization"),
-            &state.backend.accounts.native_auth_path,
+            &state.backend.codex.auth_path,
         ))
     .then(|| Caller {
         id: "local".into(),

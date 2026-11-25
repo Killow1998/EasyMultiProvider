@@ -1,10 +1,11 @@
 //! CPA windows share the existing quota store and its retention and point limits.
 use super::{Quota, REFRESH_INTERVAL_SECONDS};
-use emp_codex::quota_history::{QuotaHistoryError, QuotaHistoryStore};
+use crate::services::quota::QuotaState;
+use emp_codex::quota_history::QuotaHistoryError;
 use serde_json::{Value, json};
 
 pub(super) fn record(
-    store: &QuotaHistoryStore,
+    history: &QuotaState,
     identity: &str,
     quota: &Quota,
     observed_at: i64,
@@ -36,7 +37,7 @@ pub(super) fn record(
         }
         limits.insert(format!("account:{}", account.id), Value::Object(windows));
     }
-    store.append_snapshot(
+    history.record_snapshot(
         &format!("cpa:{identity}"),
         &json!({"rate_limits_by_limit_id":limits}),
         observed_at,
@@ -44,13 +45,13 @@ pub(super) fn record(
 }
 
 pub(super) fn query(
-    store: &QuotaHistoryStore,
+    history: &QuotaState,
     identity: &str,
     start: i64,
     end: i64,
 ) -> Result<Value, &'static str> {
-    let mut result = store
-        .query_period(&format!("cpa:{identity}"), start, end)
+    let mut result = history
+        .history_for_period(&format!("cpa:{identity}"), start, end)
         .map_err(|_| "cpa_quota_history_unavailable")?;
     result["scope"] = json!("shared_pool");
     result["sample_interval_seconds"] = json!(REFRESH_INTERVAL_SECONDS);

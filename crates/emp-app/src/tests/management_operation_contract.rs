@@ -41,8 +41,8 @@ fn saved_preference_and_failed_catalog_are_distinct_and_linked_to_http() {
         server
             .state
             .backend
-            .accounts
-            .native_auth_path
+            .codex
+            .auth_path
             .starts_with(canonical_root(&root))
     );
     if path.is_file() {

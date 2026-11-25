@@ -239,16 +239,10 @@ fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
     let fixture = Fixture::with_directory(directory);
     let state = Arc::clone(&fixture.server.state);
     let clock = crate::server::tests::TestDrainClock::install(&state.lifecycle);
-    state
-        .backend
-        .accounts
-        .pending_rotations
-        .lock()
-        .unwrap()
-        .insert(
-            auth_path.to_str().unwrap().to_owned(),
-            json!({"tokens":{"access_token":"rotated"}}),
-        );
+    state.backend.accounts.test_retain_pending_rotation(
+        auth_path.to_str().unwrap(),
+        &json!({"tokens":{"access_token":"rotated"}}),
+    );
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

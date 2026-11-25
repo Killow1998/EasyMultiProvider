@@ -161,7 +161,7 @@ pub(crate) fn workers(
                 }
                 usage.history.scan(
                     &usage.ledger,
-                    &history_state.backend.accounts.codex_home,
+                    &history_state.backend.codex.home,
                     &config,
                     system_now(),
                 );

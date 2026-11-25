@@ -144,7 +144,7 @@ pub(super) fn incoming_headers(request: Request<'_>) -> BTreeMap<String, String>
 }
 
 pub(super) fn native_headers(state: &ServerState) -> Option<BTreeMap<String, String>> {
-    let auth = native_auth_document(&state.backend.accounts.native_auth_path)?;
+    let auth = native_auth_document(&state.backend.codex.auth_path)?;
     let auth = emp_state::validate_auth_json(&auth).ok()?;
     account_auth_headers(&auth)
 }

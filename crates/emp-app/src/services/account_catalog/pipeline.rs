@@ -26,7 +26,7 @@ impl RefreshSource {
         base: &str,
         client_version: String,
     ) -> Option<Self> {
-        let headers = native_subscription_headers(&state.backend.accounts.native_auth_path)?;
+        let headers = native_subscription_headers(&state.backend.codex.auth_path)?;
         let owner = emp_codex::native_catalog_owner(&headers);
         let credential_fingerprint = credential_fingerprint(&headers);
         let path = emp_codex::native_catalog_path(config.as_object()?);
@@ -192,7 +192,7 @@ pub(crate) fn persist_fetched_catalog(
         return Err(PersistError::SourceChanged);
     }
     let path = if source.native {
-        let current_headers = native_subscription_headers(&state.backend.accounts.native_auth_path);
+        let current_headers = native_subscription_headers(&state.backend.codex.auth_path);
         let current_map = current.as_object().expect("normalized config");
         if emp_codex::native_catalog_path(current_map) != source.path
             || current_headers.as_ref() != Some(&source.headers)
@@ -225,7 +225,7 @@ pub(crate) fn persist_fetched_catalog(
             let duplicates = duplicate_accounts(
                 &current,
                 &state.backend.configuration.vault,
-                &state.backend.accounts.native_auth_path,
+                &state.backend.codex.auth_path,
             );
             if duplicates.contains_key(&source.id) {
                 return Err(PersistError::SourceChanged);

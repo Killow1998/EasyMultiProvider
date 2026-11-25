@@ -1118,7 +1118,7 @@ fn team_reads_preserve_identity_and_auth() {
 #[test]
 fn inspection_reads_preserve_auth_and_hide_credentials() {
     let fixture = Fixture::new();
-    let auth = &fixture.server.state.backend.accounts.native_auth_path;
+    let auth = &fixture.server.state.backend.codex.auth_path;
     std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
     std::fs::write(auth, br#"{"tokens":{"access_token":"parity-private-token","account_id":"parity-private-account"}}"#).unwrap();
     fixture
@@ -1235,7 +1235,7 @@ async fn proxy_probe(
 fn account_reads_preserve_json_and_auth() {
     let fixture = Fixture::new();
     let state = &fixture.server.state;
-    let auth_path = &state.backend.accounts.native_auth_path;
+    let auth_path = &state.backend.codex.auth_path;
     std::fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
     std::fs::write(
         auth_path,

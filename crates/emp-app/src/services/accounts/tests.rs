@@ -358,9 +358,8 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
     server
         .state
         .backend
-        .accounts
-        .quota_history
-        .append_snapshot(&original_owner, &quota, 2_000_100)
+        .quota
+        .record_snapshot(&original_owner, &quota, 2_000_100)
         .expect("record original quota sample");
     delete_account_state(None, &server.state, "demo").expect("delete original account");
 
@@ -372,9 +371,8 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
     let restored = server
         .state
         .backend
-        .accounts
-        .quota_history
-        .query(&original_owner, "1h", 2_000_200)
+        .quota
+        .history_for_range(&original_owner, "1h", 2_000_200)
         .expect("query restored quota history");
     assert_eq!(restored["series"][0]["points"].as_array().unwrap().len(), 1);
     delete_account_state(None, &server.state, "demo-restored").expect("delete restored account");
@@ -385,9 +383,8 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
     let other_history = server
         .state
         .backend
-        .accounts
-        .quota_history
-        .query(&other_owner, "1h", 2_000_200)
+        .quota
+        .history_for_range(&other_owner, "1h", 2_000_200)
         .expect("query other account history");
     assert_eq!(other_history["series"], json!([]));
     server
@@ -435,11 +432,11 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
         )
         .expect("import account")
     };
-    let history = &server.state.backend.accounts.quota_history;
+    let history = &server.state.backend.quota;
     let sample = |used: u64| json!({"rate_limits":{"limitId":"codex","primary":{"usedPercent":used,"windowDurationMins":300}}});
     let points = |owner: &str| {
         history
-            .query(owner, "1h", 2_000_900)
+            .history_for_range(owner, "1h", 2_000_900)
             .expect("query history")["series"]
             .as_array()
             .map_or(0, |series| {
@@ -453,16 +450,16 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     import("demo", "upstream-demo");
     // Rows written by the previous release under local keys.
     history
-        .append_snapshot("demo", &sample(10), 2_000_100)
+        .record_snapshot("demo", &sample(10), 2_000_100)
         .unwrap();
     history
-        .append_snapshot("demo", &sample(20), 2_000_400)
+        .record_snapshot("demo", &sample(20), 2_000_400)
         .unwrap();
     history
-        .append_snapshot("@native", &sample(30), 2_000_100)
+        .record_snapshot("@native", &sample(30), 2_000_100)
         .unwrap();
     history
-        .append_snapshot("ghost", &sample(40), 2_000_100)
+        .record_snapshot("ghost", &sample(40), 2_000_100)
         .unwrap();
 
     crate::services::quota::migrate_legacy_quota_history(&server.state);
@@ -481,7 +478,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     // A legacy row written after startup is adopted before the id is freed,
     // so a different account reusing the id never inherits it.
     history
-        .append_snapshot("demo", &sample(50), 2_000_700)
+        .record_snapshot("demo", &sample(50), 2_000_700)
         .unwrap();
     delete_account_state(None, &server.state, "demo").expect("delete demo");
     assert_eq!(points(&owner), 3);
@@ -494,7 +491,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     // Reimporting the id with different credentials attributes its legacy
     // rows with the credentials that recorded them first.
     history
-        .append_snapshot("demo", &sample(60), 2_000_800)
+        .record_snapshot("demo", &sample(60), 2_000_800)
         .unwrap();
     // A reimport that is rejected leaves the rows alone.
     import("team-a", "upstream-team-a");
@@ -541,7 +538,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     // attributed; deleting the account drops them instead of leaving them
     // for the next account that reuses the id.
     history
-        .append_snapshot("demo", &sample(70), 2_000_850)
+        .record_snapshot("demo", &sample(70), 2_000_850)
         .unwrap();
     let owner_auth = emp_state::account_auth_path(
         &server
@@ -608,17 +605,10 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
     )
     .unwrap();
     // A rotation of the first credential is still waiting to be saved.
-    server
-        .state
-        .backend
-        .accounts
-        .pending_rotations
-        .lock()
-        .unwrap()
-        .insert(
-            auth_path.to_string_lossy().into_owned(),
-            json!({"tokens":{"access_token":"first-rotated","account_id":"upstream-demo"}}),
-        );
+    server.state.backend.accounts.test_retain_pending_rotation(
+        auth_path.to_string_lossy().as_ref(),
+        &json!({"tokens":{"access_token":"first-rotated","account_id":"upstream-demo"}}),
+    );
 
     let lock = super::quota_refresh_lock(&server.state, "demo").unwrap();
     let guard = lock.lock().unwrap();
@@ -640,10 +630,7 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
             .expect("import finishes once the lock is free");
     });
 
-    assert_eq!(
-        crate::services::quota::flush_pending_rotations(&server.state),
-        0
-    );
+    assert_eq!(super::flush_pending_rotations(&server.state), 0);
     let stored = server
         .state
         .backend
@@ -682,13 +669,7 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
     };
     import_account_state(None, &server.state, &body("upstream-demo")).expect("import demo");
     // Legacy rows exist, but neither adoption nor deletion can reach them.
-    let history_path = server
-        .state
-        .backend
-        .accounts
-        .quota_history
-        .path()
-        .to_path_buf();
+    let history_path = root.join("state/quota_history.sqlite3");
     std::fs::write(&history_path, b"not a sqlite database").expect("break quota history");
 
     assert!(delete_account_state(None, &server.state, "demo").is_err());
@@ -880,9 +861,9 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
     };
     import_account_state(None, &server.state, &body("demo", "demo", "upstream-demo"))
         .expect("import demo");
-    let history = &server.state.backend.accounts.quota_history;
+    let history = &server.state.backend.quota;
     history
-        .append_snapshot(
+        .record_snapshot(
             "demo",
             &json!({"rate_limits":{"limitId":"codex","primary":{"usedPercent":10,"windowDurationMins":300}}}),
             2_000_100,

@@ -56,8 +56,7 @@ impl TeamState {
         }
         let shares: Vec<SharedService> = serde_json::from_value(snapshot["shares"].clone())
             .map_err(|_| Failure(502, "invalid_workspace_reply".into()))?;
-        let native =
-            super::super::accounts::native_auth_document(&state.backend.accounts.native_auth_path);
+        let native = super::super::accounts::native_auth_document(&state.backend.codex.auth_path);
         let metadata: Vec<_> = shares
             .iter()
             .map(|share| {

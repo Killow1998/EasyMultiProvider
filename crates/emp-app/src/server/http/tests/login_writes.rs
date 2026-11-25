@@ -263,7 +263,7 @@ fn assert_one_saved_account(fixture: &Fixture, name: &str, source: Value, token:
 }
 
 fn native_auth(fixture: &Fixture) -> &Path {
-    &fixture.server.state.backend.accounts.native_auth_path
+    &fixture.server.state.backend.codex.auth_path
 }
 
 async fn conflict(fixture: &Fixture, path: &str, body: &[u8], code: &str) {

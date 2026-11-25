@@ -256,18 +256,23 @@ fn auto_review_selects_candidates_by_headroom_and_cooldown() {
             && (index < 3 || index == 4)
         {
             if index == 4 {
-                std::fs::remove_file(&server.state.backend.accounts.native_auth_path)
+                std::fs::remove_file(&server.state.backend.codex.auth_path)
                     .expect("make native auth unavailable for ordinary fallback");
             }
-            *server.state.backend.accounts.native_quota.lock().unwrap() = native_quota.clone();
+            server
+                .state
+                .backend
+                .quota
+                .set_native_quota(native_quota.clone())
+                .unwrap();
             set_cooldowns(&server, &case["cooldowns"]);
             let mut runtime_config = case_config.clone();
             runtime_config["_native_auth_path"] = Value::String(
                 server
                     .state
                     .backend
-                    .accounts
-                    .native_auth_path
+                    .codex
+                    .auth_path
                     .to_string_lossy()
                     .into_owned(),
             );
@@ -329,7 +334,7 @@ fn http_auto_review_skips_symlink_native_and_missing_account_catalog_without_lea
     let (_directory, server, config) =
         make_review_server(&upstream.base_url(), &accounts, Some("symlink"));
     assert!(!crate::services::accounts::regular_file(
-        &server.state.backend.accounts.native_auth_path
+        &server.state.backend.codex.auth_path
     ));
     write_owned_account_catalog(
         &server,
@@ -388,13 +393,17 @@ fn http_auto_review_excludes_free_and_go_before_and_after_quota_refresh() {
                 native_document = native_document["tokens"].take();
             }
             std::fs::write(
-                &server.state.backend.accounts.native_auth_path,
+                &server.state.backend.codex.auth_path,
                 serde_json::to_vec(&native_document).unwrap(),
             )
             .unwrap();
             if quota_known {
-                *server.state.backend.accounts.native_quota.lock().unwrap() =
-                    Some(json!({"plan_type":native_plan}));
+                server
+                    .state
+                    .backend
+                    .quota
+                    .set_native_quota(Some(json!({"plan_type":native_plan})))
+                    .unwrap();
             }
             for (index, plan) in ["free", "go", "plus"].into_iter().enumerate() {
                 let path =
@@ -481,7 +490,7 @@ fn http_auto_review_uses_imported_subscription_when_native_has_no_subscription()
             [json!({"id":"imported","name":"Imported","prefix":"imported","enabled":true})];
         let (_directory, server, _) = make_review_server(&upstream.base_url(), &accounts, None);
         if let Some(auth) = native_auth {
-            std::fs::write(&server.state.backend.accounts.native_auth_path, auth).unwrap();
+            std::fs::write(&server.state.backend.codex.auth_path, auth).unwrap();
         }
         let wire = post(
             &server,
@@ -624,7 +633,12 @@ fn websocket_auto_review_excludes_free_and_go_in_the_shared_route() {
     ];
     let (_directory, server, _) =
         make_review_server(&upstream.base_url(), &accounts, Some("regular"));
-    *server.state.backend.accounts.native_quota.lock().unwrap() = Some(json!({"plan_type":"free"}));
+    server
+        .state
+        .backend
+        .quota
+        .set_native_quota(Some(json!({"plan_type":"free"})))
+        .unwrap();
     let url = format!("ws://{}/v1/responses", server.local_addr());
     let headers = BTreeMap::from([(
         "x-emp-session".to_owned(),
@@ -676,8 +690,8 @@ fn observation_failure_and_success_update_the_next_request_candidates() {
             server
                 .state
                 .backend
-                .accounts
-                .native_auth_path
+                .codex
+                .auth_path
                 .to_string_lossy()
                 .into_owned(),
         );
@@ -700,8 +714,8 @@ fn observation_failure_and_success_update_the_next_request_candidates() {
             server
                 .state
                 .backend
-                .accounts
-                .native_auth_path
+                .codex
+                .auth_path
                 .to_string_lossy()
                 .into_owned(),
         );
@@ -747,8 +761,8 @@ fn observation_failure_and_success_update_the_next_request_candidates() {
             server
                 .state
                 .backend
-                .accounts
-                .native_auth_path
+                .codex
+                .auth_path
                 .to_string_lossy()
                 .into_owned(),
         );

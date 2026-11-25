@@ -247,8 +247,7 @@ fn preview(
     preferences::apply(&mut config, &resolution.updates);
     let mut warnings = Vec::new();
     let mut model_previews = serde_json::Map::new();
-    let native =
-        crate::services::accounts::native_auth_document(&state.backend.accounts.native_auth_path);
+    let native = crate::services::accounts::native_auth_document(&state.backend.codex.auth_path);
     let credentials = config["accounts"]
         .as_array()
         .into_iter()

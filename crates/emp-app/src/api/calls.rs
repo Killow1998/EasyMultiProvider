@@ -92,7 +92,7 @@ pub(crate) fn query(
         .backend
         .usage
         .sessions
-        .resolve(&state.backend.accounts.codex_home, &ids);
+        .resolve(&state.backend.codex.home, &ids);
     let queries = report["records"]
         .as_array()
         .into_iter()
@@ -108,7 +108,7 @@ pub(crate) fn query(
         .backend
         .usage
         .tool_timings
-        .resolve(&state.backend.accounts.codex_home, &queries);
+        .resolve(&state.backend.codex.home, &queries);
     for row in report["records"].as_array_mut().into_iter().flatten() {
         if let Some(name) = row["session_id"].as_str().and_then(|id| names.get(id)) {
             row["session_name"] = json!(name);

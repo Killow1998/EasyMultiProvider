@@ -23,11 +23,9 @@ pub(crate) fn validate_update(
         .collect();
     let native_plan = state
         .backend
-        .accounts
-        .native_quota
-        .lock()
-        .ok()
-        .and_then(|quota| quota.as_ref()?["plan_type"].as_str().map(str::to_owned));
+        .quota
+        .with_native_quota(|quota| quota["plan_type"].as_str().map(str::to_owned))
+        .flatten();
     let previous_groups = previous["model_groups"]
         .as_array()
         .expect("normalized groups");

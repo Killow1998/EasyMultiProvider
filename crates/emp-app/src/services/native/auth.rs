@@ -91,7 +91,7 @@ pub(super) fn resolve_headers(
         selected = Some(account_headers(state, account)?);
         NativeAuth::Account(selected.as_ref().expect("account headers"))
     } else if provider.get("implicit_native") == Some(&Value::Bool(true)) {
-        let document = native_auth_document(&state.backend.accounts.native_auth_path);
+        let document = native_auth_document(&state.backend.codex.auth_path);
         if document
             .as_ref()
             .is_some_and(emp_codex::configuration::local_auth::is_local)

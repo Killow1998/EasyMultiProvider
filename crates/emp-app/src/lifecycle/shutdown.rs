@@ -111,15 +111,15 @@ impl ServerHandle {
                 .map_err(|_| AppError::ServerStopped)
         });
         let restoration = restoration.and(listener);
-        let credential_operations = &self.state.backend.accounts.credential_operations;
-        let _ = credential_operations.close_and_drain(Duration::ZERO);
+        let accounts = &self.state.backend.accounts;
+        let _ = accounts.close_credential_operations(Duration::ZERO);
         self.signal_worker_stop(WorkerStop::Services);
         for worker in self.workers.drain(..) {
             let _: () = worker.join().map_err(|_| AppError::ServerStopped)?;
         }
         self.state.backend.modules.stop();
-        let unfinished = credential_operations.close_and_drain(CREDENTIAL_DRAIN_TIMEOUT);
-        let unsaved = unfinished + crate::services::quota::flush_pending_rotations(&self.state);
+        let unfinished = accounts.close_credential_operations(CREDENTIAL_DRAIN_TIMEOUT);
+        let unsaved = unfinished + crate::services::accounts::flush_pending_rotations(&self.state);
         if unsaved == 0 {
             return restoration;
         }
@@ -139,10 +139,7 @@ impl ServerHandle {
         }
         if matches!(workers, WorkerStop::Services | WorkerStop::All) {
             self.state.backend.usage.stop();
-            let accounts = &self.state.backend.accounts;
-            if let Ok(_wait) = accounts.quota_sampler_wait.lock() {
-                accounts.quota_sampler_condition.notify_all();
-            }
+            self.state.backend.quota.wake_sampler();
             crate::services::runtime::stop_watch(&self.state);
         }
     }

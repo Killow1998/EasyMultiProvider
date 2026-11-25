@@ -123,7 +123,7 @@ pub(crate) fn execute(
             let expected = if account_name.is_some() {
                 None
             } else {
-                local_auth::read(&state.backend.accounts.native_auth_path)
+                local_auth::read(&state.backend.codex.auth_path)
                     .map_err(|_| "login_auth_unreadable")?
             };
             let helper = (|| {

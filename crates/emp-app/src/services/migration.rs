@@ -137,7 +137,7 @@ pub(crate) fn export(
                     &selected_config,
                     &state.backend.configuration.vault,
                     Some(&selected_groups),
-                    Some(&state.backend.accounts.native_auth_path),
+                    Some(&state.backend.codex.auth_path),
                 )
                 .map_err(MigrationError::invalid)?;
                 let payload = selection.apply(&payload)?;
@@ -159,7 +159,7 @@ pub(crate) fn export(
                         password,
                         &state.backend.configuration.vault,
                         groups.as_ref(),
-                        Some(&state.backend.accounts.native_auth_path),
+                        Some(&state.backend.codex.auth_path),
                     )
                 })
                 .map_err(MigrationError::invalid)?;

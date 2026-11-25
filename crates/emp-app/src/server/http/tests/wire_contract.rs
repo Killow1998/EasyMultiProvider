@@ -197,7 +197,7 @@ fn fixture_defaults_stay_under_config_root() {
                     None
                 );
                 let auth = root.join("codex/auth.json");
-                assert_eq!(backend.accounts.native_auth_path, auth);
+                assert_eq!(backend.codex.auth_path, auth);
                 assert_eq!(
                     backend.integration.manager.config_path(),
                     root.join("codex/config.toml")

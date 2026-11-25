@@ -37,8 +37,8 @@ pub(crate) fn refresh_catalog(state: &ServerState) -> Result<(PathBuf, usize), (
 pub(crate) fn generated_catalog_path(state: &ServerState) -> PathBuf {
     let home = state
         .backend
-        .accounts
-        .native_auth_path
+        .codex
+        .auth_path
         .parent()
         .unwrap_or_else(|| Path::new("."));
     emp_state::generated_catalog_path(Some(home))

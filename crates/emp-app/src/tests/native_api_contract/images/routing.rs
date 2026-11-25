@@ -69,8 +69,12 @@ fn image_routing_automatic_considers_general_and_image_limits_independently_of_r
     let upstream = ImageUpstream::start(200);
     let (_directory, server) = image_server(&upstream.base_url());
     configure(&server, "auto", "");
-    *server.state.backend.accounts.native_quota.lock().unwrap() =
-        Some(json!({"rate_limits":{"primary":{"usedPercent":100}}}));
+    server
+        .state
+        .backend
+        .quota
+        .set_native_quota(Some(json!({"rate_limits":{"primary":{"usedPercent":100}}})))
+        .unwrap();
     {
         let mut config = server
             .state
@@ -126,8 +130,12 @@ fn image_routing_automatic_learns_limits_without_replaying_requests() {
         let upstream = ImageUpstream::start(status);
         let (_directory, server) = image_server(&upstream.base_url());
         configure(&server, "auto", "");
-        *server.state.backend.accounts.native_quota.lock().unwrap() =
-            Some(json!({"plan_type":"free"}));
+        server
+            .state
+            .backend
+            .quota
+            .set_native_quota(Some(json!({"plan_type":"free"})))
+            .unwrap();
         server
             .state
             .backend
@@ -181,7 +189,7 @@ fn image_routing_unavailable_fixed_accounts_never_fall_back() {
                 .lock()
                 .unwrap()["accounts"][1]["enabled"] = json!(false);
         } else if target == "@native" {
-            std::fs::remove_file(&server.state.backend.accounts.native_auth_path).unwrap();
+            std::fs::remove_file(&server.state.backend.codex.auth_path).unwrap();
         }
         assert!(image(&server, "unavailable", "edits").starts_with("HTTP/1.1 409"));
         assert!(
@@ -269,8 +277,12 @@ fn image_routing_automatic_rejects_unusable_accounts_and_expires_stale_windows()
         let upstream = ImageUpstream::start(200);
         let (_directory, server) = image_server(&upstream.base_url());
         configure(&server, "auto", "");
-        *server.state.backend.accounts.native_quota.lock().unwrap() =
-            Some(json!({"plan_type":"free"}));
+        server
+            .state
+            .backend
+            .quota
+            .set_native_quota(Some(json!({"plan_type":"free"})))
+            .unwrap();
         {
             let mut config = server
                 .state
@@ -320,7 +332,7 @@ fn image_routing_automatic_prefers_known_balance_and_keeps_tie_order() {
         let upstream = ImageUpstream::start(200);
         let (_directory, server) = image_server(&upstream.base_url());
         configure(&server, "auto", "");
-        *server.state.backend.accounts.native_quota.lock().unwrap() = native;
+        server.state.backend.quota.set_native_quota(native).unwrap();
         {
             let mut config = server
                 .state

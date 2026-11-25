@@ -25,7 +25,7 @@ enum Upload {
 }
 
 fn upload_source(state: &ServerState) -> Result<Upload> {
-    let path = &state.backend.accounts.native_auth_path;
+    let path = &state.backend.codex.auth_path;
     let document = crate::services::accounts::native_auth_document(path);
     let now = crate::util::system_now() as i64;
     let Some(auth) = document else {
@@ -38,11 +38,9 @@ fn upload_source(state: &ServerState) -> Result<Upload> {
         };
         snapshot.plan = state
             .backend
-            .accounts
-            .native_quota
-            .lock()
-            .ok()
-            .and_then(|quota| plan(quota.as_ref()?["plan_type"].as_str()?))
+            .quota
+            .with_native_quota(|quota| plan(quota["plan_type"].as_str()?))
+            .flatten()
             .or(snapshot.plan);
         return Ok(Upload::Native(snapshot));
     }

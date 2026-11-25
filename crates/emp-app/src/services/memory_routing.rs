@@ -125,16 +125,10 @@ pub(crate) fn prepare(
         .and_then(|call| call["account_id"].as_str())
         .unwrap_or("@native");
     let route_model = if account_id == "@native" {
-        if !crate::services::accounts::regular_file(&state.backend.accounts.native_auth_path) {
+        if !crate::services::accounts::regular_file(&state.backend.codex.auth_path) {
             return Err(fail("native_unavailable"));
         }
-        let quota = state
-            .backend
-            .accounts
-            .native_quota
-            .lock()
-            .ok()
-            .and_then(|quota| quota.clone());
+        let quota = state.backend.quota.with_native_quota(Value::clone);
         if crate::services::subscription_quota::current_headroom(quota.as_ref())
             .is_some_and(|quota| quota <= 0.0)
         {

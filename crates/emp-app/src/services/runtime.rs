@@ -161,7 +161,7 @@ pub(crate) fn sync_runtime(
         )
     } else {
         observe(
-            &state.backend.accounts.codex_home,
+            &state.backend.codex.home,
             &expected,
             &target,
             (target == "emp").then_some(&catalog),
@@ -191,8 +191,8 @@ pub(crate) fn compatibility_snapshot(state: &ServerState, refresh: bool) -> Valu
 }
 
 pub(crate) fn helper_binary(state: &ServerState) -> Result<String, emp_codex::quota::QuotaError> {
-    if state.backend.accounts.codex_binary != "codex" {
-        return Ok(state.backend.accounts.codex_binary.clone());
+    if state.backend.codex.binary != "codex" {
+        return Ok(state.backend.codex.binary.clone());
     }
     use emp_codex::runtime_inventory::HelperUnavailable;
     let prepared = state

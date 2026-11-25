@@ -98,7 +98,7 @@ pub(crate) fn read(
             return sessions::read(request, state, &filter, now, cancelled);
         }
         state.backend.usage.query_series(
-            &state.backend.accounts.codex_home,
+            &state.backend.codex.home,
             &filter,
             value("conversation").as_deref() == Some("true"),
             now,

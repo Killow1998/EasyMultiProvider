@@ -229,9 +229,7 @@ impl TeamState {
         });
         shares.clone().next()?;
         let auth = if provider == "codex-native" {
-            crate::services::accounts::native_auth_document(
-                &state.backend.accounts.native_auth_path,
-            )?
+            crate::services::accounts::native_auth_document(&state.backend.codex.auth_path)?
         } else {
             subscriptions::stored_auth(&state.backend.configuration.vault, account)?
         };

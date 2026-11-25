@@ -230,13 +230,7 @@ pub(crate) fn refresh(state: &ServerState, id: &str, force: bool) -> Option<Valu
     };
     let observed_at = crate::util::system_now();
     let history_saved = result.as_ref().is_ok_and(|quota| {
-        history::record(
-            &state.backend.accounts.quota_history,
-            &identity,
-            quota,
-            observed_at as i64,
-        )
-        .is_ok()
+        history::record(&state.backend.quota, &identity, quota, observed_at as i64).is_ok()
     });
     let observation = Observation {
         observed_at,
@@ -299,7 +293,7 @@ pub(crate) fn history(
         .clone();
     let key = provider_api_key(&provider, &state.backend.configuration.vault);
     let identity = identity(&provider, &key);
-    let mut result = history::query(&state.backend.accounts.quota_history, &identity, start, end);
+    let mut result = history::query(&state.backend.quota, &identity, start, end);
     if let Ok(payload) = &mut result {
         let cache = state
             .backend

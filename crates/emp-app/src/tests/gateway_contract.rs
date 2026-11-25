@@ -181,7 +181,7 @@ fn gateway_usage_rejects_invalid_periods_as_client_errors() {
 fn gateway_key_survives_login_changes_and_cannot_open_management_endpoints() {
     let (directory, server) = test_server();
     let key = server.state.backend.gateway_key.clone();
-    let auth_path = &server.state.backend.accounts.native_auth_path;
+    let auth_path = &server.state.backend.codex.auth_path;
     let original = br#"{"auth_mode":"apikey","OPENAI_API_KEY":"native-fixture"}"#;
     emp_state::atomic_write_private_state(auth_path, original).unwrap();
     let authorization = format!("Authorization: Bearer {key}");

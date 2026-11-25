@@ -48,7 +48,7 @@ impl CatalogSources {
             });
             accounts.insert(id.to_owned(), catalog);
         }
-        let native_auth = native_auth_document(&state.backend.accounts.native_auth_path);
+        let native_auth = native_auth_document(&state.backend.codex.auth_path);
         let duplicates = emp_state::duplicate_account_status(native_auth.as_ref(), &credentials);
         let native_is_local_key = native_auth
             .as_ref()

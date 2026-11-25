@@ -79,9 +79,7 @@ pub(super) fn prepare_with_config(
         .project_subscription_credentials(state, &mut config);
     hydrate_provider_keys(&mut config, &state.backend.configuration.vault);
     if let Some(config) = config.as_object_mut() {
-        if emp_codex::configuration::local_auth::mode(&state.backend.accounts.native_auth_path)
-            == "api_key"
-        {
+        if emp_codex::configuration::local_auth::mode(&state.backend.codex.auth_path) == "api_key" {
             let endpoint = config
                 .get("codex_base_url")
                 .and_then(Value::as_str)
@@ -92,14 +90,7 @@ pub(super) fn prepare_with_config(
         }
         config.insert(
             "_native_auth_path".to_owned(),
-            Value::String(
-                state
-                    .backend
-                    .accounts
-                    .native_auth_path
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
+            Value::String(state.backend.codex.auth_path.to_string_lossy().into_owned()),
         );
     }
     let automatic =

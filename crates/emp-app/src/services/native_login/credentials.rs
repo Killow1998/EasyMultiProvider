@@ -35,8 +35,8 @@ pub(super) fn switch(state: &ServerState, source: Source) -> Result<Value, &'sta
             emp_state::validate_auth_json(&stored).map_err(|_| "login_credentials_invalid")?
         }
     };
-    let expected = local_auth::read(&state.backend.accounts.native_auth_path)
-        .map_err(|_| "login_auth_unreadable")?;
+    let expected =
+        local_auth::read(&state.backend.codex.auth_path).map_err(|_| "login_auth_unreadable")?;
     install(state, &expected, &auth)
 }
 
@@ -54,14 +54,12 @@ pub(super) fn install(
     {
         return Err("login_cancelled");
     }
-    if !local_auth::install(&state.backend.accounts.native_auth_path, expected, auth)
+    if !local_auth::install(&state.backend.codex.auth_path, expected, auth)
         .map_err(|_| "login_storage_failed")?
     {
         return Err("login_auth_changed");
     }
-    if let Ok(mut quota) = state.backend.accounts.native_quota.lock() {
-        *quota = None;
-    }
+    let _ = state.backend.quota.set_native_quota(None);
     let integration_updated = !manager
         .status()
         .map_err(|_| "login_busy")?
@@ -79,7 +77,7 @@ pub(super) fn use_local_key(
 ) -> Result<Value, &'static str> {
     let manager = &state.backend.integration.manager;
     let _operation = manager.operation_lock().map_err(|_| "login_busy")?;
-    let path = &state.backend.accounts.native_auth_path;
+    let path = &state.backend.codex.auth_path;
     let auth = local_auth::read(path)
         .map_err(|_| "login_auth_unreadable")?
         .ok_or("login_auth_unreadable")?;
@@ -99,9 +97,7 @@ pub(super) fn use_local_key(
         return Err("login_auth_changed");
     }
     files.commit();
-    if let Ok(mut quota) = state.backend.accounts.native_quota.lock() {
-        *quota = None;
-    }
+    let _ = state.backend.quota.set_native_quota(None);
     let integration_updated = !active
         || (manager.restore().is_ok_and(|result| result.ok())
             && crate::services::integration::enable::apply(state).is_ok_and(|result| result.ok()));

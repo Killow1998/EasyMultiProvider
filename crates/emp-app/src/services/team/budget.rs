@@ -33,9 +33,8 @@ impl TeamState {
 
     pub(crate) fn check_native_budget(&self, state: &ServerState) -> Result<(), RequestDenied> {
         self.check_subscription_budget(state, "codex-native", || {
-            let auth = crate::services::accounts::native_auth_document(
-                &state.backend.accounts.native_auth_path,
-            )?;
+            let auth =
+                crate::services::accounts::native_auth_document(&state.backend.codex.auth_path)?;
             emp_codex::account_auth_headers(&auth)?;
             Some(emp_state::accounts::account_auth_identity(&auth))
         })

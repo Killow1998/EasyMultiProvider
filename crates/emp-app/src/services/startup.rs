@@ -57,8 +57,7 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
             "EMP restarted; runtime catalog was not assumed",
         )?;
         refresh_catalog(state)?;
-        let dynamic =
-            native_subscription_headers(&state.backend.accounts.native_auth_path).is_some();
+        let dynamic = native_subscription_headers(&state.backend.codex.auth_path).is_some();
         if let Some(lease) = result.lease.as_ref()
             && (is_previous_loopback_url(
                 lease.fields["openai_base_url"].applied.value.as_deref(),
@@ -98,10 +97,9 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
             }
             mark_pending(state, "emp", "EMP configuration applied")?;
         }
-        let auth =
-            emp_codex::configuration::local_auth::read(&state.backend.accounts.native_auth_path)
-                .map_err(|_| ())?
-                .unwrap_or_default();
+        let auth = emp_codex::configuration::local_auth::read(&state.backend.codex.auth_path)
+            .map_err(|_| ())?
+            .unwrap_or_default();
         if (crate::services::integration::enable::image_mcp_required(&auth)
             || result.lease.as_ref().is_some_and(|lease| {
                 lease.fields[emp_codex::configuration::IMAGE_MCP_FIELD]
@@ -140,9 +138,8 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
         integration.owned.store(true, Ordering::Release);
         if super::integration::sync_features(state).is_err() {
             if manager.restore().is_ok_and(|result| result.ok()) {
-                let _ = emp_codex::configuration::local_auth::restore(
-                    &state.backend.accounts.native_auth_path,
-                );
+                let _ =
+                    emp_codex::configuration::local_auth::restore(&state.backend.codex.auth_path);
             }
             return Err(());
         }

@@ -4,6 +4,7 @@ use crate::services::activity::ActivityService;
 use crate::services::configuration::{ConfigurationState, load_server_configuration};
 use crate::services::integration::IntegrationState;
 use crate::services::observation::diagnostics::Diagnostics;
+use crate::services::quota::QuotaState;
 use crate::util::{random_hex, system_now};
 use emp_state::config::save_configuration_with_registry;
 use emp_state::official_registry::RegistrySource;
@@ -16,14 +17,11 @@ use tokio::runtime::Builder as RuntimeBuilder;
 use crate::http::auth::BootstrapToken;
 use crate::http::auth::SessionStore;
 use emp_codex::configuration::IntegrationManager;
-use emp_codex::quota_history::QuotaHistoryStore;
 use emp_transport::HttpClient;
 use emp_transport::RequestLimits;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use tokio::runtime::Runtime;
@@ -76,7 +74,9 @@ pub(crate) struct BackendState {
     pub(crate) configuration: ConfigurationState,
     pub(crate) transport: TransportState,
     pub(crate) native_websocket_connections: crate::services::native_connections::NativeConnections,
+    pub(crate) codex: CodexPaths,
     pub(crate) accounts: AccountState,
+    pub(crate) quota: QuotaState,
     pub(crate) activity: ActivityService,
     pub(crate) claude_quota: crate::services::claude_cli::quota::LocalQuota,
     pub(crate) provider_balances: crate::services::provider_balance::Balances,
@@ -93,6 +93,12 @@ pub(crate) struct BackendState {
     pub(crate) native_login: crate::services::native_login::LoginSession,
     pub(crate) account_login: crate::services::native_login::LoginSession,
     pub(crate) lan_migration: crate::services::migration::lan::LanMigration,
+}
+
+pub(crate) struct CodexPaths {
+    pub(crate) auth_path: PathBuf,
+    pub(crate) home: PathBuf,
+    pub(crate) binary: String,
 }
 
 pub(crate) struct TransportState {
@@ -239,20 +245,13 @@ impl BackendState {
                     state_root.join("gemini-signatures.sqlite3"),
                 )),
             },
-            accounts: AccountState {
-                native_auth_path,
-                codex_home: codex_home.clone(),
-                codex_binary: codex_binary.to_owned(),
-                native_quota: Mutex::new(None),
-                quota_refresh_errors: Mutex::new(BTreeMap::new()),
-                quota_refresh_locks: Mutex::new(BTreeMap::new()),
-                quota_refresh_cancellations: Mutex::new(BTreeMap::new()),
-                quota_history: QuotaHistoryStore::new(state_root.join("quota_history.sqlite3")),
-                quota_sampler_wait: Mutex::new(()),
-                quota_sampler_condition: Condvar::new(),
-                pending_rotations: Mutex::new(BTreeMap::new()),
-                credential_operations: Default::default(),
+            codex: CodexPaths {
+                auth_path: native_auth_path,
+                home: codex_home.clone(),
+                binary: codex_binary.to_owned(),
             },
+            accounts: AccountState::default(),
+            quota: QuotaState::new(&state_root),
             activity: ActivityService::new(Arc::clone(&management_events)),
             auto_review: Default::default(),
             aggregate_availability: Default::default(),

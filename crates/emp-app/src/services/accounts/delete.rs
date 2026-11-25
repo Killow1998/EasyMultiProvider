@@ -1,7 +1,6 @@
 //! Remove one merged imported service under its credential and configuration locks.
 use super::{
-    duplicate_accounts, forget_pending_rotation, notify_quota_update, quota_refresh_cancellation,
-    quota_refresh_locks,
+    duplicate_accounts, notify_quota_update, quota_refresh_cancellation, quota_refresh_locks,
 };
 use crate::app::ServerState;
 use emp_state::FileTransaction;
@@ -20,7 +19,7 @@ pub(crate) fn delete_account_state(
             duplicate_accounts(
                 config,
                 &state.backend.configuration.vault,
-                &state.backend.accounts.native_auth_path,
+                &state.backend.codex.auth_path,
             )
             .into_iter()
             .filter_map(|(id, owner)| (owner == account_id).then_some(id)),
@@ -164,7 +163,7 @@ pub(crate) fn delete_account_state(
             })?;
             receipt.check("account_and_configuration_committed", Some(true));
             for (id, path) in ids.iter().zip(&expected) {
-                forget_pending_rotation(state, path);
+                state.backend.accounts.forget_pending_rotation(path);
                 state.catalog_refresh.account_changed(id);
             }
             drop(config);

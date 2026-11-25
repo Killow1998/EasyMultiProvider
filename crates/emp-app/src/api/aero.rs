@@ -282,8 +282,7 @@ pub(super) async fn open(
     let mut response = open_module(state, monitor, &url, &headers, body).await?;
     if response.status() == 409 && response.header("x-aero-history") == Some("required") {
         observation.phase(Phase::PrepareHistory);
-        let reader =
-            emp_codex::history::CodexHomeHistoryReader::new(&state.backend.accounts.codex_home);
+        let reader = emp_codex::history::CodexHomeHistoryReader::new(&state.backend.codex.home);
         let visible =
             tokio::task::block_in_place(|| emp_context::prepare(body, incoming, false, &reader))
                 .map_err(RelayError::History)?;

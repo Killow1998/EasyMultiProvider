@@ -265,9 +265,8 @@ fn execute_inner(
                 .step("rollback_configuration", || manager.restore())
                 .is_ok_and(|result| result.ok())
             {
-                let _ = emp_codex::configuration::local_auth::restore(
-                    &state.backend.accounts.native_auth_path,
-                );
+                let _ =
+                    emp_codex::configuration::local_auth::restore(&state.backend.codex.auth_path);
             }
             return unavailable(409);
         }

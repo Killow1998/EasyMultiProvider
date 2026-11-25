@@ -59,19 +59,14 @@ pub(super) fn enrich(state: &ServerState, config: &Value, payload: &mut Value) {
                 .or_insert_with(|| json!({"name":name,"local_id":id,"email":email}));
         }
     }
-    if let Some(headers) = native_subscription_headers(&state.backend.accounts.native_auth_path) {
+    if let Some(headers) = native_subscription_headers(&state.backend.codex.auth_path) {
         let owner = account_owner(&headers);
         if !owner.is_empty() {
             let email = state
                 .backend
-                .accounts
-                .native_quota
-                .lock()
-                .ok()
-                .and_then(|q| {
-                    q.as_ref()
-                        .and_then(|v| v["account_label"].as_str().map(str::to_owned))
-                })
+                .quota
+                .with_native_quota(|quota| quota["account_label"].as_str().map(str::to_owned))
+                .flatten()
                 .unwrap_or_default();
             labels
                 .entry(("native".into(), owner))

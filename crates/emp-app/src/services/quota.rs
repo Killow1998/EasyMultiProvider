@@ -6,14 +6,13 @@ mod sampler;
 pub(crate) use sampler::{run as run_sampler, sample_quotas_once};
 
 use crate::app::ServerState;
-use crate::services::accounts::CredentialOperation;
+use crate::services::accounts::AccountCredentials;
 use crate::services::accounts::account_allows_refresh;
 use crate::services::accounts::account_public_snapshot;
 use crate::services::accounts::native_account_snapshot;
 use crate::services::accounts::native_auth_document;
 use crate::services::accounts::{
-    notify_quota_update, quota_owner_key, quota_refresh_cancellation, quota_refresh_lock,
-    quota_refresh_locks,
+    notify_quota_update, quota_owner_key, quota_refresh_cancellation, quota_refresh_locks,
 };
 use crate::util::system_now;
 use emp_codex::quota::QuotaControl;
@@ -25,12 +24,70 @@ use emp_codex::quota::run_quota_query;
 use emp_codex::quota::run_quota_query_persisting;
 use emp_codex::quota::run_quota_reset;
 use emp_codex::quota::run_quota_reset_persisting;
-use emp_codex::quota_history::QuotaHistoryError;
+use emp_codex::quota_history::{QuotaHistoryError, QuotaHistoryStore};
 use emp_state::same_account_auth;
 use serde_json::Value;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::Duration;
+
+pub(crate) struct QuotaState {
+    native: Mutex<Option<Value>>,
+    history: QuotaHistoryStore,
+    sampler_wait: Mutex<()>,
+    sampler_condition: Condvar,
+}
+
+impl QuotaState {
+    pub(crate) fn new(state_root: &Path) -> Self {
+        Self {
+            native: Mutex::new(None),
+            history: QuotaHistoryStore::new(state_root.join("quota_history.sqlite3")),
+            sampler_wait: Mutex::new(()),
+            sampler_condition: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn with_native_quota<T>(&self, read: impl FnOnce(&Value) -> T) -> Option<T> {
+        self.native.lock().ok()?.as_ref().map(read)
+    }
+
+    pub(crate) fn set_native_quota(&self, quota: Option<Value>) -> Result<(), QuotaError> {
+        let mut current = self
+            .native
+            .lock()
+            .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;
+        *current = quota;
+        Ok(())
+    }
+
+    pub(crate) fn record_snapshot(
+        &self,
+        owner: &str,
+        quota: &Value,
+        observed_at: i64,
+    ) -> Result<usize, QuotaHistoryError> {
+        self.history.append_snapshot(owner, quota, observed_at)
+    }
+
+    pub(crate) fn history_for_period(
+        &self,
+        owner: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<Value, QuotaHistoryError> {
+        self.history.query_period(owner, start, end)
+    }
+
+    pub(crate) fn history_for_range(
+        &self,
+        owner: &str,
+        range_name: &str,
+        now: i64,
+    ) -> Result<Value, QuotaHistoryError> {
+        self.history.query(owner, range_name, now)
+    }
+}
 
 fn quota_control(state: &ServerState) -> QuotaControl<'_> {
     QuotaControl {
@@ -87,204 +144,6 @@ fn save_account_quota_state(
         .ok_or_else(|| QuotaError::new("account changed during quota refresh", "quota_error"))
 }
 
-const PERSIST_ROTATION_ATTEMPTS: u32 = 3;
-
-/// Test-only fault injection: rotated-credential saves to these auth files
-/// fail. A set, so tests running in parallel do not clear each other's paths.
-#[cfg(test)]
-pub(crate) static FAIL_ROTATION_SAVES_TO: std::sync::Mutex<std::collections::BTreeSet<String>> =
-    std::sync::Mutex::new(std::collections::BTreeSet::new());
-
-fn save_rotated_credential(
-    vault: &emp_state::VaultStore,
-    auth_path: &Path,
-    auth: &Value,
-) -> Result<(), ()> {
-    if rotation_save_fails_for(auth_path) {
-        return Err(());
-    }
-    vault.write_encrypted_json(auth_path, auth).map_err(|_| ())
-}
-
-#[cfg(test)]
-fn rotation_save_fails_for(auth_path: &Path) -> bool {
-    FAIL_ROTATION_SAVES_TO.lock().is_ok_and(|failing| {
-        auth_path
-            .to_str()
-            .is_some_and(|path| failing.contains(path))
-    })
-}
-
-#[cfg(not(test))]
-fn rotation_save_fails_for(_: &Path) -> bool {
-    false
-}
-
-struct AccountCredentials<'a> {
-    state: &'a ServerState,
-    auth_file: String,
-    /// Keeps shutdown from its final save until a rotation here is saved or
-    /// pending; `None` for the saves themselves.
-    _operation: Option<CredentialOperation<'a>>,
-}
-
-impl<'a> AccountCredentials<'a> {
-    fn for_account(state: &'a ServerState, account_id: &str) -> Result<Self, QuotaError> {
-        let operation = state
-            .backend
-            .accounts
-            .credential_operations
-            .enter()
-            .ok_or_else(|| QuotaError::new("EMP is shutting down", "quota_error"))?;
-        let target = state
-            .backend
-            .configuration
-            .read()
-            .ok()
-            .and_then(|config| {
-                config
-                    .get("accounts")?
-                    .as_array()?
-                    .iter()
-                    .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
-                    .cloned()
-            })
-            .ok_or_else(|| {
-                QuotaError::new(format!("unknown account: {account_id}"), "quota_error")
-            })?;
-        let auth_file = target
-            .get("auth_file")
-            .and_then(Value::as_str)
-            .filter(|path| !path.is_empty())
-            .ok_or_else(|| {
-                QuotaError::new("account credentials are not configured", "quota_error")
-            })?
-            .to_owned();
-        Ok(Self {
-            state,
-            auth_file,
-            _operation: Some(operation),
-        })
-    }
-
-    fn auth_path(&self) -> &Path {
-        Path::new(&self.auth_file)
-    }
-
-    fn vault(&self) -> &emp_state::VaultStore {
-        &self.state.backend.configuration.vault
-    }
-
-    fn pending(&self) -> &Mutex<std::collections::BTreeMap<String, Value>> {
-        &self.state.backend.accounts.pending_rotations
-    }
-
-    /// Prefer unsaved rotated credentials: Codex may have invalidated the stored refresh token.
-    fn read(&self) -> Result<Value, QuotaError> {
-        let rotated = self
-            .pending()
-            .lock()
-            .ok()
-            .and_then(|pending| pending.get(&self.auth_file).cloned());
-        if let Some(rotated) = rotated {
-            if save_rotated_credential(self.vault(), self.auth_path(), &rotated).is_ok()
-                && let Ok(mut pending) = self.pending().lock()
-            {
-                pending.remove(&self.auth_file);
-            }
-            return Ok(rotated);
-        }
-        self.vault()
-            .read_encrypted_json(self.auth_path())
-            .map_err(|_| QuotaError::new("stored encrypted auth.json is invalid", "quota_error"))
-    }
-
-    /// Save rotated credentials durably or retain them for the next check, with retries
-    /// by the quota sampler and shutdown via [`flush_pending_rotations`].
-    fn persist(&self, refreshed: &Value) -> Result<(), ()> {
-        for attempt in 0..PERSIST_ROTATION_ATTEMPTS {
-            if save_rotated_credential(self.vault(), self.auth_path(), refreshed).is_ok() {
-                if let Ok(mut pending) = self.pending().lock() {
-                    pending.remove(&self.auth_file);
-                }
-                return Ok(());
-            }
-            if attempt + 1 < PERSIST_ROTATION_ATTEMPTS {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "轮换凭据持久化失败后按既有指数退避间隔重试"
-                )]
-                std::thread::sleep(Duration::from_millis(100 << attempt));
-            }
-        }
-        if let Ok(mut pending) = self.pending().lock() {
-            pending.insert(self.auth_file.clone(), refreshed.clone());
-        }
-        Err(())
-    }
-}
-
-/// Retry pending saves under each account's refresh lock to avoid overwriting newer
-/// rotations; drop credentials of removed accounts and return the number still unsaved.
-pub(crate) fn flush_pending_rotations(state: &ServerState) -> usize {
-    let pending_files = state
-        .backend
-        .accounts
-        .pending_rotations
-        .lock()
-        .map(|pending| pending.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
-    if pending_files.is_empty() {
-        return 0;
-    }
-    let owners = state
-        .backend
-        .configuration
-        .read()
-        .ok()
-        .and_then(|config| config.get("accounts").and_then(Value::as_array).cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|account| {
-            Some((
-                account.get("auth_file")?.as_str()?.to_owned(),
-                account.get("id")?.as_str()?.to_owned(),
-            ))
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let mut unsaved = 0;
-    for auth_file in pending_files {
-        let Some(account_id) = owners.get(&auth_file) else {
-            crate::services::accounts::forget_pending_rotation(state, Path::new(&auth_file));
-            continue;
-        };
-        let Some(lock) = quota_refresh_lock(state, account_id) else {
-            unsaved += 1;
-            continue;
-        };
-        let Ok(_guard) = lock.lock() else {
-            unsaved += 1;
-            continue;
-        };
-        let credentials = AccountCredentials {
-            state,
-            auth_file,
-            _operation: None,
-        };
-        let rotated = credentials
-            .pending()
-            .lock()
-            .ok()
-            .and_then(|pending| pending.get(&credentials.auth_file).cloned());
-        if let Some(rotated) = rotated
-            && credentials.persist(&rotated).is_err()
-        {
-            unsaved += 1;
-        }
-    }
-    unsaved
-}
-
 /// Adopt an imported account's legacy rows into its credential identity; no rows is also success.
 /// Excludes `@native`, whose current login cannot identify historical logins.
 pub(crate) fn adopt_legacy_quota_history(state: &ServerState, account_id: &str) -> bool {
@@ -302,8 +161,8 @@ fn adopt_owned_legacy_quota_history(
     owner.is_ok_and(|owner| {
         state
             .backend
-            .accounts
-            .quota_history
+            .quota
+            .history
             .adopt_legacy_key(account_id, &owner)
             .is_ok()
     })
@@ -325,11 +184,7 @@ pub(crate) fn settle_legacy_quota_history(
     {
         return Ok(());
     }
-    state
-        .backend
-        .accounts
-        .quota_history
-        .delete_account(account_id)
+    state.backend.quota.history.delete_account(account_id)
 }
 
 /// Adopt every imported account's legacy rows, retaining rows with unknown identity
@@ -353,9 +208,8 @@ fn record_quota_snapshot(state: &ServerState, account_id: &str, quota: &Value) {
     let result = quota_owner_key(state, account_id).ok().and_then(|owner| {
         state
             .backend
-            .accounts
-            .quota_history
-            .append_snapshot(&owner, quota, system_now().trunc() as i64)
+            .quota
+            .record_snapshot(&owner, quota, system_now().trunc() as i64)
             .ok()
     });
     if result.is_none() {
@@ -392,7 +246,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         ));
     }
     let credentials = AccountCredentials::for_account(state, account_id)?;
-    let auth_file = credentials.auth_file.clone();
+    let auth_file = credentials.auth_file();
     let allow_refresh = account_allows_refresh(state, account_id);
     let read_auth = || credentials.read();
     let query = |auth: &Value, refresh: bool| {
@@ -406,25 +260,22 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         })
     };
     let auth = read_auth()?;
-    if native_auth_document(&state.backend.accounts.native_auth_path)
+    if native_auth_document(&state.backend.codex.auth_path)
         .is_some_and(|native| same_account_auth(&auth, &native))
     {
         return match read_native_login_quota(
-            &state.backend.accounts.native_auth_path,
+            &state.backend.codex.auth_path,
             &crate::services::runtime::helper_binary(state)?,
             control,
         ) {
             Ok(quota) => {
-                if let Ok(mut native) = state.backend.accounts.native_quota.lock() {
-                    *native = Some(quota.clone());
-                }
-                save_account_quota_state(state, account_id, &auth_file, "valid", Some(&quota))
+                let _ = state.backend.quota.set_native_quota(Some(quota.clone()));
+                save_account_quota_state(state, account_id, auth_file, "valid", Some(&quota))
                     .inspect(|_| record_quota_snapshot(state, account_id, &quota))
             }
             Err(error) => {
                 if error.code() == "quota_auth_required" {
-                    let _ =
-                        save_account_quota_state(state, account_id, &auth_file, "invalid", None);
+                    let _ = save_account_quota_state(state, account_id, auth_file, "invalid", None);
                 }
                 Err(error)
             }
@@ -433,7 +284,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
     let quota = match query(&auth, false) {
         Ok(quota) => quota,
         Err(error) if !allow_refresh && error.code() == "quota_auth_required" => {
-            let _ = save_account_quota_state(state, account_id, &auth_file, "invalid", None);
+            let _ = save_account_quota_state(state, account_id, auth_file, "invalid", None);
             return Err(error);
         }
         Err(error)
@@ -446,9 +297,8 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
                 Ok(quota) => quota,
                 Err(error) => {
                     if error.code() == "quota_auth_required" {
-                        let _ = save_account_quota_state(
-                            state, account_id, &auth_file, "invalid", None,
-                        );
+                        let _ =
+                            save_account_quota_state(state, account_id, auth_file, "invalid", None);
                     }
                     return Err(error);
                 }
@@ -456,7 +306,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         }
         Err(error) => return Err(error),
     };
-    save_account_quota_state(state, account_id, &auth_file, "valid", Some(&quota))
+    save_account_quota_state(state, account_id, auth_file, "valid", Some(&quota))
         .inspect(|_| record_quota_snapshot(state, account_id, &quota))
 }
 
@@ -512,18 +362,11 @@ fn refresh_locked_account_inner(
         return refresh_imported_account(state, account_id);
     }
     let quota = read_native_login_quota(
-        &state.backend.accounts.native_auth_path,
+        &state.backend.codex.auth_path,
         &crate::services::runtime::helper_binary(state)?,
         quota_control(state),
     )?;
-    if let Ok(mut current) = state.backend.accounts.native_quota.lock() {
-        *current = Some(quota.clone());
-    } else {
-        return Err(QuotaError::new(
-            "Codex account quota check failed",
-            "quota_error",
-        ));
-    }
+    state.backend.quota.set_native_quota(Some(quota.clone()))?;
     let config = state
         .backend
         .configuration
@@ -557,8 +400,8 @@ fn refresh_locked_account(
         let saved = quota_owner_key(state, account_id).ok().and_then(|owner| {
             state
                 .backend
-                .accounts
-                .quota_history
+                .quota
+                .history
                 .append_failure(&owner, &error.diagnostics(), system_now().trunc() as i64)
                 .ok()
         });
@@ -586,10 +429,10 @@ pub(crate) fn quota_history_response(
     now: i64,
 ) -> Result<Value, QuotaHistoryResponseError> {
     let owner = quota_owner_key(state, account_id).map_err(QuotaHistoryResponseError::Account)?;
-    let history = &state.backend.accounts.quota_history;
+    let quota = &state.backend.quota;
     let mut result = match period {
-        Some((start, end)) => history.query_period(&owner, start, end),
-        None => history.query(&owner, range_name, now),
+        Some((start, end)) => quota.history_for_period(&owner, start, end),
+        None => quota.history_for_range(&owner, range_name, now),
     }
     .map_err(QuotaHistoryResponseError::History)?;
     result["account_id"] = Value::String(account_id.to_owned());
@@ -609,7 +452,7 @@ pub(crate) fn consume_quota_reset_for_account(
 ) -> Result<String, QuotaError> {
     if account_id == "@native" {
         return consume_native_quota_reset(
-            &state.backend.accounts.native_auth_path,
+            &state.backend.codex.auth_path,
             &crate::services::runtime::helper_binary(state)?,
             Duration::from_secs(45),
             idempotency_key,
@@ -620,11 +463,11 @@ pub(crate) fn consume_quota_reset_for_account(
     let allow_refresh = account_allows_refresh(state, account_id);
     let read_auth = || credentials.read();
     let auth = read_auth()?;
-    if native_auth_document(&state.backend.accounts.native_auth_path)
+    if native_auth_document(&state.backend.codex.auth_path)
         .is_some_and(|native| same_account_auth(&auth, &native))
     {
         return consume_native_quota_reset(
-            &state.backend.accounts.native_auth_path,
+            &state.backend.codex.auth_path,
             &crate::services::runtime::helper_binary(state)?,
             Duration::from_secs(45),
             idempotency_key,
@@ -635,7 +478,7 @@ pub(crate) fn consume_quota_reset_for_account(
                 let _ = save_account_quota_state(
                     state,
                     account_id,
-                    &credentials.auth_file,
+                    credentials.auth_file(),
                     "invalid",
                     None,
                 );
@@ -677,7 +520,7 @@ pub(crate) fn consume_quota_reset_for_account(
             .is_err_and(|error| error.code() == "quota_auth_required")
     {
         let _ =
-            save_account_quota_state(state, account_id, &credentials.auth_file, "invalid", None);
+            save_account_quota_state(state, account_id, credentials.auth_file(), "invalid", None);
     }
     result
 }

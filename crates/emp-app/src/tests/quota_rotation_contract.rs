@@ -2,6 +2,7 @@
 
 use super::{credential_root, post, session_header};
 use crate::lifecycle::ServerHandle;
+use crate::services::accounts::{AccountState, flush_pending_rotations};
 use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr};
@@ -87,16 +88,8 @@ for line in sys.stdin:
         )
         .expect("write original auth");
     let session = session_header(&server);
-    let fail_saves = |failing: bool| {
-        let mut failing_paths = crate::services::quota::FAIL_ROTATION_SAVES_TO
-            .lock()
-            .unwrap();
-        let path = auth_path.to_str().unwrap().to_owned();
-        if failing {
-            failing_paths.insert(path);
-        } else {
-            failing_paths.remove(&path);
-        }
+    let fail_saves = |failing| {
+        AccountState::test_fail_rotation_saves_to(auth_path.to_str().unwrap(), failing);
     };
 
     // Saving fails: the rotated credential is reported and kept in memory.
@@ -116,11 +109,7 @@ for line in sys.stdin:
         .state
         .backend
         .accounts
-        .pending_rotations
-        .lock()
-        .unwrap()
-        .get(auth_path.to_str().unwrap())
-        .cloned()
+        .test_pending_rotation(auth_path.to_str().unwrap())
         .expect("rotated credential kept in memory");
     assert_eq!(pending["tokens"]["access_token"], "rotated");
 
@@ -138,17 +127,12 @@ for line in sys.stdin:
             .state
             .backend
             .accounts
-            .pending_rotations
-            .lock()
-            .unwrap()
-            .contains_key(auth_path.to_str().unwrap())
+            .test_pending_rotation(auth_path.to_str().unwrap())
+            .is_some()
     );
 
     // Nothing flushes while saving still fails.
-    assert_eq!(
-        crate::services::quota::flush_pending_rotations(&server.state),
-        1
-    );
+    assert_eq!(flush_pending_rotations(&server.state), 1);
 
     // A failed re-import or removal must roll back its credential files and
     // retain the rotated token. Clearing pending state before the config
@@ -181,10 +165,7 @@ for line in sys.stdin:
             .state
             .backend
             .accounts
-            .pending_rotations
-            .lock()
-            .unwrap()
-            .get(auth_path.to_str().unwrap())
+            .test_pending_rotation(auth_path.to_str().unwrap())
             .unwrap()["tokens"]["access_token"],
         "rotated"
     );
@@ -205,16 +186,7 @@ for line in sys.stdin:
         .expect("read persisted rotated auth");
     assert_eq!(stored["tokens"]["access_token"], "rotated");
     assert_eq!(stored["tokens"]["refresh_token"], "rotated-refresh");
-    assert!(
-        server
-            .state
-            .backend
-            .accounts
-            .pending_rotations
-            .lock()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(server.state.backend.accounts.test_pending_rotations_empty());
 
     let calls = std::fs::read_to_string(executable.with_extension("calls"))
         .expect("read fake app-server calls");
@@ -258,23 +230,15 @@ fn shutdown_flushes_pending_rotations_of_configured_accounts_only() {
     vault
         .write_encrypted_json(&auth_path, &json!({"tokens":{"access_token":"stale"}}))
         .expect("write stale auth");
-    {
-        let mut pending = server
-            .state
-            .backend
-            .accounts
-            .pending_rotations
-            .lock()
-            .unwrap();
-        pending.insert(
-            auth_path.to_str().unwrap().to_owned(),
-            json!({"tokens":{"access_token":"rotated"}}),
-        );
-        pending.insert(
-            gone_path.to_str().unwrap().to_owned(),
-            json!({"tokens":{"access_token":"orphan"}}),
-        );
-    }
+    let accounts = &server.state.backend.accounts;
+    accounts.test_retain_pending_rotation(
+        auth_path.to_str().unwrap(),
+        &json!({"tokens":{"access_token":"rotated"}}),
+    );
+    accounts.test_retain_pending_rotation(
+        gone_path.to_str().unwrap(),
+        &json!({"tokens":{"access_token":"orphan"}}),
+    );
     server.shutdown().expect("shutdown quota service");
     let stored = vault
         .read_encrypted_json(&auth_path)
@@ -309,27 +273,14 @@ fn shutdown_reports_rotated_credentials_it_could_not_save() {
         root.join("codex/auth.json"),
     )
     .expect("start quota service");
-    server
-        .state
-        .backend
-        .accounts
-        .pending_rotations
-        .lock()
-        .unwrap()
-        .insert(
-            auth_path.to_str().unwrap().to_owned(),
-            json!({"tokens":{"access_token":"rotated"}}),
-        );
+    server.state.backend.accounts.test_retain_pending_rotation(
+        auth_path.to_str().unwrap(),
+        &json!({"tokens":{"access_token":"rotated"}}),
+    );
     let failing_path = auth_path.to_str().unwrap().to_owned();
-    crate::services::quota::FAIL_ROTATION_SAVES_TO
-        .lock()
-        .unwrap()
-        .insert(failing_path.clone());
+    AccountState::test_fail_rotation_saves_to(&failing_path, true);
     let result = server.shutdown();
-    crate::services::quota::FAIL_ROTATION_SAVES_TO
-        .lock()
-        .unwrap()
-        .remove(&failing_path);
+    AccountState::test_fail_rotation_saves_to(&failing_path, false);
     assert!(
         matches!(result, Err(crate::error::AppError::CredentialsUnsaved(1))),
         "{result:?}"

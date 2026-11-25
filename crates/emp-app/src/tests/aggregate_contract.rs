@@ -32,7 +32,12 @@ fn subscription_balance_keeps_affinity_and_follows_actual_account_after_native_l
         write_owned_account_catalog(&server, account, endpoint, account_models);
     }
     let quota = |used| json!({"plan_type":"pro","rate_limits":{"primary":{"usedPercent":used}}});
-    *server.state.backend.accounts.native_quota.lock().unwrap() = Some(quota(80));
+    server
+        .state
+        .backend
+        .quota
+        .set_native_quota(Some(quota(80)))
+        .unwrap();
     {
         let mut preferences = server
             .state
@@ -106,7 +111,7 @@ fn subscription_balance_keeps_affinity_and_follows_actual_account_after_native_l
 
     let first = prepare("auto/priority", "native-thread");
     assert_eq!(first.provider_id, "codex-native");
-    let auth_path = &server.state.backend.accounts.native_auth_path;
+    let auth_path = &server.state.backend.codex.auth_path;
     let old_native: Value = serde_json::from_slice(&std::fs::read(auth_path).unwrap()).unwrap();
     let a_path = std::path::Path::new(config["accounts"][0]["auth_file"].as_str().unwrap());
     let a_auth = server

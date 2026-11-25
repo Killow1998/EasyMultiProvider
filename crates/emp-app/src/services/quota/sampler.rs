@@ -1,11 +1,11 @@
 //! Quota sampling deadlines and the shutdown wake share one wait lock.
 
-use super::QuotaSampleCounts;
+use super::{QuotaSampleCounts, QuotaState};
 use crate::app::ServerState;
-use crate::services::accounts::{duplicate_accounts, regular_file};
+use crate::services::accounts::{duplicate_accounts, flush_pending_rotations, regular_file};
 use serde_json::Value;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 #[cfg(not(test))]
@@ -14,6 +14,34 @@ const QUOTA_SAMPLE_INTERVAL: Duration = Duration::from_secs(44);
 #[cfg(test)]
 const QUOTA_SAMPLE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
+impl QuotaState {
+    pub(crate) fn wake_sampler(&self) {
+        if let Ok(_wait) = self.sampler_wait.lock() {
+            self.sampler_condition.notify_all();
+        }
+    }
+
+    fn wait_for_sample(&self, deadline: Instant, shutdown: &AtomicBool) -> bool {
+        let Ok(mut wait) = self.sampler_wait.lock() else {
+            return false;
+        };
+        while !shutdown.load(Ordering::Acquire) {
+            let now = Instant::now();
+            if now >= deadline {
+                return true;
+            }
+            let Ok((next, _)) = self
+                .sampler_condition
+                .wait_timeout(wait, deadline.saturating_duration_since(now))
+            else {
+                return false;
+            };
+            wait = next;
+        }
+        false
+    }
+}
+
 pub(crate) fn run(state: &Arc<ServerState>) {
     super::migrate_legacy_quota_history(state);
     let mut deadline = if cfg!(test) {
@@ -21,44 +49,24 @@ pub(crate) fn run(state: &Arc<ServerState>) {
     } else {
         Instant::now()
     };
-    while !state.lifecycle.shutdown.load(Ordering::Acquire) {
-        let mut wait = match state.backend.accounts.quota_sampler_wait.lock() {
-            Ok(wait) => wait,
-            Err(_) => return,
-        };
-        loop {
-            if state.lifecycle.shutdown.load(Ordering::Acquire) {
-                return;
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                break;
-            }
-            let result = state
-                .backend
-                .accounts
-                .quota_sampler_condition
-                .wait_timeout(wait, deadline.saturating_duration_since(now));
-            match result {
-                Ok((next, _)) => wait = next,
-                Err(_) => return,
-            }
-        }
-        drop(wait);
+    let shutdown = &state.lifecycle.shutdown;
+    while !shutdown.load(Ordering::Acquire)
+        && state.backend.quota.wait_for_sample(deadline, shutdown)
+    {
         deadline = Instant::now() + QUOTA_SAMPLE_INTERVAL;
-        if !state.lifecycle.shutdown.load(Ordering::Acquire) {
+        if !shutdown.load(Ordering::Acquire) {
             super::sample_quotas_once(state);
             crate::services::cpa_quota::sample_due(state);
-            super::flush_pending_rotations(state);
+            flush_pending_rotations(state);
         }
     }
 }
 
 fn quota_sample_targets(state: &ServerState) -> Vec<String> {
     let mut targets = Vec::new();
-    if regular_file(&state.backend.accounts.native_auth_path)
+    if regular_file(&state.backend.codex.auth_path)
         && !matches!(
-            emp_codex::configuration::local_auth::mode(&state.backend.accounts.native_auth_path),
+            emp_codex::configuration::local_auth::mode(&state.backend.codex.auth_path),
             "local_key" | "api_key"
         )
     {
@@ -76,7 +84,7 @@ fn quota_sample_targets(state: &ServerState) -> Vec<String> {
     let duplicates = duplicate_accounts(
         &config,
         &state.backend.configuration.vault,
-        &state.backend.accounts.native_auth_path,
+        &state.backend.codex.auth_path,
     );
     let accounts = config
         .get("accounts")

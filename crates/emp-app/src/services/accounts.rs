@@ -1,12 +1,15 @@
-use emp_codex::quota_history::QuotaHistoryStore;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
 use crate::app::ServerState;
 use emp_codex::account_auth_headers;
 use emp_codex::quota::QuotaError;
+mod credentials;
 mod delete;
 mod import;
+pub(super) use credentials::AccountCredentials;
+use credentials::CredentialOperationGate;
+pub(crate) use credentials::flush_pending_rotations;
 pub(crate) use delete::delete_account_state;
 use emp_state::VaultStore;
 use emp_state::duplicate_account_status;
@@ -18,7 +21,6 @@ pub(crate) use import::{
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 pub(crate) fn account_allows_refresh(state: &ServerState, account_id: &str) -> bool {
     !state.backend.team.shared_subscription(account_id)
@@ -53,19 +55,16 @@ pub(crate) fn regular_file(path: &Path) -> bool {
 pub(crate) fn native_account_snapshot(state: &ServerState, config: &Value) -> Value {
     let quota = state
         .backend
-        .accounts
-        .native_quota
-        .lock()
-        .ok()
-        .and_then(|quota| quota.clone())
+        .quota
+        .with_native_quota(Value::clone)
         .unwrap_or(Value::Null);
     serde_json::json!({
         "id": "@native",
         "name": "Current Codex login",
         "prefix": "",
         "native": true,
-        "auth_mode": emp_codex::configuration::local_auth::mode(&state.backend.accounts.native_auth_path),
-        "credential_set": regular_file(&state.backend.accounts.native_auth_path),
+        "auth_mode": emp_codex::configuration::local_auth::mode(&state.backend.codex.auth_path),
+        "credential_set": regular_file(&state.backend.codex.auth_path),
         "hidden_models": config
             .get("native_hidden_models")
             .cloned()
@@ -87,7 +86,7 @@ pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
     let duplicates = duplicate_accounts(
         &config,
         &state.backend.configuration.vault,
-        &state.backend.accounts.native_auth_path,
+        &state.backend.codex.auth_path,
     );
     let mut accounts = emp_state::config::public_accounts(&config, &duplicates);
     state
@@ -194,15 +193,7 @@ pub(super) fn replacing_account_credentials<T>(
             account_ids = current_ids;
             continue;
         }
-        let pending_files = state
-            .backend
-            .accounts
-            .pending_rotations
-            .lock()
-            .ok()?
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
+        let pending_files = state.backend.accounts.pending_rotation_paths().ok()?;
         let before = pending_files
             .iter()
             .map(|path| std::fs::read(path).ok())
@@ -220,7 +211,10 @@ pub(super) fn replacing_account_credentials<T>(
         }
         for (path, before) in pending_files.iter().zip(before) {
             if std::fs::read(path).ok() != before {
-                forget_pending_rotation(state, Path::new(path));
+                state
+                    .backend
+                    .accounts
+                    .forget_pending_rotation(Path::new(path));
             }
         }
         drop(config);
@@ -229,84 +223,14 @@ pub(super) fn replacing_account_credentials<T>(
     }
 }
 
-/// Drop a rotated credential awaiting a durable save: the account's stored
-/// credentials were replaced or removed, so the pending copy is stale.
-pub(crate) fn forget_pending_rotation(state: &ServerState, auth_path: &Path) {
-    if let Ok(mut pending) = state.backend.accounts.pending_rotations.lock() {
-        pending.remove(auth_path.to_string_lossy().as_ref());
-    }
-}
-
-pub(crate) struct AccountState {
-    pub(crate) native_auth_path: PathBuf,
-    pub(crate) codex_home: PathBuf,
-    pub(crate) codex_binary: String,
-    pub(crate) native_quota: Mutex<Option<Value>>,
-    pub(crate) quota_refresh_errors: Mutex<BTreeMap<String, String>>,
-    pub(crate) quota_refresh_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
-    pub(crate) quota_refresh_cancellations: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
-    pub(crate) quota_history: QuotaHistoryStore,
-    pub(crate) quota_sampler_wait: Mutex<()>,
-    pub(crate) quota_sampler_condition: Condvar,
-    /// Pending rotated credentials keyed by encrypted auth file; quota checks reuse
-    /// and re-save them because Codex may have invalidated the stored refresh token.
-    pub(crate) pending_rotations: Mutex<BTreeMap<String, Value>>,
-    /// Quota checks and resets that may rotate a credential upstream.
-    /// Shutdown closes it and waits for them before the final save.
-    pub(crate) credential_operations: CredentialOperationGate,
-}
-
-/// Counts in-flight credential operations and refuses new ones once closed.
 #[derive(Default)]
-pub(crate) struct CredentialOperationGate {
-    state: Mutex<(usize, bool)>,
-    idle: Condvar,
-}
-
-pub(crate) struct CredentialOperation<'a>(&'a CredentialOperationGate);
-
-impl CredentialOperationGate {
-    /// `None` once the gate is closed for shutdown.
-    pub(crate) fn enter(&self) -> Option<CredentialOperation<'_>> {
-        let mut state = self.state.lock().ok()?;
-        if state.1 {
-            return None;
-        }
-        state.0 += 1;
-        Some(CredentialOperation(self))
-    }
-
-    /// Refuse new operations, wait up to `timeout`, and return the number still running,
-    /// whose rotated credentials may remain unsaved.
-    pub(crate) fn close_and_drain(&self, timeout: std::time::Duration) -> usize {
-        let Ok(mut state) = self.state.lock() else {
-            return 0;
-        };
-        state.1 = true;
-        let deadline = std::time::Instant::now() + timeout;
-        while state.0 > 0 {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            state = match self.idle.wait_timeout(state, remaining) {
-                Ok((state, _)) => state,
-                Err(_) => return 0,
-            };
-        }
-        state.0
-    }
-}
-
-impl Drop for CredentialOperation<'_> {
-    fn drop(&mut self) {
-        if let Ok(mut state) = self.0.state.lock() {
-            state.0 -= 1;
-            if state.0 == 0 {
-                self.0.idle.notify_all();
-            }
-        }
-    }
+pub(crate) struct AccountState {
+    quota_refresh_errors: Mutex<BTreeMap<String, String>>,
+    quota_refresh_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
+    quota_refresh_cancellations: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
+    /// Kept by encrypted auth file because rotation may invalidate the stored refresh token.
+    pending_rotations: Mutex<BTreeMap<String, Value>>,
+    credential_operations: CredentialOperationGate,
 }
 
 pub(crate) fn duplicate_accounts(
@@ -360,7 +284,7 @@ pub(crate) fn quota_owner_key_in(
     account_id: &str,
 ) -> Result<String, QuotaError> {
     let auth = if account_id == "@native" {
-        native_auth_document(&state.backend.accounts.native_auth_path)
+        native_auth_document(&state.backend.codex.auth_path)
     } else {
         let account = config
             .get("accounts")

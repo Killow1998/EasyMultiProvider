@@ -23,7 +23,7 @@ pub(super) fn resolve(
     choices: &Value,
     require_resolved: bool,
 ) -> Result<Resolution, MigrationError> {
-    let native = native_auth_document(&state.backend.accounts.native_auth_path)
+    let native = native_auth_document(&state.backend.codex.auth_path)
         .filter(|auth| emp_state::validate_auth_json(auth).is_ok());
     let mut credentials = account_credentials(current, &state.backend.configuration.vault);
     if let Some(native) = native {

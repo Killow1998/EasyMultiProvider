@@ -51,13 +51,7 @@ pub(super) fn resolve(
         let mut candidates = Vec::new();
         let mut owner_ids = BTreeMap::new();
         let cooling = state.backend.aggregate_availability.cooling();
-        let native_quota = state
-            .backend
-            .accounts
-            .native_quota
-            .lock()
-            .ok()
-            .and_then(|quota| quota.clone());
+        let native_quota = state.backend.quota.with_native_quota(Value::clone);
         let tier = body.get("service_tier").and_then(Value::as_str);
         for source in group["sources"].as_array().expect("normalized sources") {
             let source = source.as_str().expect("normalized source");
@@ -76,9 +70,9 @@ pub(super) fn resolve(
             }
             let (owner, quota, source) = match route.source {
                 RouteSource::ImplicitNative => {
-                    let Some(auth) = super::accounts::native_auth_document(
-                        &state.backend.accounts.native_auth_path,
-                    ) else {
+                    let Some(auth) =
+                        super::accounts::native_auth_document(&state.backend.codex.auth_path)
+                    else {
                         continue;
                     };
                     if let Some(key) = auth["OPENAI_API_KEY"]

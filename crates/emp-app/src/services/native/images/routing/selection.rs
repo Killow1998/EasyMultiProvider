@@ -23,20 +23,14 @@ pub(super) fn automatic(
     config: &Value,
     limited: &BTreeMap<String, Instant>,
 ) -> Result<String, NativeHttpError> {
-    let native_quota = state
-        .backend
-        .accounts
-        .native_quota
-        .lock()
-        .ok()
-        .and_then(|quota| quota.clone());
+    let native_quota = state.backend.quota.with_native_quota(Value::clone);
     let imported = config["accounts"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|account| available(account))
         .filter_map(|account| Some((account["id"].as_str()?, account.get("quota"), account)));
-    let native = native_auth_document(&state.backend.accounts.native_auth_path)
+    let native = native_auth_document(&state.backend.codex.auth_path)
         .filter(|auth| !crate::services::integration::enable::image_mcp_required(auth))
         .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
         .and_then(|auth| emp_codex::account_auth_headers(&auth))
@@ -81,7 +75,7 @@ pub(super) fn account_route(
 ) -> Result<ResolvedRoute, NativeHttpError> {
     let base = config["codex_base_url"].as_str().unwrap_or_default();
     let (provider, source) = if id == "@native" {
-        if native_subscription_headers(&state.backend.accounts.native_auth_path).is_none() {
+        if native_subscription_headers(&state.backend.codex.auth_path).is_none() {
             return Err(NativeHttpError::router(
                 409,
                 "The configured Native image account is unavailable",

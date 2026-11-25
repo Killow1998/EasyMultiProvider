@@ -272,7 +272,7 @@ fn partial_native_catalog_refresh_keeps_a_known_model_routable() {
         config["native_catalog_path"] = json!(native_path);
     }
     std::fs::write(
-        &server.state.backend.accounts.native_auth_path,
+        &server.state.backend.codex.auth_path,
         serde_json::to_vec(&json!({"tokens":{"access_token":"native-secret",
             "account_id":"native-owner"}}))
         .unwrap(),
@@ -579,12 +579,12 @@ fn automatic_refresh_uses_the_newly_observed_selected_runtime_version() {
     );
 
     std::fs::write(
-        &server.state.backend.accounts.codex_binary,
+        &server.state.backend.codex.binary,
         b"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.159.2'; else exit 99; fi\n",
     )
     .expect("replace selected runtime version");
     std::fs::set_permissions(
-        &server.state.backend.accounts.codex_binary,
+        &server.state.backend.codex.binary,
         std::fs::Permissions::from_mode(0o700),
     )
     .expect("selected runtime permissions");

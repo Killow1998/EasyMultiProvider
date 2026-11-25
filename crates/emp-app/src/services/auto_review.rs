@@ -34,15 +34,8 @@ pub(crate) fn resolve_auto_review_route(
         return None;
     }
     let config_object = config.as_object()?;
-    let native_available =
-        native_subscription_headers(&state.backend.accounts.native_auth_path).is_some();
-    let native_quota = state
-        .backend
-        .accounts
-        .native_quota
-        .lock()
-        .ok()
-        .and_then(|quota| quota.clone());
+    let native_available = native_subscription_headers(&state.backend.codex.auth_path).is_some();
+    let native_quota = state.backend.quota.with_native_quota(Value::clone);
     let cooling = state.backend.auto_review.cooling();
     let candidates = automatic_review_candidates(
         config_object,
@@ -51,7 +44,7 @@ pub(crate) fn resolve_auto_review_route(
         &cooling,
         |id| {
             let auth = if id == "@native" {
-                native_auth_document(&state.backend.accounts.native_auth_path)
+                native_auth_document(&state.backend.codex.auth_path)
             } else {
                 let account = config_object
                     .get("accounts")?

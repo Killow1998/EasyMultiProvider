@@ -31,7 +31,7 @@ pub(super) fn read(
         matching_sessions: None,
     };
     let Ok(mut payload) = state.backend.usage.query_sessions(
-        &state.backend.accounts.codex_home,
+        &state.backend.codex.home,
         filter,
         page,
         &query,
