@@ -330,7 +330,7 @@ fn account_writes_persist_configuration_and_credentials() {
         assert_eq!(fixture.read("/api/accounts").await["accounts"], json!([]));
         {
             assert!(matches!(std::fs::metadata(fixture.directory.path().join(AUTH)), Err(error) if error.kind() == ErrorKind::NotFound));
-            assert!(fixture.server.state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(fixture.server.state.lifecycle.updates().drain_for_test(wire_timeout()).await);
         }
         for path in [IMPORT, CONFIG, MODELS, QUOTA, RESET] {
             let denied = fixture.request_json(|port, _| json_request(port, path, &[], b"{"), 503).await;
@@ -371,12 +371,12 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
         client.write_all(&refresh).await.unwrap();
         let upstream_request = wait_for_model_fetch(&upstream).await;
         assert!(
-            !fixture
+            fixture
                 .server
                 .state
                 .lifecycle
                 .updates()
-                .drain_for_test(Duration::ZERO)
+                .drain_blocked_for_test()
         );
         disconnect_submitted_write(fixture, client, task).await;
         send_models(upstream_request, "after-disconnect").await;

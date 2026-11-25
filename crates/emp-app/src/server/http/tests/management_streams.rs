@@ -189,7 +189,13 @@ fn account_stream_snapshot_heartbeat_and_quit_match_while_updates_drain() {
         let mut stream = Stream::open(endpoint, &wire, "no-store").await;
         account_snapshot(&mut stream).await;
         assert_eq!(state.lifecycle.admission.active_requests(), 0);
-        assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
+        assert!(
+            state
+                .lifecycle
+                .updates()
+                .drain_for_test(wire_timeout())
+                .await
+        );
         state.backend.management_events.publish(Change::Integration);
         assert_eq!(
             stream.next(wire_timeout().duration()).await.as_deref(),
@@ -320,7 +326,13 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                     .unwrap();
                 assert!(!cancelled.load(Ordering::Acquire));
                 assert_eq!(state.lifecycle.admission.active_requests(), 1);
-                assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
+                assert!(
+                    state
+                        .lifecycle
+                        .updates()
+                        .drain_for_test(wire_timeout())
+                        .await
+                );
                 release.send(()).unwrap();
                 let mut frames = vec![first];
                 while let Some(frame) = stream.next(wire_timeout().duration()).await {
@@ -418,7 +430,8 @@ fn management_stream_access_and_selection_match_during_update_drain() {
                 .state
                 .lifecycle
                 .updates()
-                .drain_for_test(Duration::ZERO)
+                .drain_for_test(wire_timeout())
+                .await
         );
         let session = fixture.session();
         for path in [ACCOUNT_EVENTS, CALLS, USAGE] {

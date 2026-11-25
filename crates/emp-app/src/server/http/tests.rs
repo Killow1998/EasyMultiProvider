@@ -9,6 +9,8 @@ use super::{
     proxy::{ModelCatalog, ProxyCaller, RequestAccess},
     with_entry_state,
 };
+#[cfg(unix)]
+use crate::server::raw_tcp::wire_timeout;
 use crate::{
     lifecycle::ServerHandle as RunningServer,
     server::{
@@ -112,16 +114,16 @@ async fn disconnect_submitted_write(
             assert!(error.is_cancelled(), "{error}");
         }
         let state = &fixture.server.state;
-        let drained = state.lifecycle.updates().drain_for_test(Duration::ZERO);
+        let blocked = state.lifecycle.updates().drain_blocked_for_test();
         let quiet = state
             .lifecycle
             .admission
             .quiesce(0, Duration::ZERO)
             .is_some();
         assert_eq!(
-            (drained, quiet),
-            (false, false),
-            "write still blocked after disconnect: (update drained, connections quiet)"
+            (blocked, quiet),
+            (true, false),
+            "write still blocked after disconnect: (update drain blocked, connections quiet)"
         );
     }
 }

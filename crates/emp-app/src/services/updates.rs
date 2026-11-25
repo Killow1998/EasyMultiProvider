@@ -1,4 +1,6 @@
 use crate::services::observation::diagnostics::Diagnostics;
+#[cfg(all(test, unix))]
+use emp_test_support::TestBudget;
 use emp_updater::manager::{Snapshot, UpdateHooks, UpdateManager};
 use emp_updater::release::UpdateEndpoints;
 use emp_updater::{Result as UpdateResult, UpdateError};
@@ -112,16 +114,6 @@ impl UpdateState {
         Some(RequestPermit(Arc::clone(&self.gate)))
     }
 
-    #[cfg(all(test, unix))]
-    pub(crate) fn drain_for_test(&self, timeout: Duration) -> bool {
-        drain(&self.gate, timeout)
-    }
-
-    #[cfg(all(test, unix))]
-    pub(crate) fn active_for_test(&self) -> usize {
-        self.gate.state.lock().unwrap().active
-    }
-
     pub(crate) fn close(&self) {
         if let Ok(mut state) = self.gate.state.lock() {
             state.closed = true;
@@ -135,6 +127,30 @@ impl UpdateState {
 
     pub(crate) fn start(&self, operation: &str) -> Result<Snapshot, &'static str> {
         self.manager.start(operation).map_err(|error| error.0)
+    }
+}
+
+#[cfg(all(test, unix))]
+impl UpdateState {
+    pub(crate) async fn drain_for_test(&self, budget: TestBudget) -> bool {
+        let timeout = budget.duration();
+        assert!(
+            !timeout.is_zero(),
+            "update drain needs a positive test budget"
+        );
+        let gate = Arc::clone(&self.gate);
+        tokio::task::spawn_blocking(move || drain(&gate, timeout))
+            .await
+            .unwrap()
+    }
+
+    /// Use only while the test holds an in-flight request open.
+    pub(crate) fn drain_blocked_for_test(&self) -> bool {
+        !drain(&self.gate, Duration::ZERO)
+    }
+
+    pub(crate) fn active_for_test(&self) -> usize {
+        self.gate.state.lock().unwrap().active
     }
 }
 

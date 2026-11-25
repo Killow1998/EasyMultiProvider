@@ -168,14 +168,14 @@ fn assert_rotated_session(fixture: &Fixture, reply: Vec<u8>) -> Vec<u8> {
 }
 
 async fn drain_updates(fixture: &Fixture) {
-    let state = fixture.server.state.clone();
     assert!(
-        tokio::task::spawn_blocking(move || state
+        fixture
+            .server
+            .state
             .lifecycle
             .updates()
-            .drain_for_test(test_timeout(Duration::from_secs(5)).duration()))
-        .await
-        .unwrap()
+            .drain_for_test(wire_timeout())
+            .await
     );
 }
 

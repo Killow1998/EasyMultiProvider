@@ -147,13 +147,21 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
                 .collect::<Vec<_>>();
             assert!(callers.acquire_header().is_none());
             let state_for_drain = state.clone();
-            let draining = tokio::task::spawn_blocking(move || {
+            let draining = tokio::spawn(async move {
                 state_for_drain
                     .lifecycle
                     .updates()
-                    .drain_for_test(test_timeout(Duration::from_secs(15)).duration())
+                    .drain_for_test(test_timeout(Duration::from_secs(15)))
+                    .await
             });
-            wait_for(&Deadline::after(wire_timeout()), || updates.enter().is_none());
+            let state_for_gate = state.clone();
+            tokio::task::spawn_blocking(move || {
+                wait_for(&Deadline::after(wire_timeout()), || {
+                    state_for_gate.lifecycle.updates().enter().is_none()
+                });
+            })
+            .await
+            .unwrap();
 
             let authorization = format!("Authorization: Bearer {}", parent.key);
             let wire = json_request(
@@ -579,15 +587,15 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
             "X-EMP-Provider must name one configured API service"
         );
 
-        let state = fixture.server.state.clone();
-        tokio::task::spawn_blocking(move || {
-            wait_for(&Deadline::after(wire_timeout()), || {
-                state.lifecycle.updates().active_for_test() == 0
-            });
-            assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
-        })
-        .await
-        .unwrap();
+        assert!(
+            fixture
+                .server
+                .state
+                .lifecycle
+                .updates()
+                .drain_for_test(wire_timeout())
+                .await
+        );
         let reply = assert_buffered(
             address,
             &request(
@@ -819,12 +827,12 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
                 SseClient::from_raw(RawClient::request_before(address, &wire, &deadline).await);
             let mut events = downstream.first_output(&deadline).await;
             assert!(
-                !fixture
+                fixture
                     .server
                     .state
                     .lifecycle
                     .updates()
-                    .drain_for_test(Duration::ZERO),
+                    .drain_blocked_for_test(),
                 "SSE released the update permit before its body ended"
             );
             let deadline = Deadline::after(wire_timeout());

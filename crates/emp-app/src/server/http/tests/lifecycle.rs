@@ -265,16 +265,8 @@ fn wrong_methods_keep_status_before_and_during_update_drain() {
             "/api/team/publish_source", &reply, "404 Not Found",
             &json!({"error":{"code":"module_disabled","message":"This EMP module is not active","origin":"emp"}}),
         );
-        let state = fixture.server.state.clone();
         assert!(
-            tokio::task::spawn_blocking(move || {
-                state
-                    .lifecycle
-                    .updates()
-                    .drain_for_test(test_timeout(Duration::from_secs(5)).duration())
-            })
-            .await
-            .unwrap()
+            fixture.server.state.lifecycle.updates().drain_for_test(wire_timeout()).await
         );
         for path in [
             "/v1/responses/compact",
@@ -341,7 +333,11 @@ fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
             assert!(ws.head.starts_with("HTTP/1.1 101"), "{}", ws.head);
             drop(delegation);
             assert!(
-                state.lifecycle.updates().drain_for_test(Duration::ZERO),
+                state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(wire_timeout())
+                    .await,
                 "idle WebSocket kept the parent work active"
             );
             ws.io.shutdown().await.unwrap();

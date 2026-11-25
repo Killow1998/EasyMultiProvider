@@ -735,7 +735,7 @@ fn realtime_rejections_retain_update_access_until_response_write() {
                 .await
                 .unwrap();
             assert!(
-                !updates.drain_for_test(Duration::ZERO),
+                updates.drain_blocked_for_test(),
                 "update handoff may not pass before the {status} has been written"
             );
             write.notify_one();
@@ -745,7 +745,14 @@ fn realtime_rejections_retain_update_access_until_response_write() {
                 .unwrap();
             assert_status(&reply, status);
             server.shutdown().await.unwrap();
-            assert_eq!(updates.active_for_test(), 0);
+            let state = state.clone();
+            tokio::task::spawn_blocking(move || {
+                wait_for(&Deadline::after(wire_timeout()), || {
+                    state.lifecycle.updates().active_for_test() == 0
+                });
+            })
+            .await
+            .unwrap();
         }
     });
 }

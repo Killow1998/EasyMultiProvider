@@ -396,6 +396,37 @@ fn assert_settlement(journal: &[Value], case: &str, id: &str, status: Value, res
     assert_eq!(records, [(&status, &json!(result))], "{case} request {id}");
 }
 
+#[cfg(unix)]
+#[test]
+fn update_drain_waits_for_request_access_to_drop() {
+    Fixture::new().run_wire(async |fixture, _| {
+        let state = &fixture.server.state;
+        let updates = state.lifecycle.updates();
+        let request =
+            crate::http::request::parse_request("DELETE /api/accounts/demo HTTP/1.1\r\n\r\n")
+                .unwrap();
+        let access = RequestAccess::require(request, state, None)
+            .unwrap_or_else(|error| panic!("write admission failed: {:?}", error.reply()));
+        assert!(
+            updates.drain_blocked_for_test(),
+            "an immediate drain cannot succeed while the request still has access"
+        );
+
+        let state = state.clone();
+        let release = tokio::task::spawn_blocking(move || {
+            crate::tests::wait_for(&Deadline::after(wire_timeout()), || {
+                state.lifecycle.updates().enter().is_none()
+            });
+            drop(access);
+        });
+        assert!(
+            updates.drain_for_test(wire_timeout()).await,
+            "update drain must succeed when the request releases its permit"
+        );
+        release.await.unwrap();
+    });
+}
+
 #[test]
 fn drain_ordinary_handler() {
     for (phase, via_quit) in ACTIVE

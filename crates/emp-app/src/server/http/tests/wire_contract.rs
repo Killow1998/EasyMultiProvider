@@ -483,7 +483,8 @@ fn management_sse_and_update_drain() {
                     .state
                     .lifecycle
                     .updates()
-                    .drain_for_test(Duration::ZERO)
+                    .drain_for_test(wire_timeout())
+                    .await
             );
             let wire = json_request(port, "/api/language", &[&session], br#"{"language":"en"}"#);
             let reply = exchange_wire(address, &wire, false).await;

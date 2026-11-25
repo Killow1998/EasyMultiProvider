@@ -451,7 +451,8 @@ fn team_writes_preserve_upstream_bytes_and_gate_order() {
                     .state
                     .lifecycle
                     .updates()
-                    .drain_for_test(Duration::ZERO)
+                    .drain_for_test(wire_timeout())
+                    .await
             );
         }
         for (path, code, status) in [(path, "updating", 503), (unknown, "updating", 503)] {
@@ -755,18 +756,19 @@ fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
             let request = UpstreamRequest::accept(upstream, "login").await;
             request.expect("login", Some(&login_payload()));
             assert!(!fixture.directory.path().join(PROFILE).exists());
-            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(state.lifecycle.updates().drain_blocked_for_test());
             disconnect_submitted_write(fixture, client, task).await;
             request.reply(200, &login_reply()).await;
 
+            assert!(
+                state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(wire_timeout())
+                    .await
+            );
             let state = state.clone();
             tokio::task::spawn_blocking(move || {
-                assert!(
-                    state
-                        .lifecycle
-                        .updates()
-                        .drain_for_test(test_timeout(Duration::from_secs(5)).duration())
-                );
                 assert!(
                     state
                         .lifecycle

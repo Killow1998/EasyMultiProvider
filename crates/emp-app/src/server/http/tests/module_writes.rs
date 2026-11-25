@@ -343,7 +343,8 @@ fn module_and_gateway_writes_preserve_drain_order() {
                     .state
                     .lifecycle
                     .updates()
-                    .drain_for_test(Duration::ZERO)
+                    .drain_for_test(wire_timeout())
+                    .await
             );
         }
 
@@ -411,18 +412,19 @@ fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
                 .expect("write reached the vault gate")
                 .unwrap();
             assert!(!client_file(fixture).exists());
-            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(state.lifecycle.updates().drain_blocked_for_test());
 
             disconnect_submitted_write(fixture, client, task).await;
             release.send(()).unwrap();
+            assert!(
+                state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(wire_timeout())
+                    .await
+            );
             let state = state.clone();
             tokio::task::spawn_blocking(move || {
-                assert!(
-                    state
-                        .lifecycle
-                        .updates()
-                        .drain_for_test(test_timeout(Duration::from_secs(5)).duration())
-                );
                 assert!(
                     state
                         .lifecycle

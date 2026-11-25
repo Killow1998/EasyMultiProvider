@@ -309,7 +309,7 @@ fn compare_local_writes(home: &Path) {
                 read(fixture, address, "/api/integration").await["codex_compatibility"],
                 inventory
             );
-            assert!(fixture.server.state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(fixture.server.state.lifecycle.updates().drain_for_test(wire_timeout()).await);
         }
         for path in PATHS {
             assert_eq!(fixture.post(path, b"{", 503).await["error"]["code"], "updating");
@@ -378,24 +378,30 @@ fn submitted_app_icon_write_finishes_once_after_disconnect() {
                 .await
                 .unwrap();
                 assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 0);
-                assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
+                assert!(state.lifecycle.updates().drain_blocked_for_test());
                 disconnect_submitted_write(fixture, client, task).await;
                 release.send(()).unwrap();
                 hold_image.await.unwrap();
-                let state = state.clone();
+                let state_for_admission = state.clone();
                 tokio::task::spawn_blocking(move || {
                     assert!(
-                        state
+                        state_for_admission
                             .lifecycle
                             .admission
                             .quiesce(0, Duration::from_secs(5))
                             .is_some()
                     );
-                    assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
-                    assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 1);
                 })
                 .await
                 .unwrap();
+                assert!(
+                    state
+                        .lifecycle
+                        .updates()
+                        .drain_for_test(wire_timeout())
+                        .await
+                );
+                assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 1);
                 let metadata = read(fixture, address, "/api/config").await["app_icon"].clone();
                 assert_eq!(metadata["preset"], "fixture-disconnect");
                 assert_eq!(metadata["monochrome"], true);

@@ -599,19 +599,15 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
                 "workspace_migration_permission_required"
             );
         }
-        {
-            let state = fixture.server.state.clone();
-            tokio::task::spawn_blocking(move || {
-                assert!(
-                    state
-                        .lifecycle
-                        .updates()
-                        .drain_for_test(test_timeout(Duration::from_secs(5)).duration())
-                );
-            })
-            .await
-            .unwrap();
-        }
+        assert!(
+            fixture
+                .server
+                .state
+                .lifecycle
+                .updates()
+                .drain_for_test(wire_timeout())
+                .await
+        );
         for operation in OPERATIONS {
             let updating = malformed(fixture, operation, false, 503).await;
             assert_eq!(updating["error"]["code"], "updating");
@@ -670,18 +666,19 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
             })
             .await
             .unwrap();
-            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(state.lifecycle.updates().drain_blocked_for_test());
             disconnect_submitted_write(fixture, client, task).await;
             release.send(()).unwrap();
             hold_config.await.unwrap();
+            assert!(
+                state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(wire_timeout())
+                    .await
+            );
             let state = state.clone();
             let records = tokio::task::spawn_blocking(move || {
-                assert!(
-                    state
-                        .lifecycle
-                        .updates()
-                        .drain_for_test(test_timeout(Duration::from_secs(5)).duration())
-                );
                 assert!(
                     state
                         .lifecycle

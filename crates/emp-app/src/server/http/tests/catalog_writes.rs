@@ -512,7 +512,8 @@ fn catalog_writes_persist_models_and_provider_observations() {
                     .state
                     .lifecycle
                     .updates()
-                    .drain_for_test(Duration::ZERO)
+                    .drain_for_test(wire_timeout())
+                    .await
             );
         }
 
@@ -627,7 +628,7 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
     })
     .await
     .unwrap();
-    assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
+    assert!(state.lifecycle.updates().drain_blocked_for_test());
     disconnect_submitted_write(fixture, client, task).await;
     assert!(!catalog.exists());
     release.send(()).unwrap();
@@ -680,7 +681,7 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
             let catalog_commits = count_commits(&crate::services::catalog::generated_catalog_path(state), emp_test_support::drop_check);
             let (client, task) = submit(fixture, DISCOVER, br#"{"provider":"fixture","selected":["gpt-6-luna"]}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/models", "fixture-key").await;
-            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(state.lifecycle.updates().drain_blocked_for_test());
             disconnect_submitted_write(fixture, client, task).await;
             send_http(peer, DISCOVER_MODELS).await;
             wait_for_write(fixture).await;
@@ -694,14 +695,14 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
             let start = system_now() as i64 - SAMPLE_INTERVAL_SECONDS;
             let (client, task) = submit(fixture, QUOTA, br#"{"force":true}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/quota", "fixture-key").await;
-            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(state.lifecycle.updates().drain_blocked_for_test());
             disconnect_submitted_write(fixture, client, task).await;
             send_http(peer, POOL_QUOTA).await;
             wait_for_write(fixture).await;
 
             let (client, task) = submit(fixture, BALANCE, b"{}").await;
             let peer = wait_for_balance(&balance, &tls).await;
-            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(state.lifecycle.updates().drain_blocked_for_test());
             disconnect_submitted_write(fixture, client, task).await;
             send_balance(peer).await;
             wait_for_write(fixture).await;
