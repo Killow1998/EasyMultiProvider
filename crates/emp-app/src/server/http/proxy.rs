@@ -1,5 +1,4 @@
 use super::{error::EntryError, management::same_origin, raw_head};
-use crate::modules::hooks::HookPhase;
 use crate::{
     app::ServerState,
     http::{
@@ -18,9 +17,6 @@ use axum::{
     http::request::Parts,
 };
 use emp_modules::Module;
-use serde::Deserialize;
-use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
@@ -138,38 +134,6 @@ pub(crate) fn proxy_identity(
     let token = request
         .header("Authorization")
         .and_then(|value| value.strip_prefix("Bearer "));
-    if let (Some(hooks), Some(token)) = (request.hooks, token.filter(|token| !token.is_empty()))
-        && hooks.has(HookPhase::Authenticate)
-        && (request.header("Origin").is_none() || same_origin(request, state.port))
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Device {
-            id: String,
-            name: String,
-        }
-        if let Ok(Some(caller)) = hooks.dispatch(
-            HookPhase::Authenticate,
-            || json!({"bearer_sha256":format!("{:x}", Sha256::digest(token.as_bytes()))}),
-            |module, device: Device| {
-                if device.id.trim().is_empty()
-                    || device
-                        .id
-                        .chars()
-                        .chain(device.name.chars())
-                        .any(char::is_control)
-                {
-                    return Err(());
-                }
-                Ok(Some(Caller {
-                    id: format!("module:{}:{}", module.id, device.id),
-                    name: device.name,
-                }))
-            },
-        ) {
-            return Some(caller);
-        }
-    }
     let gateway = token
         .filter(|_| state.backend.modules.active(emp_modules::Module::Gateway))
         .and_then(|value| {
@@ -268,9 +232,6 @@ pub(crate) fn request_source(
         .as_ref()
         .map(|delegate| delegate.caller.clone())
         .or_else(|| proxy_identity(request, state, now, peer));
-    if let (Some(hooks), Some(caller)) = (request.hooks, &caller) {
-        hooks.bind_caller(&caller.id);
-    }
     RequestSource {
         caller,
         peer,

@@ -111,7 +111,7 @@ impl AccountWrite {
                 .map_err(|error| JsonReply::error(400, &error, None)),
             Self::EditConfiguration(body) => {
                 return match settings::update(id, state, &Value::Object(body)) {
-                    Ok(()) => super::catalog::read_configuration(state, None),
+                    Ok(()) => super::catalog::read_configuration(state),
                     Err(ChangeError::Invalid(message)) => JsonReply::error(400, &message, None),
                     Err(ChangeError::Unavailable) => EntryError::internal().reply(),
                 };

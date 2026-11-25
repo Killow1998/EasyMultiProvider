@@ -207,7 +207,7 @@ fn memory_quota_pause_is_visible_and_does_not_redirect_to_another_account() {
         .unwrap()["accounts"][0]["quota"] =
         json!({"rate_limits":{"primary":{"usedPercent":100,"resetsAt":1}}});
     let prepared =
-        crate::services::memory_routing::prepare(&server.state, body(), &Default::default(), None)
+        crate::services::memory_routing::prepare(&server.state, body(), &Default::default())
             .unwrap();
     assert_eq!(prepared.route.provider.value()["account"]["id"], "selected");
     server.shutdown().unwrap();
@@ -219,15 +219,14 @@ fn memory_router_ignores_prompt_words_and_rejects_conflicting_source_metadata() 
     let normal =
         json!({"model":"selected/gpt-6.1-sol","input":"memory consolidation thread_title"});
     let prepared =
-        crate::services::memory_routing::prepare(&server.state, normal, &Default::default(), None)
+        crate::services::memory_routing::prepare(&server.state, normal, &Default::default())
             .unwrap();
     assert_eq!(prepared.route.requested_model, "selected/gpt-6.1-sol");
     assert!(matches!(
         crate::services::memory_routing::prepare(
             &server.state,
             body(),
-            &BTreeMap::from([("thread-id".into(), "another".into())]),
-            None,
+            &BTreeMap::from([("thread-id".into(), "another".into())])
         ),
         Err(
             crate::services::request_preparation::RequestPreparationError::MemoryUnavailable(

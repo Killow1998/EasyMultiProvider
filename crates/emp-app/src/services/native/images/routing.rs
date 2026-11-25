@@ -79,7 +79,6 @@ impl ImageRoutes {
         state: &ServerState,
         body: &Value,
         incoming: &BTreeMap<String, String>,
-        hooks: Option<&crate::modules::hooks::HookOperation>,
     ) -> Result<ResolvedRoute, NativeHttpError> {
         let model = body["model"]
             .as_str()
@@ -206,16 +205,12 @@ impl ImageRoutes {
                     json!({"model":selected}),
                     RequestOperation::Images,
                     &Default::default(),
-                    hooks,
                 )
-                .map_err(|error| match error {
-                    crate::services::request_preparation::RequestPreparationError::HookRoute(
-                        error,
-                    ) => NativeHttpError::router(error.status(), error.to_string()),
-                    _ => NativeHttpError::router(
+                .map_err(|_| {
+                    NativeHttpError::router(
                         409,
                         "The image tool's selected account is no longer available",
-                    ),
+                    )
                 })?;
                 if prepared.route.provider_id != provider
                     || prepared.route.dialect != Dialect::CodexNative

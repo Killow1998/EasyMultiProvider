@@ -57,7 +57,6 @@ struct HttpRequestContext {
     websocket_probe: Option<WebSocketDisconnect>,
     inference: Option<Arc<InferenceConnection>>,
     stream: Option<Arc<StreamConnection>>,
-    hook_monitor: Option<super::disconnect::DisconnectMonitor>,
 }
 
 type UpgradeSession = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -181,7 +180,7 @@ pub(super) async fn drive_http(
         let _ = run_blocking(move || super::request_rejected(&state, "connection_capacity")).await;
         return;
     };
-    let mut head = match head {
+    let head = match head {
         Ok(head) => head,
         Err(error) => {
             let _slot = permit.slot().clone();
@@ -220,13 +219,6 @@ pub(super) async fn drive_http(
     } else {
         None
     };
-    head.raw.4 =
-        crate::modules::hooks::HookOperation::capture(&state, observation.request_id(), None);
-    let hook_monitor = head
-        .raw
-        .4
-        .as_ref()
-        .and_then(|_| super::disconnect::DisconnectMonitor::start(&io.probe().ok()?).ok());
     let stream = streaming.then(|| Arc::new(StreamConnection::new(io.write_hook.clone())));
     let (inference, report_socket, websocket_probe) = if inference {
         (
@@ -252,7 +244,6 @@ pub(super) async fn drive_http(
         websocket_probe,
         inference,
         stream,
-        hook_monitor,
     };
     drive_connection(
         io,
@@ -322,11 +313,8 @@ async fn drive_connection(
     control: Arc<ServerControl>,
     permit: BusinessToken,
     head: GuardedHead,
-    mut http_context: Option<HttpRequestContext>,
+    http_context: Option<HttpRequestContext>,
 ) {
-    let mut hook_monitor = http_context
-        .as_mut()
-        .and_then(|request| request.hook_monitor.take());
     let mode = control.mode;
     let half_close =
         matches!(mode, ServerMode::Recovery) || (http_context.is_some() && !head.account_events);
@@ -479,36 +467,7 @@ async fn drive_connection(
             TowerToHyperService::new(service),
         )
         .with_upgrades();
-    let result = if let Some(hooks) = raw_request.hooks {
-        tokio::pin!(connection);
-        let signal = context.shutdown_signal();
-        let cancelled = async {
-            tokio::select! {
-                _ = signal.wait() => {}
-                _ = context.0.control.admission.wait_for_websocket_drain() => {}
-                _ = async {
-                    if let Some(monitor) = &mut hook_monitor {
-                        monitor.race(std::future::pending::<()>()).await;
-                    } else {
-                        std::future::pending::<()>().await;
-                    }
-                } => {}
-            }
-        };
-        let result = tokio::select! {
-            result = &mut connection => result,
-            () = cancelled => {
-                hooks.cancel();
-                connection.await
-            }
-        };
-        hooks.cancel();
-        result
-    } else {
-        connection.await
-    }
-    .map_err(std::io::Error::other);
-    drop(hook_monitor);
+    let result = connection.await.map_err(std::io::Error::other);
     let written = result.is_ok();
     let upgrade = context
         .0

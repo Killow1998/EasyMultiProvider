@@ -1,38 +1,23 @@
 use super::{budget, fixture};
 use crate::{
-    lifecycle::ServerHandle,
-    modules::{hooks::HookOperation, process::ModuleProcess},
-    server::{
-        http::tests::{assert_wire, json_body, json_request, request},
-        raw_tcp::{RawClient, read_websocket_frame, websocket_frame, wire_timeout},
-    },
+    modules::{hooks::HookOperation, process::ModuleProcess, registry::ModuleRegistry},
+    services::observation::diagnostics::Diagnostics,
 };
 use emp_modules::{
-    manifest::{HookPhase, ModuleManifest},
+    manifest::HookPhase::{self, CallFinished, CheckAccess, ProjectCatalog},
     peer::{CallError, Handlers, Peer, Side},
 };
-use emp_test_support::{Deadline, fixture_dir, test_timeout};
+use emp_storage::diagnostics::ServiceOwner;
+use emp_test_support::{fixture_dir, test_timeout};
 use serde_json::{Value, json};
 use std::{
     fs::File,
     io::{self, BufReader},
-    net::TcpListener,
-    path::Path,
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
-use tokio::{io::AsyncWriteExt, sync::mpsc as events, time::timeout};
-
-const PHASES: [HookPhase; 6] = [
-    HookPhase::Authenticate,
-    HookPhase::ProjectAccounts,
-    HookPhase::ResolveRoute,
-    HookPhase::CheckAccess,
-    HookPhase::ProjectCatalog,
-    HookPhase::CallFinished,
-];
-const BODY: &[u8] = br#"{"model":"demo/model","input":"fixture"}"#;
-const BEARER: &str = "Authorization: Bearer hook-device";
+use tempfile::TempDir;
+use tokio::{sync::mpsc as events, task::JoinHandle, time::timeout};
 
 pub(super) fn child(output: File) {
     let manifest: Value =
@@ -40,20 +25,17 @@ pub(super) fn child(output: File) {
     let behaviors: Value =
         serde_json::from_str(&std::env::var("EMP_TEST_HOOK_BEHAVIORS").unwrap()).unwrap();
     let (release, gated) = mpsc::channel();
-    let gated = std::sync::Arc::new(Mutex::new(gated));
+    let gated = Arc::new(Mutex::new(gated));
     let mut handlers = Handlers::default();
-    handlers.register("module.initialize", move |_, _, _| Ok(manifest.clone()));
-    handlers.register("module.release", move |_, _, _| {
-        release.send(()).unwrap();
-        Ok(Value::Null)
-    });
-    for phase in PHASES {
-        let behavior = behaviors[phase.method()].clone();
+    for contribution in manifest["contributions"].as_array().unwrap() {
+        let phase: HookPhase = serde_json::from_value(contribution["phase"].clone()).unwrap();
+        let method = phase.method();
+        let behavior = behaviors[method].clone();
         let gated = gated.clone();
-        handlers.register(phase.method(), move |params, token, peer| {
+        handlers.register(method, move |params, token, peer| {
             peer.call(
                 "host.hook",
-                json!({"method":phase.method(),"params":params}),
+                json!({"method":method,"params":params}),
                 budget(),
             )
             .unwrap();
@@ -80,444 +62,344 @@ pub(super) fn child(output: File) {
             }
         });
     }
+    handlers.register("module.initialize", move |_, _, _| Ok(manifest.clone()));
+    handlers.register("module.release", move |_, _, _| {
+        release.send(()).unwrap();
+        Ok(Value::Null)
+    });
     Peer::connect(Side::Module, BufReader::new(io::stdin()), output, handlers)
         .unwrap()
         .wait()
         .unwrap();
 }
 
-fn with_server(check: impl AsyncFnOnce(&ServerHandle, &Path, TcpListener)) {
-    let dir = fixture_dir().unwrap();
-    let config = dir.path().join("config.json");
-    let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
-    upstream.set_nonblocking(true).unwrap();
-    std::fs::write(
-        &config,
-        json!({
-            "providers":[{"id":"demo","base_url":format!("http://{}/v1",upstream.local_addr().unwrap()),
-                "protocol":"chat_completions","auth_mode":"api_key","api_key":"fixture"}],
-            "models":[{"id":"demo/model","provider":"demo","upstream_id":"upstream-model","enabled":true}]
-        }).to_string(),
-    ).unwrap();
-    let server =
-        ServerHandle::start_for_test([127, 0, 0, 1].into(), &config, dir.path().join("auth.json"))
-            .unwrap();
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(check(&server, dir.path(), upstream));
-    server.shutdown().unwrap();
+struct Fixture {
+    registry: Arc<ModuleRegistry>,
+    diagnostics: Arc<Diagnostics>,
+    report: events::UnboundedSender<Value>,
+    seen: events::UnboundedReceiver<Value>,
+    root: TempDir,
 }
 
-async fn install(
-    server: &ServerHandle,
-    root: &Path,
-    id: &str,
-    generation: u64,
-    phases: &[HookPhase],
-    behaviors: Value,
-    seen: &events::UnboundedSender<Value>,
-) -> ModuleProcess {
-    let manifest = json!({
-        "id":id, "module_version":"1.0.0", "host_api":{"major":3,"min_minor":0},
-        "contributions": phases.iter().map(|phase| json!({"type":"hook","phase":phase})).collect::<Vec<_>>()
-    });
-    let mut command = fixture("hooks");
-    command.env("EMP_TEST_HOOK_MANIFEST", manifest.to_string());
-    command.env("EMP_TEST_HOOK_BEHAVIORS", behaviors.to_string());
-    let state = server.state.clone();
-    let module = id.to_owned();
-    let seen = seen.clone();
-    let mut handlers = Handlers::default();
-    handlers.register("host.hook", move |mut call, _, _| {
-        assert!(state.backend.modules.registry.get(&module).is_some());
-        call["module_id"] = json!(module);
-        seen.send(call).unwrap();
-        Ok(Value::Null)
-    });
-    let state = server.state.clone();
-    let module = id.to_owned();
-    let (process, manifest): (_, ModuleManifest) = ModuleProcess::start_with_connector(
-        command,
-        root,
-        handlers,
-        budget(),
-        Peer::connect,
-        move || state.backend.modules.registry.revoke(&module, generation),
-    )
-    .await
-    .unwrap();
-    server
-        .state
-        .backend
-        .modules
-        .registry
-        .publish(
-            manifest,
-            generation,
-            process.connection(),
-            server.local_addr().port(),
-            server.state.backend.gateway_key.len(),
+impl Fixture {
+    fn new() -> Self {
+        let root = fixture_dir().unwrap();
+        let state_root = root.path().join("state");
+        let mut diagnostics = Diagnostics::new(&state_root);
+        diagnostics
+            .journal
+            .attach(Arc::new(ServiceOwner::acquire(&state_root).unwrap()));
+        let (report, seen) = events::unbounded_channel();
+        Self {
+            registry: Arc::default(),
+            diagnostics: Arc::new(diagnostics),
+            report,
+            seen,
+            root,
+        }
+    }
+
+    async fn install(
+        &self,
+        id: &str,
+        generation: u64,
+        phases: &[HookPhase],
+        behaviors: Value,
+    ) -> ModuleProcess {
+        let manifest = json!({
+            "id":id, "module_version":"1.0.0", "host_api":{"major":3,"min_minor":0},
+            "contributions": phases.iter().map(|phase| json!({"type":"hook","phase":phase})).collect::<Vec<_>>()
+        });
+        let mut command = fixture("hooks");
+        command.env("EMP_TEST_HOOK_MANIFEST", manifest.to_string());
+        command.env("EMP_TEST_HOOK_BEHAVIORS", behaviors.to_string());
+        let registry = self.registry.clone();
+        let module = id.to_owned();
+        let report = self.report.clone();
+        let mut handlers = Handlers::default();
+        handlers.register("host.hook", move |mut call, _, _| {
+            assert!(registry.get(&module).is_some());
+            call["module_id"] = json!(module);
+            report.send(call).unwrap();
+            Ok(Value::Null)
+        });
+        let registry = self.registry.clone();
+        let module = id.to_owned();
+        let (process, manifest) = ModuleProcess::start_with_connector(
+            command,
+            self.root.path(),
+            handlers,
+            budget(),
+            Peer::connect,
+            move || registry.revoke(&module, generation),
         )
+        .await
         .unwrap();
-    process
+        self.registry
+            .publish(manifest, generation, process.connection(), 0, 0)
+            .unwrap();
+        process
+    }
+
+    fn capture(&self, id: &str) -> Arc<HookOperation> {
+        HookOperation::capture(&self.registry, &self.diagnostics, Some(id), None).unwrap()
+    }
+
+    async fn event(&mut self) -> Value {
+        timeout(
+            test_timeout(Duration::from_secs(10)).duration(),
+            self.seen.recv(),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+    }
+
+    fn failures(&self, operation_id: &str) -> Vec<(String, String)> {
+        self.diagnostics.journal.flush_blocking();
+        crate::tests::live_journal(self.root.path())
+            .into_iter()
+            .filter(|record| {
+                record["event"] == "module_hook_failed"
+                    && record["fields"]["operation_id"] == operation_id
+            })
+            .map(|record| {
+                let fields = &record["fields"];
+                (
+                    fields["module_id"].as_str().unwrap().to_owned(),
+                    fields["reason"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
 }
 
-async fn event(seen: &mut events::UnboundedReceiver<Value>) -> Value {
-    timeout(
-        test_timeout(Duration::from_secs(10)).duration(),
-        seen.recv(),
-    )
-    .await
-    .unwrap()
-    .unwrap()
+fn dispatch(
+    operation: Arc<HookOperation>,
+    phase: HookPhase,
+    input: Value,
+) -> JoinHandle<Result<Option<bool>, ()>> {
+    tokio::task::spawn_blocking(move || {
+        operation.dispatch(phase, || input, |_, value| Ok(Some(value)))
+    })
 }
 
-async fn release(process: &ModuleProcess) {
+async fn release(process: &ModuleProcess) -> Result<Value, CallError> {
     let connection = process.connection();
     tokio::task::spawn_blocking(move || connection.call("module.release", Value::Null, budget()))
         .await
         .unwrap()
-        .unwrap();
 }
 
-fn assert_no_upstream(upstream: &TcpListener) {
-    assert_eq!(
-        upstream.accept().unwrap_err().kind(),
-        io::ErrorKind::WouldBlock
-    );
-}
-
-fn calls(seen: &mut events::UnboundedReceiver<Value>, expected: &[(&str, HookPhase)]) -> String {
-    let mut operation = None;
-    for (module, phase) in expected {
-        let call = seen.try_recv().unwrap();
-        assert_eq!(
-            (&call["module_id"], &call["method"]),
-            (&json!(module), &json!(phase.method()))
-        );
-        let id = call["params"]["operation_id"]
-            .as_str()
-            .expect("operation ID")
-            .to_owned();
-        assert_eq!(operation.get_or_insert(id.clone()), &id);
-    }
-    assert!(seen.try_recv().is_err());
-    operation.unwrap()
-}
-
-#[test]
-fn hooks_count_actual_http_ws_and_catalog_phases_by_operation() {
-    use HookPhase::*;
-    with_server(async |server, root, upstream| {
-        let (report, mut seen) = events::unbounded_channel();
-        let port = server.local_addr().port();
-        let address = server.local_addr();
-        let session = format!("X-EMP-Session: {}", server.session_token());
-        let later = install(
-            server,
-            root,
+#[tokio::test]
+async fn hooks_follow_id_order_and_allow_callbacks_during_dispatch() {
+    let mut fixture = Fixture::new();
+    assert!(HookOperation::capture(&fixture.registry, &fixture.diagnostics, None, None).is_none());
+    let zeta = fixture
+        .install(
             "zeta",
             1,
-            &[CheckAccess],
+            &[CheckAccess, CallFinished],
+            json!({(CheckAccess.method()):{"status":"claimed","value":false}}),
+        )
+        .await;
+    let last = fixture
+        .install("zzzz", 1, &[CheckAccess], Value::Null)
+        .await;
+    let alpha = fixture
+        .install("alpha", 1, &[CheckAccess], Value::Null)
+        .await;
+    let operation = fixture.capture("ordered");
+    operation.bind_caller("fixture");
+    let input = json!({"model":"demo/model"});
+    assert_eq!(
+        dispatch(operation.clone(), CheckAccess, input.clone())
+            .await
+            .unwrap(),
+        Ok(Some(false))
+    );
+    for id in ["alpha", "zeta"] {
+        assert_eq!(
+            fixture.event().await,
             json!({
-                (CheckAccess.method()):{"status":"claimed","value":false}
-            }),
-            &report,
-        )
-        .await;
-        let skipped = install(
-            server,
-            root,
-            "zzzz",
-            1,
-            &[ResolveRoute, CheckAccess],
-            Value::Null,
-            &report,
-        )
-        .await;
-        let first = install(
-            server,
-            root,
+                "module_id":id, "method":CheckAccess.method(),
+                "params":{"operation_id":"ordered", "caller_id":"fixture", "input":input}
+            })
+        );
+    }
+    operation.notify_finished(json!({"result":"success"}));
+    assert_eq!(
+        fixture.event().await,
+        json!({
+            "module_id":"zeta", "method":CallFinished.method(),
+            "params":{"operation_id":"ordered", "caller_id":"fixture", "input":{"result":"success"}}
+        })
+    );
+    assert!(fixture.seen.try_recv().is_err());
+    assert!(fixture.failures("ordered").is_empty());
+    alpha.stop().await.unwrap();
+    zeta.stop().await.unwrap();
+    last.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn hooks_share_a_phase_deadline_and_report_timeout() {
+    let mut fixture = Fixture::new();
+    let slow = fixture
+        .install(
             "alpha",
             1,
-            &[
-                Authenticate,
-                ProjectAccounts,
-                ResolveRoute,
-                CheckAccess,
-                ProjectCatalog,
-                CallFinished,
-            ],
-            json!({
-                (ProjectAccounts.method()):{"status":"claimed","value":[{"id":"alias","source_id":"missing"}]},
-                (ResolveRoute.method()):{"status":"claimed","value":"demo/model"},
-                (CheckAccess.method()):{"status":"claimed","value":true}
-            }),
-            &report,
+            &[ProjectCatalog],
+            json!({(ProjectCatalog.method()):"block"}),
         )
         .await;
-        let mut operation_ids = std::collections::BTreeSet::new();
-        let plain = json_request(port, "/v1/responses", &[BEARER], BODY);
-        assert_wire(address, &plain, false, 401).await;
-        let denied_auth = seen.try_recv().unwrap();
-        assert_eq!(denied_auth["method"], Authenticate.method());
-        assert_eq!(
-            denied_auth["params"]["input"]["bearer_sha256"],
-            format!(
-                "{:x}",
-                <sha2::Sha256 as sha2::Digest>::digest(b"hook-device")
-            )
-        );
-        assert!(seen.try_recv().is_err());
-
-        let wire = json_request(port, "/v1/responses", &[BEARER, &session], BODY);
-        assert_wire(address, &wire, false, 403).await;
-        let phases = [
-            ("alpha", ProjectAccounts),
-            ("alpha", ResolveRoute),
-            ("alpha", CheckAccess),
-            ("zeta", CheckAccess),
-        ];
-        let http = [&[("alpha", Authenticate)][..], &phases].concat();
-        assert!(operation_ids.insert(calls(&mut seen, &http)));
-
-        let device = install(server, root, "alpha", 2, &[
-            Authenticate, ProjectAccounts, ResolveRoute, CheckAccess, ProjectCatalog, CallFinished,
-        ], json!({
-            (Authenticate.method()):{"status":"claimed","value":{"id":"device","name":"Fixture"}},
-            (ResolveRoute.method()):{"status":"claimed","value":"demo/model"},
-        }), &report).await;
-        let wire = request(
-            port,
-            "GET",
-            "/v1/responses",
-            &[
-                BEARER,
-                "Upgrade: websocket",
-                "Connection: Upgrade",
-                "Sec-WebSocket-Version: 13",
-                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-            ],
-            b"",
-        );
-        let mut websocket = RawClient::request(address, &wire).await;
-        assert!(websocket.head.starts_with("HTTP/1.1 101 "));
-        assert!(operation_ids.insert(calls(&mut seen, &[("alpha", Authenticate)])));
-        for _ in 0..2 {
-            websocket
-                .io
-                .write_all(&websocket_frame(
-                    0x81,
-                    Some([1, 2, 3, 4]),
-                    br#"{"type":"response.create","model":"demo/model","input":"fixture"}"#,
-                ))
-                .await
-                .unwrap();
-            let deadline = Deadline::after(wire_timeout());
-            loop {
-                let (opcode, payload) =
-                    read_websocket_frame(&mut websocket.io, false, &deadline).await;
-                assert_eq!(opcode, 0x81);
-                let frame: Value = serde_json::from_slice(&payload).unwrap();
-                if frame["type"] == "error" {
-                    assert_eq!(frame["status"], 403);
-                    break;
-                }
-                assert_eq!(frame["type"], "codex.response.metadata");
-            }
-            assert!(operation_ids.insert(calls(&mut seen, &phases)));
-        }
-        drop(websocket);
-
-        let read = request(port, "GET", "/v1/models", &[BEARER], b"");
-        let listing = json_body(&assert_wire(address, &read, false, 200).await);
-        assert!(
-            listing["data"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|model| model["id"] == "demo/model")
-        );
-        assert!(operation_ids.insert(calls(
-            &mut seen,
-            &[("alpha", Authenticate), ("alpha", ProjectCatalog)]
-        )));
-        let config = request(port, "GET", "/api/config", &[&session], b"");
-        assert_wire(address, &config, false, 200).await;
-        assert!(operation_ids.insert(calls(&mut seen, &[("alpha", ProjectCatalog)])));
-        assert_no_upstream(&upstream);
-
-        first.stop().await.unwrap();
-        device.stop().await.unwrap();
-        later.stop().await.unwrap();
-        skipped.stop().await.unwrap();
-    });
+    let later = fixture
+        .install(
+            "zeta",
+            1,
+            &[ProjectCatalog],
+            json!({(ProjectCatalog.method()):{"status":"claimed","value":true}}),
+        )
+        .await;
+    let running = dispatch(fixture.capture("deadline"), ProjectCatalog, Value::Null);
+    assert_eq!(fixture.event().await["module_id"], "alpha");
+    assert_eq!(running.await.unwrap(), Ok(None));
+    assert_eq!(
+        fixture.failures("deadline"),
+        [
+            ("alpha".into(), "Timeout".into()),
+            ("zeta".into(), "Timeout".into()),
+        ]
+    );
+    release(&slow).await.unwrap();
+    let cancelled = fixture.event().await;
+    assert_eq!(cancelled["method"], "cancelled");
+    assert_eq!(cancelled["params"], true);
+    assert!(fixture.seen.try_recv().is_err());
+    slow.stop().await.unwrap();
+    later.stop().await.unwrap();
 }
 
-#[test]
-fn hook_route_exit_fails_closed_and_preserves_new_generation() {
-    use HookPhase::*;
-    with_server(async |server, root, upstream| {
-        let (report, mut seen) = events::unbounded_channel();
-        let address = server.local_addr();
-        let session = format!("X-EMP-Session: {}", server.session_token());
-        let wire = json_request(address.port(), "/v1/responses", &[&session], BODY);
-        let old = install(
-            server,
-            root,
+#[tokio::test]
+async fn hook_exit_fails_the_snapshot_without_revoking_the_new_generation() {
+    let mut fixture = Fixture::new();
+    let old = fixture
+        .install(
             "router",
             1,
-            &[ResolveRoute],
-            json!({(ResolveRoute.method()):"exit"}),
-            &report,
+            &[CheckAccess],
+            json!({(CheckAccess.method()):"exit"}),
         )
         .await;
-        let running = tokio::spawn(async move { assert_wire(address, &wire, false, 503).await });
-        assert_eq!(event(&mut seen).await["method"], ResolveRoute.method());
+    let running = dispatch(fixture.capture("old"), CheckAccess, Value::Null);
+    assert_eq!(fixture.event().await["params"]["operation_id"], "old");
 
-        let new = install(
-            server,
-            root,
+    let new = fixture
+        .install(
             "router",
             2,
-            &[ResolveRoute, CheckAccess],
-            json!({
-                (ResolveRoute.method()):{"status":"claimed","value":"demo/model"},
-                (CheckAccess.method()):{"status":"claimed","value":false}
-            }),
-            &report,
+            &[CheckAccess],
+            json!({(CheckAccess.method()):{"status":"claimed","value":true}}),
         )
         .await;
-        let connection = old.connection();
-        let result = tokio::task::spawn_blocking(move || {
-            connection.call("module.release", Value::Null, budget())
-        })
-        .await
-        .unwrap();
-        assert!(matches!(result, Ok(_) | Err(CallError::Disconnected)));
-        let reply = json_body(&running.await.unwrap());
-        assert!(
-            reply["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("provider for model")
-        );
-        assert!(old.stop().await.unwrap().success());
+    assert!(matches!(
+        release(&old).await,
+        Ok(_) | Err(CallError::Disconnected)
+    ));
+    assert_eq!(running.await.unwrap(), Err(()));
+    assert!(old.stop().await.unwrap().success());
+    assert_eq!(
+        fixture.failures("old"),
+        [("router".into(), "Exited".into())]
+    );
 
-        let wire = json_request(address.port(), "/v1/responses", &[&session], BODY);
-        assert_wire(address, &wire, false, 403).await;
-        calls(
-            &mut seen,
-            &[("router", ResolveRoute), ("router", CheckAccess)],
-        );
-        assert_no_upstream(&upstream);
-        new.stop().await.unwrap();
-    });
+    assert_eq!(fixture.registry.get("router").unwrap().generation, 2);
+    let running = dispatch(fixture.capture("new"), CheckAccess, Value::Null);
+    assert_eq!(fixture.event().await["params"]["operation_id"], "new");
+    assert_eq!(running.await.unwrap(), Ok(Some(true)));
+    new.stop().await.unwrap();
 }
 
-#[test]
-fn hook_access_timeout_and_client_disconnect_send_cancel_without_upstream() {
-    use HookPhase::*;
-    with_server(async |server, root, upstream| {
-        let (report, mut seen) = events::unbounded_channel();
-        let address = server.local_addr();
-        let session = format!("X-EMP-Session: {}", server.session_token());
-        let wire = json_request(address.port(), "/v1/responses", &[&session], BODY);
-        let process = install(
-            server,
-            root,
+#[tokio::test]
+async fn cancelling_a_hook_sends_the_peer_cancellation() {
+    let mut fixture = Fixture::new();
+    let process = fixture
+        .install(
             "access",
             1,
             &[CheckAccess],
             json!({(CheckAccess.method()):"block"}),
-            &report,
         )
         .await;
-        let timeout_wire = wire.clone();
-        let running =
-            tokio::spawn(async move { assert_wire(address, &timeout_wire, false, 403).await });
-        assert_eq!(event(&mut seen).await["method"], CheckAccess.method());
-        running.await.unwrap();
-        release(&process).await;
-        let cancelled = event(&mut seen).await;
-        assert_eq!(cancelled["method"], "cancelled");
-        assert_eq!(cancelled["params"], true);
+    let operation = fixture.capture("cancel");
+    let running = dispatch(operation.clone(), CheckAccess, Value::Null);
+    assert_eq!(fixture.event().await["params"]["operation_id"], "cancel");
+    operation.cancel();
+    assert_eq!(running.await.unwrap(), Err(()));
+    assert_eq!(
+        fixture.failures("cancel"),
+        [("access".into(), "Cancelled".into())]
+    );
 
-        let (failed, failure) = tokio::sync::oneshot::channel();
-        server
-            .state
-            .backend
-            .diagnostics
-            .journal
-            .gate_next_event("module_hook_failed", move || {
-                let _ = failed.send(());
-            });
-        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
-        client.write_all(&wire).await.unwrap();
-        let entered = event(&mut seen).await;
-        assert_eq!(entered["method"], CheckAccess.method());
-        drop(client);
-        timeout(test_timeout(Duration::from_secs(10)).duration(), failure)
-            .await
-            .unwrap()
-            .unwrap();
-        release(&process).await;
-        let cancelled = event(&mut seen).await;
-        assert_eq!(cancelled["method"], "cancelled");
-        assert_eq!(cancelled["params"], true);
-        let id = entered["params"]["operation_id"].clone();
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
-        crate::tests::wait_for(&deadline, || {
-            crate::tests::live_journal(root).iter().any(|record| {
-                record["event"] == "module_hook_failed"
-                    && record["fields"]["operation_id"] == id
-                    && record["fields"]["reason"] == "Cancelled"
-            })
-        });
-        assert_no_upstream(&upstream);
-        process.stop().await.unwrap();
-    });
+    release(&process).await.unwrap();
+    let cancelled = fixture.event().await;
+    assert_eq!(cancelled["method"], "cancelled");
+    assert_eq!(cancelled["params"], true);
+    process.stop().await.unwrap();
 }
 
-#[test]
-fn hook_optional_projection_failure_keeps_base_view_and_finish_is_best_effort() {
-    use HookPhase::*;
-    with_server(async |server, root, _| {
-        let (report, mut seen) = events::unbounded_channel();
-        let address = server.local_addr();
-        let wire = request(address.port(), "GET", "/v1/models", &[], b"");
-        let base = json_body(&assert_wire(address, &wire, false, 200).await);
-        let bad = install(server, root, "alpha", 1, &[ProjectCatalog, CallFinished], json!({
-            (ProjectCatalog.method()):{"status":"claimed","value":{"entries":[{"id":"demo/model","display_name":"rewrite"}],"hidden_ids":["demo/model"]}}
-        }), &report).await;
-        let live = install(
-            server,
-            root,
-            "zeta",
+#[tokio::test]
+async fn hook_decline_with_extra_fields_fails() {
+    let mut fixture = Fixture::new();
+    let process = fixture
+        .install(
+            "access",
             1,
-            &[CallFinished],
-            Value::Null,
-            &report,
+            &[CheckAccess],
+            json!({(CheckAccess.method()):{"status":"declined","value":true}}),
         )
         .await;
-        let after = json_body(&assert_wire(address, &wire, false, 200).await);
-        assert_eq!(after, base);
-        calls(&mut seen, &[("alpha", ProjectCatalog)]);
+    let running = dispatch(fixture.capture("invalid-reply"), CheckAccess, Value::Null);
+    assert_eq!(
+        fixture.event().await["params"]["operation_id"],
+        "invalid-reply"
+    );
+    assert_eq!(running.await.unwrap(), Err(()));
+    assert_eq!(
+        fixture.failures("invalid-reply"),
+        [("access".into(), "InvalidReply".into())]
+    );
+    process.stop().await.unwrap();
+}
 
-        let operation =
-            HookOperation::capture(&server.state, Some("finished-fixture"), None).unwrap();
-        bad.stop().await.unwrap();
-        operation.notify_finished(json!({"result":"success"}));
-        let completed = event(&mut seen).await;
-        assert_eq!(completed["module_id"], "zeta");
-        assert_eq!(completed["method"], CallFinished.method());
-        assert_eq!(
-            completed["params"],
-            json!({"operation_id":"finished-fixture","caller_id":null,"input":{"result":"success"}})
-        );
-        assert!(seen.try_recv().is_err());
-        live.stop().await.unwrap();
-    });
+#[tokio::test]
+async fn oversized_hook_frame_does_not_fail_another_call_on_the_same_peer() {
+    let mut fixture = Fixture::new();
+    let process = fixture
+        .install(
+            "access",
+            1,
+            &[CheckAccess, ProjectCatalog],
+            json!({(ProjectCatalog.method()):"block"}),
+        )
+        .await;
+    let small = process
+        .connection()
+        .start_request(ProjectCatalog.method(), json!({"operation_id":"small"}))
+        .unwrap();
+    assert_eq!(fixture.event().await["params"]["operation_id"], "small");
+
+    let input = Value::String("\"".repeat(8 * 1024 * 1024));
+    let large = dispatch(fixture.capture("large"), CheckAccess, input);
+    assert_eq!(large.await.unwrap(), Err(()));
+    assert_eq!(
+        fixture.failures("large"),
+        [("access".into(), "InvalidFrame".into())]
+    );
+    release(&process).await.unwrap();
+    let completion = fixture.event().await;
+    assert_eq!(completion["method"], "cancelled");
+    assert_eq!(completion["params"], false);
+    assert_eq!(small.wait(budget()).unwrap(), json!({"status":"declined"}));
+    process.stop().await.unwrap();
 }

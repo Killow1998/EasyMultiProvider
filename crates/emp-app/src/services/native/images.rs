@@ -2,7 +2,6 @@
 use super::resolve_headers;
 use crate::app::ServerState;
 use crate::services::request_outcome::RequestGuard;
-use crate::services::request_preparation::{RequestOperation, check_hook_access};
 use emp_router::native_http::{NativeCompleteResponse, NativeHttpError};
 use emp_transport::{HttpMethod, HttpTransportErrorKind};
 use serde_json::{Value, json};
@@ -20,16 +19,13 @@ pub(crate) fn execute(
     operation: &str,
     body: &Value,
     incoming: &BTreeMap<String, String>,
-    hooks: Option<&crate::modules::hooks::HookOperation>,
     mut monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
 ) -> Result<NativeCompleteResponse, NativeHttpError> {
     let route = state
         .backend
         .transport
         .image_routes
-        .resolve(state, body, incoming, hooks)?;
-    check_hook_access(hooks, &route, None, RequestOperation::Images)
-        .map_err(|()| NativeHttpError::router(403, "module access denied"))?;
+        .resolve(state, body, incoming)?;
     state
         .backend
         .team

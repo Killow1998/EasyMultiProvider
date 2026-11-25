@@ -411,7 +411,6 @@ fn gateway_requests_use_native_api_keys_and_subscription_credentials_separately(
             body.clone(),
             crate::services::request_preparation::RequestOperation::Responses,
             &Default::default(),
-            None,
         )
         .unwrap()
         .route;

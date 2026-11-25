@@ -1,9 +1,6 @@
 use crate::app::ServerState;
-use crate::modules::hooks::{HookOperation, HookPhase};
 use crate::services::accounts::subscription_auth_headers;
-use serde::Deserialize;
-use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -95,11 +92,7 @@ pub(crate) fn source_catalog(state: &ServerState, config: &Value) -> Value {
     CatalogSources::load(state, &mut visible).merged(&visible)
 }
 
-pub(crate) fn public_configuration(
-    state: &ServerState,
-    config: &Value,
-    hooks: Option<&HookOperation>,
-) -> Value {
+pub(crate) fn public_configuration(state: &ServerState, config: &Value) -> Value {
     let mut effective = config.clone();
     let sources = CatalogSources::load(state, &mut effective);
     let mut public = sources.public_configuration(state, &effective);
@@ -110,74 +103,7 @@ pub(crate) fn public_configuration(
             .unwrap_or(serde_json::json!([]));
         super::modules::aero::augment_public(config, &mut public);
     }
-    if project_catalog(hooks, &mut public["catalog_models"], "id") {
-        public["catalog_families"] = json!(emp_codex::management_views::catalog_families(
-            config,
-            public["catalog_models"]
-                .as_array()
-                .expect("public catalog models"),
-        ));
-    }
     public
-}
-
-pub(crate) fn project_catalog(
-    hooks: Option<&HookOperation>,
-    entries: &mut Value,
-    id: &str,
-) -> bool {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Entry {
-        id: String,
-        display_name: String,
-    }
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Projection {
-        entries: Vec<Entry>,
-        hidden_ids: Vec<String>,
-    }
-    let Some(hooks) = hooks.filter(|hooks| hooks.has(HookPhase::ProjectCatalog)) else {
-        return false;
-    };
-    let entries = entries.as_array_mut().expect("catalog models");
-    let mut ids: BTreeSet<_> = entries
-        .iter()
-        .filter_map(|entry| entry[id].as_str().map(str::to_owned))
-        .collect();
-    let base_ids = ids.clone();
-    let mut hidden = BTreeSet::new();
-    let mut changed = false;
-    let _ = hooks.dispatch::<Projection, ()>(
-        HookPhase::ProjectCatalog,
-        || json!({"model_ids":base_ids}),
-        |module, projection| {
-            let mut added = BTreeSet::new();
-            if (!module.catalog && !projection.entries.is_empty())
-                || projection.entries.iter().any(|entry| {
-                    !entry.id.starts_with(&format!("{}/", module.id))
-                        || ids.contains(&entry.id)
-                        || !added.insert(entry.id.clone())
-                })
-            {
-                return Err(());
-            }
-            changed |= !added.is_empty();
-            ids.extend(added);
-            entries.extend(
-                projection
-                    .entries
-                    .into_iter()
-                    .map(|entry| json!({(id):entry.id, "display_name":entry.display_name})),
-            );
-            hidden.extend(projection.hidden_ids);
-            Ok(None)
-        },
-    );
-    let before = entries.len();
-    entries.retain(|entry| entry[id].as_str().is_none_or(|id| !hidden.contains(id)));
-    changed || before != entries.len()
 }
 
 pub(crate) fn subscription_options(

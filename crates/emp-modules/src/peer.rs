@@ -61,6 +61,7 @@ pub enum CallError {
     Disconnected,
     Cancelled,
     TimedOut,
+    InvalidFrame,
     Remote(ResponseError),
 }
 
@@ -70,6 +71,7 @@ impl fmt::Display for CallError {
             Self::Disconnected => f.write_str("连接已断开"),
             Self::Cancelled => f.write_str("请求已取消"),
             Self::TimedOut => f.write_str("请求超时"),
+            Self::InvalidFrame => f.write_str("无法编码有效的 JSON-RPC 帧"),
             Self::Remote(error) => write!(f, "JSON-RPC {}: {}", error.code, error.message),
         }
     }
@@ -111,12 +113,47 @@ impl CancellationToken {
 }
 
 struct Connection {
-    writer: Option<mpsc::Sender<Message>>,
+    writer: Option<mpsc::Sender<Outgoing>>,
     closed: mpsc::Sender<io::Result<()>>,
     next_id: u64,
     pending: HashMap<RequestId, PendingReply>,
     incoming: HashMap<RequestId, CancellationToken>,
     draining_replies: bool,
+}
+
+enum Outgoing {
+    Request(RequestId, Frame),
+    Notification(Frame),
+    Control(Message),
+}
+
+struct Frame {
+    header: String,
+    body: Vec<u8>,
+}
+
+impl Frame {
+    fn encode(message: &Message) -> io::Result<Self> {
+        #[derive(Serialize)]
+        struct JsonRpc<'a> {
+            jsonrpc: &'static str,
+            #[serde(flatten)]
+            message: &'a Message,
+        }
+
+        let body = serde_json::to_vec(&JsonRpc {
+            jsonrpc: "2.0",
+            message,
+        })?;
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        if header.len() + body.len() > MAX_FRAME_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid frame length",
+            ));
+        }
+        Ok(Self { header, body })
+    }
 }
 
 impl Connection {
@@ -282,23 +319,32 @@ impl PeerHandle {
         method: impl Into<String>,
         params: Value,
     ) -> Result<PendingRequest, CallError> {
-        let reply = Arc::new(Reply::default());
-        let method = method.into();
+        let id = {
+            let mut state = self.connection.lock().unwrap();
+            let connection = state
+                .as_mut()
+                .filter(|connection| connection.writer.is_some())
+                .ok_or(CallError::Disconnected)?;
+            let id = RequestId::from(format!("{}{}", self.side.prefix(), connection.next_id));
+            connection.next_id += 1;
+            id
+        };
+        let frame = Frame::encode(
+            &Request {
+                id: id.clone(),
+                method: method.into(),
+                params,
+            }
+            .into(),
+        )
+        .map_err(|_| CallError::InvalidFrame)?;
         let mut state = self.connection.lock().unwrap();
         let connection = state.as_mut().ok_or(CallError::Disconnected)?;
         let writer = connection.writer.as_ref().ok_or(CallError::Disconnected)?;
-        let id = RequestId::from(format!("{}{}", self.side.prefix(), connection.next_id));
-        connection.next_id += 1;
         writer
-            .send(
-                Request {
-                    id: id.clone(),
-                    method,
-                    params,
-                }
-                .into(),
-            )
+            .send(Outgoing::Request(id.clone(), frame))
             .map_err(|_| CallError::Disconnected)?;
+        let reply = Arc::new(Reply::default());
         connection.pending.insert(
             id.clone(),
             PendingReply {
@@ -324,13 +370,14 @@ impl PeerHandle {
             method: method.into(),
             params,
         };
+        let frame = Frame::encode(&notification.into()).map_err(|_| CallError::InvalidFrame)?;
         let state = self.connection.lock().unwrap();
         let connection = state.as_ref().ok_or(CallError::Disconnected)?;
         connection
             .writer
             .as_ref()
             .ok_or(CallError::Disconnected)?
-            .send(notification.into())
+            .send(Outgoing::Notification(frame))
             .map_err(|_| CallError::Disconnected)
     }
 
@@ -348,38 +395,20 @@ impl PeerHandle {
     fn write_loop(
         &self,
         writer: &mut impl Write,
-        frames: mpsc::Receiver<Message>,
+        frames: mpsc::Receiver<Outgoing>,
     ) -> io::Result<()> {
-        #[derive(Serialize)]
-        struct JsonRpc<'a> {
-            jsonrpc: &'static str,
-            #[serde(flatten)]
-            message: &'a Message,
-        }
-
-        let mut body = Vec::new();
         for message in frames {
             if self.connection.lock().unwrap().is_none() {
                 break;
             }
-            body.clear();
-            serde_json::to_writer(
-                &mut body,
-                &JsonRpc {
-                    jsonrpc: "2.0",
-                    message: &message,
-                },
-            )?;
-            let header = format!("Content-Length: {}\r\n\r\n", body.len());
-            if header.len() + body.len() > MAX_FRAME_BYTES {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "invalid frame length",
-                ));
-            }
+            let (request_id, frame) = match message {
+                Outgoing::Request(id, frame) => (Some(id), frame),
+                Outgoing::Notification(frame) => (None, frame),
+                Outgoing::Control(message) => (None, Frame::encode(&message)?),
+            };
             if let Err(error) = writer
-                .write_all(header.as_bytes())
-                .and_then(|()| writer.write_all(&body))
+                .write_all(frame.header.as_bytes())
+                .and_then(|()| writer.write_all(&frame.body))
                 .and_then(|()| writer.flush())
             {
                 let mut state = self.connection.lock().unwrap();
@@ -395,9 +424,9 @@ impl PeerHandle {
                 }
                 break;
             }
-            if let Message::Request(request) = message
+            if let Some(id) = request_id
                 && let Some(connection) = self.connection.lock().unwrap().as_mut()
-                && let Some(pending) = connection.pending.get_mut(&request.id)
+                && let Some(pending) = connection.pending.get_mut(&id)
             {
                 pending.sent = true;
             }
@@ -446,14 +475,14 @@ impl PeerHandle {
                     }
                     let Some(handler) = handlers.0.get(&request.method).cloned() else {
                         if let Some(writer) = &connection.writer {
-                            let _ = writer.send(
+                            let _ = writer.send(Outgoing::Control(
                                 Response::new_err(
                                     request.id,
                                     ErrorCode::MethodNotFound as i32,
                                     request.method,
                                 )
                                 .into(),
-                            );
+                            ));
                         }
                         continue;
                     };
@@ -507,13 +536,13 @@ impl Drop for HandlerReply {
                 })
             });
             if let Some(writer) = &connection.writer {
-                let _ = writer.send(
+                let _ = writer.send(Outgoing::Control(
                     Response {
                         id: self.id.clone(),
                         response_result,
                     }
                     .into(),
-                );
+                ));
             }
         }
     }
@@ -587,8 +616,9 @@ impl RequestCanceller {
         {
             pending.reply.complete(Err(error));
             if let Some(writer) = &connection.writer {
-                let _ = writer
-                    .send(Notification::new(CANCEL_REQUEST.into(), json!({"id": self.id})).into());
+                let _ = writer.send(Outgoing::Control(
+                    Notification::new(CANCEL_REQUEST.into(), json!({"id": self.id})).into(),
+                ));
             }
         }
     }

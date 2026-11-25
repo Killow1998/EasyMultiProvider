@@ -120,6 +120,10 @@ impl ModuleRegistry {
             .cloned()
     }
 
+    #[allow(
+        dead_code,
+        reason = "hook snapshots are used by the unwired dispatcher"
+    )]
     pub(crate) fn hooks(&self) -> Vec<Arc<ActiveModule>> {
         self.active
             .lock()

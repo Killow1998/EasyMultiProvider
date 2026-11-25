@@ -37,11 +37,7 @@ pub(super) fn prepare_http_error(
                 RequestPreparationError::ModelRequired => {
                     request_router_error_response(400, "request.model is required")
                 }
-                RequestPreparationError::Route(error)
-                | RequestPreparationError::HookRoute(error) => route_resolution_response(error),
-                RequestPreparationError::HookAccess => {
-                    request_router_error_response(403, "module access denied")
-                }
+                RequestPreparationError::Route(error) => route_resolution_response(error),
                 RequestPreparationError::TeamAccess(error) => {
                     super::native_response::error_reply(error.public_error(state))
                 }

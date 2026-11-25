@@ -1,6 +1,5 @@
-use crate::app::ServerState;
 use crate::services::observation::diagnostics::Diagnostics;
-pub(crate) use emp_modules::manifest::HookPhase;
+use emp_modules::manifest::HookPhase;
 use emp_modules::peer::{CallError, RequestCanceller};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -9,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::registry::ActiveModule;
+use super::registry::{ActiveModule, ModuleRegistry};
 
 const PHASE_BUDGET: Duration = Duration::from_secs(5);
 
@@ -32,7 +31,7 @@ struct Cancellation {
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 enum Reply<T> {
     Claimed { value: T },
-    Declined,
+    Declined {},
 }
 
 enum Outcome<T> {
@@ -49,6 +48,7 @@ enum Failure {
     Timeout,
     Exited,
     InvalidReply,
+    InvalidFrame,
     Cancelled,
 }
 
@@ -58,6 +58,7 @@ impl From<CallError> for Failure {
             CallError::TimedOut => Self::Timeout,
             CallError::Disconnected => Self::Exited,
             CallError::Remote(_) => Self::InvalidReply,
+            CallError::InvalidFrame => Self::InvalidFrame,
             CallError::Cancelled => Self::Cancelled,
         }
     }
@@ -65,27 +66,22 @@ impl From<CallError> for Failure {
 
 impl HookOperation {
     pub(crate) fn capture(
-        state: &ServerState,
+        registry: &ModuleRegistry,
+        diagnostics: &Arc<Diagnostics>,
         id: Option<&str>,
         deadline: Option<Instant>,
     ) -> Option<Arc<Self>> {
-        let modules = state.backend.modules.registry.hooks();
+        let modules = registry.hooks();
         (!modules.is_empty()).then(|| {
             Arc::new(Self {
                 modules,
                 id: id.map(str::to_owned),
                 caller: OnceLock::new(),
                 deadline,
-                diagnostics: state.backend.diagnostics.clone(),
+                diagnostics: diagnostics.clone(),
                 cancellation: Mutex::default(),
             })
         })
-    }
-
-    pub(crate) fn has(&self, phase: HookPhase) -> bool {
-        self.modules
-            .iter()
-            .any(|module| module.hooks.contains(&phase))
     }
 
     pub(crate) fn bind_caller(&self, caller: &str) {
@@ -98,13 +94,6 @@ impl HookOperation {
         if let Some(pending) = cancellation.pending.take() {
             pending.cancel();
         }
-    }
-
-    pub(crate) fn cancelled(&self) -> bool {
-        self.cancellation
-            .lock()
-            .expect("hook cancellation")
-            .cancelled
     }
 
     pub(crate) fn dispatch<T: DeserializeOwned, R>(
@@ -164,7 +153,7 @@ impl HookOperation {
             };
             let outcome = match result {
                 Ok(None) => Outcome::Claimed(None),
-                Ok(Some(Reply::Declined)) => Outcome::Declined,
+                Ok(Some(Reply::Declined {})) => Outcome::Declined,
                 Ok(Some(Reply::Claimed { value })) => match claim(module, value) {
                     Ok(value) => Outcome::Claimed(value),
                     Err(()) => failed(Failure::InvalidReply),
@@ -192,10 +181,6 @@ impl HookOperation {
         Ok(None)
     }
 
-    #[cfg_attr(
-        not(all(test, unix)),
-        expect(dead_code, reason = "A2-S3c connects the completed operation")
-    )]
     pub(crate) fn notify_finished(&self, facts: Value) {
         let _ = self.dispatch::<Value, ()>(HookPhase::CallFinished, || facts, |_, _| Ok(None));
     }
