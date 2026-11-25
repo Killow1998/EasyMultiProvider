@@ -1,7 +1,9 @@
 use super::{Path, Result, comments, imports::Imports, macro_arguments, read};
-use std::collections::BTreeMap;
+use proc_macro2::{LineColumn, TokenStream, TokenTree};
+use std::collections::{BTreeMap, BTreeSet};
 use syn::{
     Expr, Pat,
+    ext::IdentExt as _,
     parse::Parser as _,
     punctuated::Punctuated,
     spanned::Spanned,
@@ -11,6 +13,7 @@ use syn::{
 const ALLOWED: &[(&str, usize)] = &[("emp-app", 62), ("emp-codex", 2), ("emp-transport", 9)];
 
 const SOCKET_TIMEOUTS: &[(&str, usize)] = &[("emp-app", 5)];
+const TEST_SUPPORT_LIB: &str = "crates/emp-test-support/src/lib.rs";
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
     let mut counts: BTreeMap<&str, (Vec<String>, Vec<String>)> = ALLOWED
@@ -37,8 +40,13 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
                 .into_iter()
                 .map(|line| format!("{path}:{line}")),
         );
-        for line in violations.fixed_wait_constructors {
-            errors.push(format!("[test-deadlines] {path}:{line}: 固定等待只能引用产品常量；测试余量使用 test_timeout"));
+        for line in violations.fixed_wait_in_tests {
+            errors.push(format!("[test-deadlines] {path}:{line}: 测试不得写 FixedWait 标识符，只引用产品常量；测试余量使用 test_timeout"));
+        }
+        for line in violations.fixed_wait_renames {
+            errors.push(format!(
+                "[test-deadlines] {path}:{line}: FixedWait 不重命名，请保留原名"
+            ));
         }
     }
     for (group, (bare, sockets)) in counts {
@@ -104,13 +112,17 @@ pub(super) fn group(path: &str) -> Option<&str> {
 struct Violations {
     bare: Vec<usize>,
     sockets: Vec<usize>,
-    fixed_wait_constructors: Vec<usize>,
+    fixed_wait_in_tests: BTreeSet<usize>,
+    fixed_wait_renames: BTreeSet<usize>,
 }
 
 fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
     let test_support = path.starts_with("crates/emp-test-support/src/");
     let test_file = test_support || comments::test_file(path);
-    if !(test_file || (contents.contains("test") && contents.contains("#["))) {
+    if !(test_file
+        || contents.contains("FixedWait")
+        || (contents.contains("test") && contents.contains("#[")))
+    {
         return Ok(Violations::default());
     }
     let source = syn::parse_file(contents).map_err(|error| format!("{path}: {error}"))?;
@@ -121,7 +133,12 @@ fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
     let mut visitor = Deadlines {
         test_file,
         emp_app: group(path) == Some("emp-app"),
-        socket_implementation: path == "crates/emp-test-support/src/lib.rs",
+        socket_implementation: path == TEST_SUPPORT_LIB,
+        fixed_wait_api: if path == TEST_SUPPORT_LIB {
+            support_fixed_wait_api(&source)
+        } else {
+            Vec::new()
+        },
         scopes,
         imports: Imports::file(path, &source.items),
         violations: Violations::default(),
@@ -132,10 +149,48 @@ fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
     Ok(visitor.violations)
 }
 
+fn support_fixed_wait_api(source: &syn::File) -> Vec<LineColumn> {
+    let mut locations = Vec::new();
+    for item in &source.items {
+        match item {
+            syn::Item::Use(item) => {
+                if let syn::UseTree::Path(domain) = &item.tree
+                    && domain.ident == "emp_domain"
+                    && let syn::UseTree::Name(wait) = domain.tree.as_ref()
+                    && wait.ident == "FixedWait"
+                {
+                    locations.push(wait.ident.span().start());
+                }
+            }
+            syn::Item::Impl(item)
+                if item.trait_.is_none()
+                    && matches!(item.self_ty.as_ref(), syn::Type::Path(budget)
+                        if budget.qself.is_none() && budget.path.is_ident("TestBudget")) =>
+            {
+                for method in &item.items {
+                    if let syn::ImplItem::Fn(method) = method
+                        && method.sig.ident == "with_product_wait"
+                        && let Some(syn::FnArg::Typed(wait)) = method.sig.inputs.iter().nth(1)
+                        && let syn::Type::Path(wait) = wait.ty.as_ref()
+                        && wait.qself.is_none()
+                        && let Some(ident) = wait.path.get_ident()
+                        && ident == "FixedWait"
+                    {
+                        locations.push(ident.span().start());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    locations
+}
+
 struct Deadlines<'source> {
     test_file: bool,
     emp_app: bool,
     socket_implementation: bool,
+    fixed_wait_api: Vec<LineColumn>,
     scopes: comments::TestScopes,
     imports: Imports<'source>,
     violations: Violations,
@@ -297,6 +352,8 @@ impl<'ast> Visit<'ast> for Deadlines<'_> {
             self.imports.enter_module(module);
             visit::visit_item_mod(self, module);
             self.imports.leave_scope();
+        } else {
+            visit::visit_item_mod(self, module);
         }
     }
 
@@ -307,6 +364,7 @@ impl<'ast> Visit<'ast> for Deadlines<'_> {
     }
 
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        visit::visit_macro(self, invocation);
         let expressions = macro_arguments(invocation).map_or_else(
             |_| assertion_expressions(invocation),
             |args| args.into_iter().collect(),
@@ -316,21 +374,35 @@ impl<'ast> Visit<'ast> for Deadlines<'_> {
         }
     }
 
-    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
-        let line = expression.span().start().line;
-        if self.in_test(line)
-            && self
-                .imports
-                .resolve(&expression.path)
-                .iter()
-                .rev()
-                .take(2)
-                .map(String::as_str)
-                .eq(["new", "FixedWait"])
-        {
-            self.violations.fixed_wait_constructors.push(line);
+    fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+        if ident.unraw() != "FixedWait" {
+            return;
         }
-        visit::visit_expr_path(self, expression);
+        let location = ident.span().start();
+        if self.in_test(location.line)
+            && (self.scopes.contains(location.line) || !self.fixed_wait_api.contains(&location))
+        {
+            self.violations.fixed_wait_in_tests.insert(location.line);
+        }
+    }
+
+    fn visit_token_stream(&mut self, tokens: &'ast TokenStream) {
+        for token in tokens.clone() {
+            match token {
+                TokenTree::Ident(ident) => self.visit_ident(&ident),
+                TokenTree::Group(group) => self.visit_token_stream(&group.stream()),
+                _ => {}
+            }
+        }
+    }
+
+    fn visit_use_rename(&mut self, rename: &'ast syn::UseRename) {
+        if rename.ident.unraw() == "FixedWait" {
+            self.violations
+                .fixed_wait_renames
+                .insert(rename.ident.span().start().line);
+        }
+        visit::visit_use_rename(self, rename);
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
@@ -560,32 +632,48 @@ mod nested {
     }
 
     #[test]
-    fn rejects_fixed_wait_construction_in_test_files_and_scopes() {
+    fn checks_fixed_wait_tokens_and_import_renames() {
         let source = r#"
-use emp_domain::FixedWait;
-const PRODUCT_WAIT: FixedWait = FixedWait::new(Duration::from_secs(1));
-#[cfg(test)]
-mod tests {
-    use super::FixedWait as Wait;
-    fn fixture(budget: TestBudget) {
-        budget.with_product_wait(super::PRODUCT_WAIT);
-        budget.with_product_wait(emp_domain::FixedWait::new(Duration::from_secs(1)));
-        let waits = vec![Wait::new(Duration::from_secs(1))];
+mod parent {
+    use emp_domain::FixedWait as Wait;
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        fn fixture() { budget.with_product_wait(Wait::new(margin)); }
     }
 }
+#[cfg(test)] use emp_domain::FixedWait as Wait;
+#[cfg(not(test))] use std::time::Duration as Wait;
+#[test]
+fn fixture() {
+    budget.with_product_wait(Wait::new(margin));
+    budget.with_product_wait(<emp_domain::FixedWait>::new(margin));
+    wire! { wait => [other::FixedWait] }
+    budget.with_product_wait(NETWORK_RETRY_BACKOFF[0]);
+    log!("FixedWait");
+}
 "#;
-        assert_eq!(
-            inspect_source("crates/example/src/lib.rs", source)
-                .unwrap()
-                .fixed_wait_constructors,
-            [9, 10]
-        );
-        assert_eq!(
-            inspect_source("crates/example/tests/wire.rs", source)
-                .unwrap()
-                .fixed_wait_constructors,
-            [3, 9, 10]
-        );
+        let violations = inspect_source("crates/example/src/lib.rs", source).unwrap();
+        assert_eq!(violations.fixed_wait_in_tests, BTreeSet::from([10, 15, 16]));
+        assert_eq!(violations.fixed_wait_renames, BTreeSet::from([3, 10]));
+        assert!(violations.bare.is_empty());
+        assert!(violations.sockets.is_empty());
+
+        let violations = inspect_source(
+            "crates/example/src/lib.rs",
+            "use emp_domain::{r#FixedWait as Wait};",
+        )
+        .unwrap();
+        assert!(violations.fixed_wait_in_tests.is_empty());
+        assert_eq!(violations.fixed_wait_renames, BTreeSet::from([1]));
+
+        let violations = inspect_source(
+            "crates/example/tests/wire.rs",
+            "use emp_domain::FixedWait;\nfn fixture(_: FixedWait) {}",
+        )
+        .unwrap();
+        assert_eq!(violations.fixed_wait_in_tests, BTreeSet::from([1, 2]));
+        assert!(violations.fixed_wait_renames.is_empty());
     }
 
     #[test]

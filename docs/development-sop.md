@@ -124,12 +124,14 @@ Linux Rust CI 执行这些规则；单元测试随已有 workspace 测试运行�
 复核时按各规则的职责检查同一文件内的 `use` 声明、局部绑定和简单赋值
 `x = …`。夹具目录检查在声明作用域登记函数参数和 `let` 绑定。
 别名从声明作用域展开到不动点，`self::` 和 `super::` 以声明所在模块为基准。
-宏实参写在源码中且可解析为逗号分隔的表达式列表时，按普通表达式检查。
+期限与夹具的表达式检查可解析为逗号分隔表达式列表的宏实参。
 有意规避、局部遮蔽分析、跨函数或跨文件的数据流和宏生成的名字超出适用范围。
 
 `Deadline::after` 接受 `TestBudget`。用 `test_timeout` 缩放测试余量，用
-`with_product_wait` 叠加由 `FixedWait` 标明的产品常量。固定等待这部分的 lint 只禁止
-在测试代码中使用 `FixedWait::new`。需要 `Duration` 的接口通过 `duration()` 取出
+`with_product_wait` 叠加产品常量，例如 `NETWORK_RETRY_BACKOFF[0]`。
+`test-deadlines` 禁止在测试代码中写 `FixedWait` 标识符，包括导入、类型、路径和宏实参。
+测试支撑库的 `TestBudget::with_product_wait` 参数及其类型导入属于该接口的声明。
+所有代码的 `FixedWait` 导入须保留原名。需要 `Duration` 的接口通过 `duration()` 取出
 `TestBudget` 的总时长。
 
 前端先注册产品文案，再创建页面控制器；同一文案的简体中文和英文占位符保持一致。
