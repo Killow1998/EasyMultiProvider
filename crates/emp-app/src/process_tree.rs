@@ -116,17 +116,18 @@ impl ProcessTree {
     }
 
     #[cfg(unix)]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "只观察当前进程组的组长，并保留回收所有权"
-    )]
     fn observe_exit(&self, options: WaitIdOptions) -> rustix::io::Result<bool> {
         if let Some(error) = Self::take_observation_error() {
             return Err(error);
         }
         let options = options | WaitIdOptions::EXITED | WaitIdOptions::NOWAIT;
         loop {
-            match waitid(WaitId::Pid(self.leader), options) {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "只观察当前进程组的组长，并保留回收所有权"
+            )]
+            let observed = waitid(WaitId::Pid(self.leader), options);
+            match observed {
                 Ok(status) => return Ok(status.is_some()),
                 Err(Errno::INTR) => continue,
                 Err(error) => return Err(error),

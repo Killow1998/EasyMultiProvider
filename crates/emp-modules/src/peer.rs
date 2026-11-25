@@ -420,7 +420,6 @@ impl PeerHandle {
                             .complete(response.response_result.map_err(CallError::Remote));
                     }
                 }
-                _ if connection.draining_replies => {}
                 Message::Notification(notification) if notification.method == CANCEL_REQUEST => {
                     #[derive(serde::Deserialize)]
                     struct CancelParams {
@@ -428,7 +427,9 @@ impl PeerHandle {
                     }
                     let params: CancelParams = serde_json::from_value(notification.params)?;
                     self.side.opposite().check_id(&params.id)?;
-                    if let Some(token) = connection.incoming.get(&params.id) {
+                    if !connection.draining_replies
+                        && let Some(token) = connection.incoming.get(&params.id)
+                    {
                         token.cancel();
                     }
                 }
@@ -440,6 +441,9 @@ impl PeerHandle {
                             "duplicate request ID",
                         ));
                     };
+                    if connection.draining_replies {
+                        continue;
+                    }
                     let Some(handler) = handlers.0.get(&request.method).cloned() else {
                         if let Some(writer) = &connection.writer {
                             let _ = writer.send(
@@ -467,6 +471,9 @@ impl PeerHandle {
                     })?;
                 }
                 Message::Notification(notification) => {
+                    if connection.draining_replies {
+                        continue;
+                    }
                     drop(state);
                     if let Some(handler) = handlers.0.get(&notification.method).cloned() {
                         let peer = self.clone();

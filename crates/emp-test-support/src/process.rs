@@ -220,17 +220,18 @@ impl OwnedChild {
     }
 
     #[cfg(unix)]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "只观察测试夹具持有的子进程，保留其回收所有权"
-    )]
     fn has_exited(&self) -> io::Result<bool> {
         use rustix::{
             io::Errno,
             process::{Pid, WaitId, WaitIdOptions, waitid},
         };
         let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
-        match waitid(WaitId::Pid(Pid::from_child(&self.child)), options) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "只观察测试夹具持有的子进程，保留其回收所有权"
+        )]
+        let observed = waitid(WaitId::Pid(Pid::from_child(&self.child)), options);
+        match observed {
             Ok(status) => Ok(status.is_some()),
             Err(Errno::INTR) => Ok(false),
             Err(error) => Err(error.into()),

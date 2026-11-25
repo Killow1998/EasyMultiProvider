@@ -612,15 +612,15 @@ fn observation_echild_disables_process_tree_signals() {
 }
 
 #[test]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "验证 ProcessTree 已回收指定的测试子进程"
-)]
 fn observation_failure_kills_and_reaps_the_child_before_returning_the_original_error() {
     let (mut child, tree) = child_waiting_for_input();
     let leader = Pid::from_child(&child);
     OBSERVATION_ERROR.set(Some(Errno::PERM));
     let error = tree.has_exited(&mut child).unwrap_err();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "验证 ProcessTree 已回收指定的测试子进程"
+    )]
     let observed = waitid(
         WaitId::Pid(leader),
         WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,

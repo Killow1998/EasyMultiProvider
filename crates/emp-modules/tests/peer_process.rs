@@ -46,9 +46,22 @@ fn module_fixture() {
     let Ok(mode) = std::env::var(CHILD_MODE) else {
         return;
     };
-    if mode == "broken-write" {
-        check_broken_write_pipe();
-        return;
+    match mode.as_str() {
+        "broken-write" => return check_broken_write_pipe(),
+        "broken-write-invalid-request" => {
+            return check_protocol_error_while_draining(
+                Request::new("h:1".to_owned().into(), "host.echo".into(), ()).into(),
+            );
+        }
+        "broken-write-invalid-cancellation" => {
+            for params in [json!({}), json!({"id": "h:1"})] {
+                check_protocol_error_while_draining(
+                    Notification::new("$/cancelRequest".into(), params).into(),
+                );
+            }
+            return;
+        }
+        _ => {}
     }
     let mut output = OpenOptions::new().write(true).open("/dev/fd/3").unwrap();
     let mut input = BufReader::new(io::stdin());
@@ -347,10 +360,14 @@ impl Write for GateSecondFrame {
 
 #[test]
 fn a_broken_write_pipe_releases_unsent_requests_and_keeps_written_replies() {
+    run_broken_write_fixture("broken-write");
+}
+
+fn run_broken_write_fixture(mode: &str) {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args(["--exact", "module_fixture", "--nocapture"])
-        .env(CHILD_MODE, "broken-write");
+        .env(CHILD_MODE, mode);
     let output = OwnedChild::output(
         command,
         Deadline::after(test_timeout(Duration::from_secs(15))),
@@ -475,6 +492,59 @@ fn check_broken_write_pipe() {
     assert!(
         cancelled_on_drop,
         "active request was not cancelled on peer drop"
+    );
+}
+
+#[test]
+fn a_broken_write_pipe_still_rejects_an_invalid_request_id() {
+    run_broken_write_fixture("broken-write-invalid-request");
+}
+
+#[test]
+fn a_broken_write_pipe_still_rejects_invalid_cancellation() {
+    run_broken_write_fixture("broken-write-invalid-cancellation");
+}
+
+fn check_protocol_error_while_draining(invalid: Message) {
+    let (input, writer) = io::pipe().unwrap();
+    let (reader, mut output) = io::pipe().unwrap();
+    let (reader_exited, reader_exit) = mpsc::channel();
+    let peer = Peer::connect_observed(
+        Side::Host,
+        BufReader::new(reader),
+        writer,
+        Handlers::default(),
+        move |error| reader_exited.send(error).unwrap(),
+        || {},
+    )
+    .unwrap();
+    let host = peer.handle();
+    let sent = host.start_request("module.echo", json!(1)).unwrap();
+    let mut input = BufReader::new(input);
+    let Some(Message::Request(request)) = Message::read(&mut input).unwrap() else {
+        panic!("expected the request written before stdin closed");
+    };
+    assert_eq!(request.id, RequestId::from("h:1".to_owned()));
+
+    drop(input);
+    host.notify("module.notify", Value::Null).unwrap();
+    assert_eq!(peer.wait().unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+
+    let mut frames = Vec::new();
+    invalid.write(&mut frames).unwrap();
+    Message::Response(Response::new_ok(request.id, 1))
+        .write(&mut frames)
+        .unwrap();
+    output.write_all(&frames).unwrap();
+    let result = sent.wait(budget());
+    assert!(
+        matches!(result, Err(CallError::Disconnected)),
+        "{invalid:?}: {result:?}"
+    );
+    assert_eq!(
+        reader_exit.recv_timeout(budget()).unwrap(),
+        Some(io::ErrorKind::InvalidData),
+        "{invalid:?}"
     );
 }
 
