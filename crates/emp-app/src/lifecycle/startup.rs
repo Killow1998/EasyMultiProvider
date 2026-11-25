@@ -250,13 +250,17 @@ impl ServerHandle {
         } else {
             Err(AppError::HostNotLoopback)
         };
-        let owner = Arc::new(owner.inspect_err(|error| {
-            diagnostics.journal.close_with_event_blocking(
-                "warning",
-                "startup_failure",
-                &startup_error_fields(error),
-            );
-        })?);
+        let owner = match owner {
+            Ok(owner) => Arc::new(owner),
+            Err(error) => {
+                diagnostics.journal.abandon_unowned(
+                    "warning",
+                    "startup_failure",
+                    &startup_error_fields(&error),
+                );
+                return Err(error);
+            }
+        };
         diagnostics.journal.attach(Arc::clone(&owner));
         let diagnostics = Arc::new(diagnostics);
         let context = StartupContext {

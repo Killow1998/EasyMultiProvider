@@ -79,7 +79,7 @@ fn contender_leaves_the_owners_journal_parts_unchanged() {
 }
 
 #[test]
-fn worker_start_failure_closes_admission_before_the_journal_receipt() {
+fn worker_start_failure_closes_admission_and_signals_usage_before_the_journal_receipt() {
     let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config_path = root.join("config.json");
@@ -124,6 +124,14 @@ fn worker_start_failure_closes_admission_before_the_journal_receipt() {
     let (address, state) = writing.recv_timeout(deadline.remaining()).unwrap();
     assert!(state.backend.diagnostics.journal.flush_pending_for_test());
     assert!(state.lifecycle.admission.acquire_request().is_none());
+    assert!(
+        state
+            .backend
+            .usage
+            .history
+            .stop
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
     let mut reply = Vec::new();
     let request = (|| -> io::Result<()> {
         let mut stream = deadline.io(deadline.connect(address)?);

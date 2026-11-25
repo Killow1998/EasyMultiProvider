@@ -2,13 +2,12 @@ mod journal;
 use emp_domain::MODEL_TEST_OPERATIONS;
 use emp_files::{IntegrationFileLock, LockError};
 pub use journal::Journal;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 const PROBE_CAPACITY: usize = 64;
 
 pub struct ServiceOwner {
-    state_root: PathBuf,
-    _lock: IntegrationFileLock,
+    lock: IntegrationFileLock,
 }
 
 impl ServiceOwner {
@@ -18,10 +17,11 @@ impl ServiceOwner {
             Duration::ZERO,
             Duration::ZERO,
         )?;
-        Ok(Self {
-            state_root: state_root.to_owned(),
-            _lock: lock,
-        })
+        Ok(Self { lock })
+    }
+
+    fn state_root(&self) -> &Path {
+        self.lock.path().parent().expect("service lock directory")
     }
 }
 

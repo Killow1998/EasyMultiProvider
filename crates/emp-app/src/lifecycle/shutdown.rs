@@ -11,6 +11,12 @@ mod tests;
 /// Two 45 s quota queries plus credential-save retries.
 const CREDENTIAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(100);
 
+pub(super) enum WorkerStop {
+    Catalog,
+    Services,
+    All,
+}
+
 pub(super) fn prepare_exit(
     state: &ServerState,
     preserve_integration: bool,
@@ -97,7 +103,7 @@ impl ServerHandle {
 
     fn shutdown_inner(&mut self, preserve_integration: bool) -> Result<(), AppError> {
         let restoration = prepare_exit(&self.state, preserve_integration);
-        self.state.catalog_refresh.stop();
+        self.signal_worker_stop(WorkerStop::Catalog);
         let listener = self.listener.take().map_or(Ok(()), |listener| {
             listener
                 .join()
@@ -107,12 +113,7 @@ impl ServerHandle {
         let restoration = restoration.and(listener);
         let credential_operations = &self.state.backend.accounts.credential_operations;
         let _ = credential_operations.close_and_drain(Duration::ZERO);
-        self.state.backend.usage.stop();
-        let accounts = &self.state.backend.accounts;
-        if let Ok(_wait) = accounts.quota_sampler_wait.lock() {
-            accounts.quota_sampler_condition.notify_all();
-        }
-        crate::services::runtime::stop_watch(&self.state);
+        self.signal_worker_stop(WorkerStop::Services);
         for worker in self.workers.drain(..) {
             let _: () = worker.join().map_err(|_| AppError::ServerStopped)?;
         }
@@ -129,6 +130,20 @@ impl ServerHandle {
                 eprintln!("{unsaved}");
                 Err(error)
             }
+        }
+    }
+
+    pub(super) fn signal_worker_stop(&self, workers: WorkerStop) {
+        if matches!(workers, WorkerStop::Catalog | WorkerStop::All) {
+            self.state.catalog_refresh.stop();
+        }
+        if matches!(workers, WorkerStop::Services | WorkerStop::All) {
+            self.state.backend.usage.stop();
+            let accounts = &self.state.backend.accounts;
+            if let Ok(_wait) = accounts.quota_sampler_wait.lock() {
+                accounts.quota_sampler_condition.notify_all();
+            }
+            crate::services::runtime::stop_watch(&self.state);
         }
     }
 }

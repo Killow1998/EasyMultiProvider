@@ -1,5 +1,4 @@
 //! Model checks must not displace the conversation samples used by diagnostics.
-use crate::services::observation::diagnostics::Diagnostics;
 use serde_json::json;
 
 #[test]
@@ -31,8 +30,21 @@ fn model_checks_do_not_evict_conversation_samples_after_restart() {
         probes.last().unwrap()["request_id"],
         format!("{:016x}", 599)
     );
-    let restarted = Diagnostics::new(root.path()).snapshot();
-    assert_eq!(restarted["sample_count"], 1);
-    assert_eq!(restarted["records"], snapshot["records"]);
-    assert_eq!(restarted["probes"], snapshot["probes"]);
+    diagnostics.journal.close_with_event_blocking(
+        "info",
+        "shutdown_complete",
+        &json!({"success":true}),
+    );
+    drop(diagnostics);
+
+    let restarted = super::attached_diagnostics(root.path());
+    let after_restart = restarted.snapshot();
+    assert_eq!(after_restart["sample_count"], 1);
+    assert_eq!(after_restart["records"], snapshot["records"]);
+    assert_eq!(after_restart["probes"], snapshot["probes"]);
+    restarted.journal.close_with_event_blocking(
+        "info",
+        "shutdown_complete",
+        &json!({"success":true}),
+    );
 }

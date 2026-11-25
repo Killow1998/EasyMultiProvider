@@ -106,7 +106,7 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
-fn open_lock_file(path: &Path) -> Result<File, LockError> {
+fn open_lock_file(path: &Path) -> Result<(File, PathBuf), LockError> {
     let path = inspect_lock_path(path)?;
     let parent = path.parent().ok_or(LockError::PathUnsafe)?;
     fs::create_dir_all(parent).map_err(|_| LockError::OpenFailed)?;
@@ -176,7 +176,7 @@ fn open_lock_file(path: &Path) -> Result<File, LockError> {
         file.set_len(1).map_err(|_| LockError::OpenFailed)?;
         file.sync_data().map_err(|_| LockError::OpenFailed)?;
     }
-    Ok(file)
+    Ok((file, path))
 }
 
 enum TryLock {
@@ -246,6 +246,7 @@ fn unlock(_: &File) {}
 /// An exclusive lock released on drop; uses POSIX `flock` or a one-byte Windows lock.
 pub struct IntegrationFileLock {
     file: File,
+    path: PathBuf,
 }
 
 impl IntegrationFileLock {
@@ -254,12 +255,12 @@ impl IntegrationFileLock {
         timeout: Duration,
         poll_interval: Duration,
     ) -> Result<Self, LockError> {
-        let file = open_lock_file(path)?;
+        let (file, path) = open_lock_file(path)?;
         let started = Instant::now();
         let poll_interval = poll_interval.max(Duration::from_millis(1));
         loop {
             match try_lock(&file)? {
-                TryLock::Acquired => return Ok(Self { file }),
+                TryLock::Acquired => return Ok(Self { file, path }),
                 TryLock::Contended if started.elapsed() >= timeout => {
                     return Err(LockError::TimedOut(timeout));
                 }
@@ -273,6 +274,10 @@ impl IntegrationFileLock {
                 }
             }
         }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 }
 

@@ -338,6 +338,10 @@ impl Journal {
         if queue.closed {
             return;
         }
+        self.enqueue_event(&mut queue, event);
+    }
+
+    fn enqueue_event(&self, queue: &mut QueueState, event: Event) {
         if queue.pending_events == QUEUE_CAPACITY {
             queue.rejected += 1;
             return;
@@ -346,7 +350,7 @@ impl Journal {
             timestamp: super::timestamp(),
             event,
         };
-        if self.enqueue(&mut queue, Action::Event(record), 1) {
+        if self.enqueue(queue, Action::Event(record), 1) {
             queue.pending_events += 1;
         }
     }
@@ -375,45 +379,51 @@ impl Journal {
         self.confirm_with(Some(Event::new(level, name, fields)), true);
     }
 
+    pub fn abandon_unowned(self, level: &str, name: &str, fields: &Value) {
+        let event = Event::new(level, name, fields);
+        {
+            let mut queue = self.queue.lock().unwrap();
+            let pending = queue.pending.take().expect("unattached journal");
+            let mut stderr = std::io::stderr().lock();
+            for command in pending.try_iter() {
+                let Action::Event(record) = command.action else {
+                    unreachable!("only events are queued before attachment");
+                };
+                queue.lost_by_writer += usize::from(!record.event.write_summary(&mut stderr));
+            }
+            queue.lost_by_writer += usize::from(!event.write_summary(&mut stderr));
+            queue.settled = queue.accepted;
+        }
+        report_losses(&self.queue, None);
+    }
+
     fn confirm(&self, event: Option<Event>) -> usize {
         self.confirm_with(event, false)
     }
 
     fn confirm_with(&self, event: Option<Event>, close: bool) -> usize {
         let _flush = self.flush_lock.lock().unwrap();
-        let (done, receipt) = mpsc::channel();
-        let sent = {
+        let (sent, receipt) = {
             let mut queue = self.queue.lock().unwrap();
             if queue.closed {
                 return 0;
             }
+            if queue.pending.is_some() {
+                assert!(!close, "unattached journal must use abandon_unowned");
+                if let Some(event) = event {
+                    self.enqueue_event(&mut queue, event);
+                }
+                return 0;
+            }
             queue.closed = close;
             let rejected = queue.rejected;
-            if let Some(pending) = queue.pending.as_ref() {
-                let mut stderr = std::io::stderr().lock();
-                let mut lost = 0;
-                for command in pending.try_iter() {
-                    let Action::Event(record) = command.action else {
-                        unreachable!("only events are queued before attachment");
-                    };
-                    lost += usize::from(!record.event.write_summary(&mut stderr));
-                }
-                if let Some(event) = event {
-                    lost += usize::from(!event.write_summary(&mut stderr));
-                }
-                queue.settled = queue.accepted;
-                queue.pending_events = 0;
-                queue.lost_by_writer += lost;
-                drop(stderr);
-                drop(queue);
-                return report_losses(&self.queue, Some(rejected));
-            }
             let records = usize::from(event.is_some());
             let record = event.map(|event| Record {
                 timestamp: super::timestamp(),
                 event,
             });
-            self.enqueue(
+            let (done, receipt) = mpsc::channel();
+            let sent = self.enqueue(
                 &mut queue,
                 Action::Flush {
                     record,
@@ -422,7 +432,8 @@ impl Journal {
                     receipt: done,
                 },
                 records,
-            )
+            );
+            (sent, receipt)
         };
         if sent && let Ok(losses) = receipt.recv() {
             return losses;
@@ -479,7 +490,7 @@ impl Writer {
             std::process::id()
         );
         Self {
-            directory: owner.state_root.join("logs"),
+            directory: owner.state_root().join("logs"),
             run_id,
             basename,
             file: None,

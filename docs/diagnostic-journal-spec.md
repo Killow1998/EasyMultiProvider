@@ -74,8 +74,9 @@ the final outstanding receipt is checked after the socket worker exits.
 
 The journal buffers startup records before acquiring the service lock, so
 configuration, service ownership, vault, transport and listener startup failures
-have fixed classes. Worker startup failure closes request admission before
-waiting for the failure receipt and cleaning up workers already created.
+have fixed classes. Worker startup failure closes request admission and
+signals background workers to stop before waiting for the failure receipt.
+The shutdown flow joins workers already created.
 Failures before configuration-path resolution and unrecoverable process
 termination cannot be covered by an initialized journal. Individual low-level
 framing steps are not journal events. Listener readiness is recorded when the
@@ -306,9 +307,11 @@ bodies.
 - A `serve` invocation creates one logical run with a random run ID.
 - Default location: `<config directory>/state/logs/`.
 - The service owns `state/`, including `logs/`, under `state/service.lock`.
-  The journal writer starts after lock acquisition and drains buffered startup
-  events in enqueue order. If acquisition fails, the summaries go to stderr
-  with the same field redaction, leaving `logs/` untouched.
+  The journal writer derives its directory from the resolved lock path and
+  drains buffered startup events in enqueue order after acquiring the lock.
+  Flushes and observation reads before attachment leave the buffer intact.
+  If startup fails without the lock, the summaries go to stderr with the same
+  field redaction, leaving `logs/` untouched.
 - The lock covers the final write attempt and file close. On exit the service
   closes exit callbacks, waits for the journal confirmation, then releases the
   lock. Write failures are counted in the existing stderr loss summary. Consult

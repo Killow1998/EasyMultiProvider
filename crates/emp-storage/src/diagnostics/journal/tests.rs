@@ -19,6 +19,100 @@ fn channel(directory: PathBuf) -> (Journal, Receiver<Command>) {
     (journal, receiver)
 }
 
+#[cfg(unix)]
+#[test]
+fn writer_uses_resolved_service_lock_directory() {
+    use std::{env, fs, process::Command};
+
+    const CHILD: &str = "EMP_JOURNAL_TEST_RESOLVED_PATHS";
+    if env::var_os(CHILD).is_none() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let home = root.join("home");
+        fs::create_dir(&home).unwrap();
+        fs::create_dir(root.join("writer")).unwrap();
+        let output = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "diagnostics::journal::tests::writer_uses_resolved_service_lock_directory",
+            ])
+            .current_dir(&root)
+            .env("HOME", home)
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let root = env::current_dir().unwrap();
+    let home = PathBuf::from(env::var_os("HOME").unwrap());
+    for (input, expected) in [
+        ("~/state", home.join("state")),
+        ("relative-state", root.join("relative-state")),
+    ] {
+        env::set_current_dir(&root).unwrap();
+        let input = Path::new(input);
+        let owner = ServiceOwner::acquire(input).unwrap();
+        assert!(expected.join("service.lock").is_file());
+        let mut journal = Journal::new(input.join("logs"));
+        env::set_current_dir(root.join("writer")).unwrap();
+        journal.attach(Arc::new(owner));
+        journal.close_with_event_blocking("info", "shutdown_complete", &Value::Null);
+
+        let shards = parts(&expected.join("logs"));
+        assert_eq!(shards.len(), 1);
+        assert!(
+            fs::read_to_string(&shards[0].2)
+                .unwrap()
+                .contains("shutdown_complete")
+        );
+        assert!(!input.exists());
+    }
+    assert!(!root.join("~/state").exists());
+}
+
+#[test]
+fn read_before_attachment_preserves_startup_records_in_the_first_part() {
+    let directory = emp_test_support::fixture_dir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let logs = root.join("logs");
+    let mut journal = Journal::new(logs.clone());
+    let startup = [
+        ("process_start", json!({"version":"fixture"})),
+        ("descriptor_budget", json!({"soft_limit":128})),
+    ];
+    for (name, fields) in &startup {
+        journal.event("info", name, fields);
+    }
+    let (observations, probes) = journal.read_observations(64);
+    assert!(observations.is_empty() && probes.is_empty());
+    assert!(!logs.exists());
+
+    journal.attach(Arc::new(ServiceOwner::acquire(&root).unwrap()));
+    journal.close_with_event_blocking("info", "shutdown_complete", &Value::Null);
+
+    let shards = parts(&logs);
+    assert_eq!(shards.len(), 1);
+    let records: Vec<Value> = std::fs::read_to_string(&shards[0].2)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), startup.len() + 1);
+    for (index, (name, fields)) in startup.into_iter().enumerate() {
+        assert_eq!(records[index]["event"], name);
+        assert_eq!(records[index]["fields"], fields);
+        assert_eq!(records[index]["sequence"], index + 1);
+    }
+    assert_eq!(records.last().unwrap()["event"], "shutdown_complete");
+}
+
 #[test]
 fn full_queue_attaches_loss_to_next_admitted_event_and_flush() {
     let directory = emp_test_support::fixture_dir().unwrap();

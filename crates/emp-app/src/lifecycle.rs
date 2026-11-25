@@ -33,6 +33,7 @@ struct UpdateStartupMarkers {
 impl ServerHandle {
     fn confirm_worker_startup_failure(&self, fields: &serde_json::Value) {
         self.state.request_shutdown();
+        self.signal_worker_stop(shutdown::WorkerStop::All);
         self.state
             .backend
             .diagnostics
