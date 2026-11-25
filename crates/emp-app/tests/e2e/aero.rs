@@ -206,7 +206,7 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
         let suffix = format!("{:x}", Sha256::digest(serde_json::to_vec(&source).unwrap()));
         let child_session = format!("{session}:{}", &suffix[..12]);
         let mut request_ids = Vec::new();
-        for _ in 0..count {
+        for role_call in 0..count {
             let request = upstream.next_forwarded();
             assert_eq!(request.method, "POST");
             assert_eq!(request.path, "/v1/responses");
@@ -222,13 +222,27 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
                 if role == "planner" { "low" } else { "high" },
                 "{body}"
             );
-            let context = body["input"]
-                .as_array()
-                .unwrap()
-                .last()
-                .unwrap()
-                .to_string();
-            assert!(context.contains(&format!("Current role: {role}")), "{body}");
+            let input_items = body["input"].as_array().expect("portable request input");
+            let instructions = body["instructions"]
+                .as_str()
+                .expect("portable request instructions");
+            let reviewing = role == "planner" && role_call == 1;
+            let role_context = format!("\n\nCurrent role: {role}");
+            let expected_context = if role == "executor" || reviewing {
+                format!("{role_context}\nLatest implementation plan:\n{plan}")
+            } else {
+                role_context
+            };
+            assert!(instructions.ends_with(&expected_context), "{body}");
+            assert_eq!(
+                instructions.contains("\n\n[plan review] "),
+                reviewing,
+                "{body}"
+            );
+            assert!(
+                input_items.iter().all(|item| item["role"] != "developer"),
+                "{body}"
+            );
             let tool = if role == "planner" {
                 "exit_plan_mode"
             } else {
@@ -244,13 +258,7 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
             );
             if role == "executor" {
                 assert!(
-                    context.contains(plan),
-                    "executor lost the planner's plan: {body}"
-                );
-                assert!(
-                    body["input"]
-                        .as_array()
-                        .unwrap()
+                    input_items
                         .iter()
                         .any(|item| item["type"] == "function_call_output"
                             && item["call_id"] == "call-m04-plan"),
