@@ -1,6 +1,7 @@
 use super::{ConnectionAdmission, ServerMode, transport::ConnectionIo};
 use crate::services::observation::http::HttpObservation;
 use axum::body::Bytes;
+use emp_storage::diagnostics::Journal;
 use std::{
     io,
     sync::{Arc, LockResult, Mutex, MutexGuard, atomic::AtomicBool},
@@ -49,6 +50,15 @@ mod implementation {
         #[inline]
         pub(in crate::server) fn before_accept(&self, _: ServerMode) -> io::Result<()> {
             Ok(())
+        }
+
+        #[inline]
+        pub(crate) fn spawn_price_worker<T>(
+            &self,
+            _: &Journal,
+            spawn: impl FnOnce() -> io::Result<T>,
+        ) -> io::Result<T> {
+            spawn()
         }
 
         #[inline]
@@ -148,6 +158,7 @@ mod implementation {
     type UpgradeHandoffGate = (oneshot::Sender<(usize, usize)>, oneshot::Receiver<()>);
     type HandlerProbe = (oneshot::Sender<()>, oneshot::Receiver<()>);
     type OutputProbe = Box<dyn FnOnce() + Send>;
+    type PriceSpawnFailure = Box<dyn FnOnce(&Journal) -> io::Error + Send>;
 
     #[derive(Default)]
     pub(crate) struct ServerHooks {
@@ -160,6 +171,7 @@ mod implementation {
         pub(in crate::server) output_queued: Mutex<Option<OutputProbe>>,
         pub(in crate::server) response_receive: Mutex<Option<HandlerProbe>>,
         pub(in crate::server) callback_lock_contended: Mutex<Option<oneshot::Sender<bool>>>,
+        pub(crate) price_spawn_failure: Mutex<Option<PriceSpawnFailure>>,
     }
 
     impl ServerHooks {
@@ -206,6 +218,18 @@ mod implementation {
                 return Err(error.into());
             }
             Ok(())
+        }
+
+        pub(crate) fn spawn_price_worker<T>(
+            &self,
+            journal: &Journal,
+            spawn: impl FnOnce() -> io::Result<T>,
+        ) -> io::Result<T> {
+            let failure = self.price_spawn_failure.lock().unwrap().take();
+            match failure {
+                Some(fail) => Err(fail(journal)),
+                None => spawn(),
+            }
         }
 
         pub(in crate::server) fn request(

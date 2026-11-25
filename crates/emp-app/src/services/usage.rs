@@ -188,38 +188,44 @@ pub(crate) fn workers(
         })?;
     started.push(history);
     let price_state = Arc::clone(state);
-    let prices = std::thread::Builder::new()
-        .name("emp-api-prices".into())
-        .spawn(move || {
-            let usage = &price_state.backend.usage;
-            if usage.ledger.prices.snapshot(system_now())["model_count"]
-                .as_u64()
-                .unwrap_or(0)
-                > 0
-            {
+    let refresh = move || {
+        let usage = &price_state.backend.usage;
+        if usage.ledger.prices.snapshot(system_now())["model_count"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+        {
+            usage.ledger.price_pending(&price_state.lifecycle.shutdown);
+        }
+        while !price_state.lifecycle.shutdown.load(Ordering::Acquire)
+            && !usage.history.stop.load(Ordering::Acquire)
+        {
+            let snapshot = usage.ledger.prices.snapshot(system_now());
+            if snapshot["stale"] == false {
+                let delay = (snapshot["fetched_at"]
+                    .as_f64()
+                    .expect("fresh price timestamp")
+                    + PRICE_INTERVAL
+                    - system_now())
+                .clamp(0.0, 3600.0);
+                usage.wait_for_prices(&price_state, delay);
+                continue;
+            }
+            if refresh_prices(&price_state) {
                 usage.ledger.price_pending(&price_state.lifecycle.shutdown);
+            } else if !price_state.lifecycle.shutdown.load(Ordering::Acquire) {
+                usage.ledger.prices.refresh_failed();
+                usage.wait_for_prices(&price_state, 3600.0);
             }
-            while !price_state.lifecycle.shutdown.load(Ordering::Acquire)
-                && !usage.history.stop.load(Ordering::Acquire)
-            {
-                let snapshot = usage.ledger.prices.snapshot(system_now());
-                if snapshot["stale"] == false {
-                    let delay = (snapshot["fetched_at"]
-                        .as_f64()
-                        .expect("fresh price timestamp")
-                        + PRICE_INTERVAL
-                        - system_now())
-                    .clamp(0.0, 3600.0);
-                    usage.wait_for_prices(&price_state, delay);
-                    continue;
-                }
-                if refresh_prices(&price_state) {
-                    usage.ledger.price_pending(&price_state.lifecycle.shutdown);
-                } else if !price_state.lifecycle.shutdown.load(Ordering::Acquire) {
-                    usage.ledger.prices.refresh_failed();
-                    usage.wait_for_prices(&price_state, 3600.0);
-                }
-            }
+        }
+    };
+    let prices = state
+        .lifecycle
+        .test_hooks
+        .spawn_price_worker(&state.backend.diagnostics.journal, || {
+            std::thread::Builder::new()
+                .name("emp-api-prices".into())
+                .spawn(refresh)
         })
         .inspect_err(|_| {
             state.backend.diagnostics.journal.event(

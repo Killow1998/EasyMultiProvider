@@ -79,50 +79,49 @@ fn contender_leaves_the_owners_journal_parts_unchanged() {
 }
 
 #[test]
-fn worker_start_failure_closes_admission_and_signals_usage_before_the_journal_receipt() {
+fn price_worker_start_failure_closes_admission_and_signals_usage_before_the_journal_receipt() {
     let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config_path = root.join("config.json");
+    let server =
+        ServerHandle::start_with_config("127.0.0.1".parse().unwrap(), 0, &config_path).unwrap();
+    let address = server.local_addr;
+    let state = Arc::clone(&server.state);
+    let journal = &state.backend.diagnostics.journal;
+    let (scan_started, scanning) = mpsc::channel();
+    journal.gate_next_event("usage_scan_started", move || {
+        let _ = scan_started.send(());
+    });
     let (entered, writing) = mpsc::channel();
     let (resume, release) = mpsc::channel();
     let startup = Observation::spawn(move |probe| {
-        probe.observe(|_| {
-            ServerHandle::start_with_workers(
-                StartupContext {
-                    host: "127.0.0.1".parse().unwrap(),
-                    port: 0,
-                    config_path: &config_path,
-                    codex_binary: "missing-test-codex",
-                    native_auth_path: config_path.with_file_name("codex").join("auth.json"),
-                    open_browser: false,
-                    markers: UpdateStartupMarkers::default(),
-                    http_client_override: None,
-                    admission: ConnectionAdmissionConfig::default(),
-                    enable_catalog_refresh_worker: false,
-                    external_key: false,
-                    official_models: emp_state::official_registry::bundled_snapshot,
-                },
-                |server, _| {
-                    let state = Arc::clone(&server.state);
-                    let address = server.local_addr;
-                    server.state.backend.diagnostics.journal.gate_next_event(
-                        "startup_failure",
-                        move || {
-                            let _ = entered.send((address, state));
-                            let _ = release.recv();
-                        },
-                    );
-                    Err(io::Error::from(io::ErrorKind::WouldBlock).into())
-                },
-            )
-            .err()
+        probe.observe(|&deadline| {
+            let hooks = &server.state.lifecycle.test_hooks;
+            *hooks.price_spawn_failure.lock().unwrap() = Some(Box::new(move |journal| {
+                if let Err(error) = scanning.recv_timeout(deadline.remaining()) {
+                    return io::Error::other(error);
+                }
+                journal.gate_next_event("startup_failure", move || {
+                    let _ = entered.send(());
+                    let _ = release.recv();
+                });
+                io::ErrorKind::WouldBlock.into()
+            }));
+            super::super::run_started_server(server, false, UpdateStartupMarkers::default())
         });
     });
     let resume = resume;
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-    let result = startup.begin(deadline, "worker startup failure returns after shutdown");
-    let (address, state) = writing.recv_timeout(deadline.remaining()).unwrap();
-    assert!(state.backend.diagnostics.journal.flush_pending_for_test());
+    let result = startup.begin(
+        deadline,
+        "price worker startup failure returns after shutdown",
+    );
+    let receipt = writing.recv_timeout(deadline.remaining());
+    if receipt.is_err() {
+        state.request_shutdown();
+    }
+    receipt.expect("startup_failure reached the journal writer");
+    assert!(journal.flush_pending_for_test());
     assert!(state.lifecycle.admission.acquire_request().is_none());
     assert!(
         state
@@ -157,13 +156,14 @@ fn worker_start_failure_closes_admission_and_signals_usage_before_the_journal_re
     }
     resume.send(()).unwrap();
     assert!(
-        matches!(result.wait().unwrap(), Some(AppError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock)
+        matches!(result.wait().unwrap(), Err(AppError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock)
     );
     let records = crate::tests::live_journal(&root);
     assert!(
         records
             .iter()
-            .any(|record| record["event"] == "startup_failure")
+            .any(|record| record["event"] == "startup_failure"
+                && record["fields"]["stage"] == "background_workers")
     );
     assert_eq!(records.last().unwrap()["event"], "shutdown_complete");
     assert!(ServiceOwner::acquire(&root.join("state")).is_ok());

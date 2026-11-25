@@ -108,7 +108,7 @@ pub(crate) fn run_server(
     let config_path = config
         .map(Path::to_path_buf)
         .unwrap_or_else(emp_state::config_path);
-    let mut server = ServerHandle::start_with_config_options_and_browser(
+    let server = ServerHandle::start_with_config_options_and_browser(
         host,
         port,
         &config_path,
@@ -117,6 +117,14 @@ pub(crate) fn run_server(
         open_browser,
         markers.clone(),
     )?;
+    run_started_server(server, open_browser, markers)
+}
+
+fn run_started_server(
+    mut server: ServerHandle,
+    open_browser: bool,
+    markers: UpdateStartupMarkers,
+) -> Result<(), AppError> {
     let signals = {
         let _entered = server.state.backend.transport.runtime.enter();
         signals::ExitSignals::new(Arc::clone(&server.state))
@@ -134,7 +142,7 @@ pub(crate) fn run_server(
             .state
             .backend
             .configuration
-            .set_listener(host, server.local_addr.port())
+            .set_listener(server.local_addr.ip(), server.local_addr.port())
             .map_err(|_| AppError::ServerStopped)?;
         server.reconcile_startup();
         crate::services::usage::workers(&server.state, &mut server.workers)?;
