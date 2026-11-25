@@ -25,8 +25,8 @@ pub(crate) fn report(result: Result<(), &str>) {
 
 pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
     let root = fixture_root().expect("resolve test fixture root");
-    let (stdout_reader, stdout) = diagnostic_file(&root);
-    let (stderr_reader, stderr) = diagnostic_file(&root);
+    let (stdout_reader, stdout) = diagnostic_file(&root).expect("prepare isolated test stdout");
+    let (stderr_reader, stderr) = diagnostic_file(&root).expect("prepare isolated test stderr");
     command.stdin(Stdio::null()).stdout(stdout).stderr(stderr);
     let mut child = command.spawn().expect("spawn isolated test");
     let status = loop {
@@ -97,10 +97,12 @@ pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
     }
 }
 
-fn diagnostic_file(root: &Path) -> (File, File) {
-    let output = NamedTempFile::new_in(root).expect("create isolated test output");
-    let reader = File::open(output.path()).expect("open isolated test output");
-    (reader, output.into_file())
+fn diagnostic_file(root: &Path) -> io::Result<(File, File)> {
+    let output = NamedTempFile::new_in(root)?;
+    let reader = File::open(output.path())?;
+    let (writer, path) = output.into_parts();
+    path.close()?;
+    Ok((reader, writer))
 }
 
 fn read_output(file: &File) -> Vec<u8> {
@@ -118,7 +120,7 @@ fn reading_diagnostics_preserves_live_child_output() {
     use crate::{OwnedChild, test_timeout};
     use std::{io::Seek, time::Duration};
 
-    let (mut reader, stdout) = diagnostic_file(&fixture_root().unwrap());
+    let (mut reader, stdout) = diagnostic_file(&fixture_root().unwrap()).unwrap();
     let mut command = fixture("diagnostics");
     command
         .stdin(Stdio::piped())

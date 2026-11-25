@@ -15,6 +15,7 @@ mod workflows;
 
 use crate::{Result, project_root};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use quote::ToTokens as _;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -66,7 +67,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, conditional-module-path, module-version, test-boundary, docs-prose, no-python-on-main, workflow-contexts, workflow-test-targets, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
+            "check: arch, module-paths, conditional-module-path, module-path-extension, module-version, test-boundary, docs-prose, no-python-on-main, workflow-contexts, workflow-test-targets, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
         );
         Ok(())
     } else {
@@ -173,10 +174,8 @@ fn shared_test_module(path: &str, source: &str, errors: &mut Vec<String>) -> Res
         return Ok(());
     }
 
-    let tokens = source
-        .parse::<TokenStream>()
-        .map_err(|error| format!("{path}: {error}"))?;
-    check_shared_test_tokens(path, tokens, errors);
+    let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
+    check_shared_test_tokens(path, file.into_token_stream(), errors);
     Ok(())
 }
 
@@ -270,8 +269,12 @@ mod fixtures {
             &mut errors,
         )
         .unwrap();
-        assert_eq!(errors.len(), 5, "{errors:?}");
-        for (error, line) in errors.iter().zip([2, 3, 5, 9, 13]) {
+        assert_eq!(errors.len(), 6, "{errors:?}");
+        assert!(
+            errors[0].starts_with("[module-path-extension] lib.rs:1:"),
+            "{errors:?}"
+        );
+        for (error, line) in errors[1..].iter().zip([2, 3, 5, 9, 13]) {
             assert!(
                 error.starts_with(&format!("[conditional-module-path] platform.inc:{line}:")),
                 "{error}"

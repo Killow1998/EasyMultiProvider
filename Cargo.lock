@@ -4419,6 +4419,7 @@ dependencies = [
  "emp-updater",
  "flate2",
  "proc-macro2",
+ "quote",
  "regex",
  "ring",
  "saphyr",

@@ -9,7 +9,7 @@ use std::{
     path::{Component, PathBuf},
 };
 use syn::{
-    Expr, Lit, Meta,
+    Expr, Lit, LitStr, Meta,
     ext::IdentExt,
     spanned::Spanned,
     visit::{self, Visit},
@@ -30,6 +30,21 @@ fn contains_path_assignment(tokens: TokenStream) -> bool {
         }
     }
     false
+}
+
+fn explicit_path(meta: &Meta) -> Option<&LitStr> {
+    if let Meta::NameValue(attr) = meta
+        && attr
+            .path
+            .get_ident()
+            .is_some_and(|name| name.unraw() == "path")
+        && let Expr::Lit(value) = &attr.value
+        && let Lit::Str(path) = &value.lit
+    {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 pub(super) fn check<'a>(
@@ -120,19 +135,25 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
                 .is_some_and(|name| name.unraw() == "cfg_attr")
         {
             self.check_conditional(list.tokens.clone(), attr.span().start().line);
+        } else if let Some(path) = explicit_path(&attr.meta) {
+            self.check_extension(path);
         }
         visit::visit_attribute(self, attr);
     }
 
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
         visit_macro_attributes(invocation.tokens.clone(), &mut |tokens, line| {
-            let mut tokens = tokens.into_iter();
+            let mut parts = tokens.clone().into_iter();
             if let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group))) =
-                (tokens.next(), tokens.next())
+                (parts.next(), parts.next())
                 && name.unraw() == "cfg_attr"
                 && group.delimiter() == Delimiter::Parenthesis
             {
                 self.check_conditional(group.stream(), line);
+            } else if let Ok(meta) = syn::parse2(tokens)
+                && let Some(path) = explicit_path(&meta)
+            {
+                self.check_extension(path);
             }
         });
     }
@@ -142,17 +163,10 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
             self.visit_attribute(attr);
         }
         let kind = self.kind.in_test(&item.attrs);
-        let explicit = item.attrs.iter().filter_map(|attr| {
-            if let Meta::NameValue(attr) = &attr.meta
-                && attr.path.is_ident("path")
-                && let Expr::Lit(value) = &attr.value
-                && let Lit::Str(path) = &value.lit
-            {
-                Some(path)
-            } else {
-                None
-            }
-        });
+        let explicit = item
+            .attrs
+            .iter()
+            .filter_map(|attr| explicit_path(&attr.meta));
         let mut has_explicit_path = false;
         for path in explicit {
             has_explicit_path = true;
@@ -216,6 +230,21 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
 }
 
 impl ModulePaths<'_, '_> {
+    fn check_extension(&mut self, path: &LitStr) {
+        let value = path.value();
+        if !value.ends_with(".rs") {
+            let file = self
+                .file
+                .strip_prefix(self.sources.root)
+                .unwrap_or(self.file);
+            self.sources.errors.push(format!(
+                "[module-path-extension] {}:{}: #[path = {value:?}] 的目标文件必须以 .rs 结尾；请将文件改名为 .rs 并更新 #[path]",
+                file.display(),
+                path.span().start().line,
+            ));
+        }
+    }
+
     fn check_conditional(&mut self, tokens: TokenStream, line: usize) {
         if contains_path_assignment(tokens) {
             let file = self
@@ -264,6 +293,30 @@ fn resolve(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_module_paths_without_a_rust_extension() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let entry = root.join("lib.rs");
+        fs::write(&entry, r#"#[path = "helpers.inc"] mod helpers;"#).unwrap();
+        fs::write(root.join("helpers.inc"), "").unwrap();
+
+        let mut errors = Vec::new();
+        check(
+            root,
+            root,
+            std::iter::once((entry.as_path(), SourceKind::Production)),
+            &mut Index::default(),
+            &mut errors,
+        )
+        .unwrap();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].starts_with("[module-path-extension] lib.rs:1:"),
+            "{errors:?}"
+        );
+    }
 
     #[test]
     fn module_paths_stay_inside_the_declaring_crate() {
