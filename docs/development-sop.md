@@ -130,8 +130,10 @@ Linux Rust CI 执行这些规则；单元测试随已有 workspace 测试运行�
 `Deadline::after` 接受 `TestBudget`。用 `test_timeout` 缩放测试余量，用
 `with_product_wait` 叠加产品常量，例如 `NETWORK_RETRY_BACKOFF[0]`。
 `test-deadlines` 禁止在测试代码中写 `FixedWait` 标识符，包括导入、类型、路径和宏实参。
-测试支撑库的 `TestBudget::with_product_wait` 参数及其类型导入属于该接口的声明。
-所有代码的 `FixedWait` 导入须保留原名。需要 `Duration` 的接口通过 `duration()` 取出
+`crates/emp-test-support/src/lib.rs` 声明 `TestBudget::with_product_wait` 的参数类型，
+因此该文件整体豁免 `FixedWait` 标识符禁令。
+所有文件的 `FixedWait` 导入须保留原名，`FixedWait::{self as …}` 也算重命名。
+需要 `Duration` 的接口通过 `duration()` 取出
 `TestBudget` 的总时长。
 
 前端先注册产品文案，再创建页面控制器；同一文案的简体中文和英文占位符保持一致。
