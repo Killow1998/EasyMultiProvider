@@ -199,6 +199,43 @@ fn a_delayed_candidate_cannot_replace_a_newer_provider_observation_for_another_m
 }
 
 #[test]
+fn equal_timestamps_preserve_the_first_provider_observation() {
+    let mut config = auto_config();
+    config["models"].as_array_mut().unwrap().push(json!({
+        "id": "demo/other", "provider": "demo", "upstream_id": "other-model",
+        "deployment_identity": "deployment-a"
+    }));
+    let model = resolve_route_without_catalog(&config, "demo/model").unwrap();
+    let other = resolve_route_without_catalog(&config, "demo/other").unwrap();
+
+    for (route, protocol) in [
+        (&model, Protocol::Responses),
+        (&other, Protocol::ChatCompletions),
+    ] {
+        let candidate =
+            LearnedProtocol::from_route(route, protocol, OBSERVED_AT.to_owned()).unwrap();
+        let ProtocolSave::Updated(updated) =
+            remember_learned_protocol(&config, &candidate, bundled_snapshot).unwrap()
+        else {
+            panic!("each model's observation must save");
+        };
+        config = updated;
+    }
+
+    for (entry, protocol, upstream_model) in [
+        (&config["providers"][0], "responses", "upstream-model"),
+        (&config["models"][1], "chat_completions", "other-model"),
+    ] {
+        assert_eq!(entry["resolved_protocol"], protocol);
+        assert_eq!(
+            entry["protocol_observation"]["upstream_model"],
+            upstream_model
+        );
+        assert_eq!(entry["protocol_observation"]["observed_at"], OBSERVED_AT);
+    }
+}
+
+#[test]
 fn a_newer_provider_observation_does_not_block_an_older_alias_update() {
     let mut config = auto_config();
     let mut alias = config["models"][0].clone();
