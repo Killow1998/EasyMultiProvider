@@ -1,7 +1,6 @@
 use crate::app::ServerState;
-use emp_domain::ResolvedRoute;
 use emp_state::VaultStore;
-use emp_state::config::{remember_resolved_protocol_with_registry, remember_route_protocol};
+use emp_state::config::{LearnedProtocol, ProtocolSave, remember_learned_protocol};
 use emp_state::provider_api_key;
 use serde_json::{Value, json};
 
@@ -17,40 +16,27 @@ pub(crate) fn hydrate_provider_keys(config: &mut Value, vault: &VaultStore) {
     }
 }
 
-pub(crate) fn persist_protocol_observation(state: &ServerState, route: &ResolvedRoute) {
-    let Ok(mut config) = state.backend.configuration.edit() else {
+pub(crate) fn save_learned_protocol(state: &ServerState, candidate: Option<LearnedProtocol>) {
+    let Some(candidate) = candidate else {
         return;
     };
-    let Ok(Some(updated)) = remember_resolved_protocol_with_registry(
-        &config,
-        &route.provider_id,
-        &route.requested_model,
-        route.protocol.as_config_str(),
-        state.backend.configuration.official_models,
-    ) else {
-        return;
-    };
-    let _ = config.commit(&updated);
-}
-
-pub(crate) fn save_learned_protocol(state: &ServerState, route: &ResolvedRoute, observed_at: &str) {
     let configuration = &state.backend.configuration;
     let Ok(mut config) = configuration.edit() else {
         return;
     };
-    match remember_route_protocol(&config, route, observed_at, configuration.official_models) {
-        Ok(Some(updated)) => {
+    match remember_learned_protocol(&config, &candidate, configuration.official_models) {
+        Ok(ProtocolSave::Updated(updated)) => {
             let _ = config.commit(&updated);
         }
-        Ok(None) => state.backend.diagnostics.journal.event(
+        Ok(ProtocolSave::IdentityChanged) => state.backend.diagnostics.journal.event(
             "warning",
             "protocol_observation_discarded",
             &json!({
-                "provider_id": route.provider_id,
-                "model_id": route.requested_model,
+                "provider_id": candidate.provider_id,
+                "model_id": candidate.requested_model,
                 "reason": "route_identity_changed",
             }),
         ),
-        Err(_) => {}
+        Ok(ProtocolSave::Superseded) | Err(_) => {}
     }
 }

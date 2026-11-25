@@ -6,8 +6,10 @@ use crate::api::failure_response::{
 use crate::app::ServerState;
 use crate::services::disconnect::DisconnectRace;
 use crate::services::events::{stream_event_activity, terminal_stream_event};
+use crate::services::providers::save_learned_protocol;
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
+use emp_state::{config::LearnedProtocol, observed_at_now};
 use serde_json::Value;
 use tokio::task::block_in_place;
 
@@ -190,6 +192,11 @@ pub(super) async fn serve_external(
                 return TurnResult::Closed;
             }
             DisconnectRace::Ready(Ok(Some(mut event))) => {
+                let learned = if event.body["type"] == "response.completed" {
+                    LearnedProtocol::from_route(route, candidate.protocol, observed_at_now())
+                } else {
+                    None
+                };
                 usage.observe(&event.body);
                 block_in_place(|| {
                     crate::services::context::record_event(
@@ -208,12 +215,8 @@ pub(super) async fn serve_external(
                     return TurnResult::Closed;
                 }
                 if terminal_stream_event(&event.body) {
-                    if event.body["type"] == "response.completed" {
-                        block_in_place(|| {
-                            crate::services::providers::persist_protocol_observation(
-                                state, &candidate,
-                            )
-                        });
+                    if learned.is_some() {
+                        block_in_place(|| save_learned_protocol(state, learned));
                     }
                     break;
                 }

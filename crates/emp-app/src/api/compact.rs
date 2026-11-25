@@ -11,11 +11,12 @@ use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
 use crate::services::native;
 use crate::services::observation::request::{Phase, RequestObservation};
-use crate::services::providers::persist_protocol_observation;
+use crate::services::providers::save_learned_protocol;
 use crate::services::request_preparation::{
     PreparedRequest, RequestOperation, RequestPreparationError,
 };
 use crate::util::projection_ids;
+use emp_state::{config::LearnedProtocol, observed_at_now};
 
 pub(crate) fn execute(
     downstream: &mut BodyOutput,
@@ -130,8 +131,9 @@ pub(crate) fn execute(
         Ok(result) => result,
         Err(error) => return crate::api::history_response::compaction_error_response(error).into(),
     };
+    let learned = LearnedProtocol::from_route(&route, candidate.protocol, observed_at_now());
     usage.observe(&compacted);
-    persist_protocol_observation(state, &candidate);
+    save_learned_protocol(state, learned);
     match serde_json::to_vec(&compacted) {
         Ok(body) => HttpReply::new(200, body),
         Err(_) => HttpReply::error(500, "internal server error", None),

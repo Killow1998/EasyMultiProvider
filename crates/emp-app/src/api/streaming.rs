@@ -16,11 +16,12 @@ use crate::services::providers::save_learned_protocol;
 use crate::services::request_outcome::RequestOutcome;
 use crate::util::random_hex;
 use axum::body::Bytes;
-use emp_domain::{Protocol, ResolvedRoute};
+use emp_domain::ResolvedRoute;
 use emp_router::ExternalStream;
 use emp_router::ProjectionIds;
 use emp_router::RouterError;
 use emp_router::native_http::NativeStream;
+use emp_state::{config::LearnedProtocol, observed_at_now};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -145,7 +146,7 @@ pub(crate) fn serve_external_stream<'a>(
             return crate::api::failure_response::external_open_error(error).map_or(Ok(()), Err);
         }
     };
-    let mut observed_at = None;
+    let mut learned = None;
     let result = relay_stream(
         &mut downstream,
         RelayContext {
@@ -157,17 +158,17 @@ pub(crate) fn serve_external_stream<'a>(
         ExternalRelay { upstream },
         monitor,
         |usage, event| {
-            if route.protocol == Protocol::Auto && event["type"] == "response.completed" {
-                observed_at = Some(emp_state::observed_at_now());
+            if event["type"] == "response.completed" {
+                learned = LearnedProtocol::from_route(route, candidate.protocol, observed_at_now());
             }
             usage.observe(event);
             context::record_event(state, &candidate, body, event);
         },
     );
-    if let Some(observed_at) = observed_at {
-        downstream.sink.after_handoff(move || {
-            save_learned_protocol(state, &candidate, &observed_at);
-        });
+    if learned.is_some() {
+        downstream
+            .sink
+            .after_handoff(move || save_learned_protocol(state, learned));
     }
     result
 }

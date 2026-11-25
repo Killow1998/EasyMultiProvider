@@ -1,11 +1,12 @@
 use crate::app::ServerState;
 use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, race};
 use crate::services::observation;
-use crate::services::providers::persist_protocol_observation;
+use crate::services::providers::save_learned_protocol;
 use crate::services::request_outcome::RequestOutcome;
 use emp_domain::{ResolvedRoute, RouteResolutionError};
 use emp_router::failure_policy;
 use emp_router::{CompleteResponse, ExternalRouter, ExternalStream, ProjectionIds, RouterError};
+use emp_state::{config::LearnedProtocol, observed_at_now};
 use emp_transport::{FailureClass, FailurePhase, UpstreamFailure};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -56,13 +57,14 @@ pub(crate) fn complete(
                 .await
         },
     ))?;
+    let learned = LearnedProtocol::from_route(route, candidate.protocol, observed_at_now());
     outcome.http_status(result.status);
     outcome.upstream_observation(&result.observation);
     outcome.observe(&result.body);
     if result.body["status"] == "completed" {
         crate::services::context::record(state, &candidate, body, true);
     }
-    persist_protocol_observation(state, &candidate);
+    save_learned_protocol(state, learned);
     Ok(result)
 }
 

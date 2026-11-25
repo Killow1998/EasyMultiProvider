@@ -12,7 +12,7 @@ use rustls::{
 };
 use std::process::{Child, Command, Stdio};
 
-pub(super) struct VertexFixture {
+pub(crate) struct VertexFixture {
     host: String,
     address: SocketAddr,
     root: Vec<u8>,
@@ -62,7 +62,7 @@ impl VertexFixture {
         Self::start_for("aiplatform.googleapis.com")
     }
 
-    pub(super) fn start_for(host: &str) -> Self {
+    pub(crate) fn start_for(host: &str) -> Self {
         let (config, root) = fixture_tls(host);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -213,7 +213,7 @@ impl VertexFixture {
         }
     }
 
-    pub(super) fn client(&self) -> HttpClient {
+    pub(crate) fn client(&self) -> HttpClient {
         let mut config = HttpClientConfig::default();
         config.add_root_certificate_der(&self.root).unwrap();
         config.use_only_configured_root_certificates().unwrap();

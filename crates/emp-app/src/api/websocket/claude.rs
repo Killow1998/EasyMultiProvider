@@ -1,6 +1,8 @@
 use super::{ObservedWebSocket, Turn, TurnResult};
 use crate::app::ServerState;
 use crate::services::disconnect::DisconnectMonitor;
+use crate::services::providers::save_learned_protocol;
+use emp_state::{config::LearnedProtocol, observed_at_now};
 use serde_json::Value;
 use std::{io, sync::Arc};
 use tokio::sync::{mpsc, oneshot};
@@ -90,6 +92,8 @@ pub(super) async fn serve(
                 ));
             }
         };
+        let learned =
+            LearnedProtocol::from_route(&route, completion.route.protocol, observed_at_now());
         let selected_route = completion.route;
         let mut response = completion.response.body;
         response["id"] = Value::String(id);
@@ -101,7 +105,7 @@ pub(super) async fn serve(
         if response["status"] == "completed" {
             crate::services::context::record(&state, &selected_route, &body, true);
         }
-        crate::services::providers::persist_protocol_observation(&state, &selected_route);
+        save_learned_protocol(&state, learned);
         Completion::Finished(if live.finish(response).is_ok() {
             TurnResult::Finished
         } else {

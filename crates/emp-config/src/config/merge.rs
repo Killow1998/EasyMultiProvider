@@ -1,11 +1,12 @@
 use super::provider_url::{hostname, parse_provider_url};
 use super::{
     ConfigError, ConfigResult, MASKED_API_KEY, MODEL_BOOLEAN_CAPABILITIES, Map,
-    TOP_LEVEL_PROVENANCE_FIELDS, Value, deployment_identity, endpoint_fingerprint, json_truthy,
-    normalize_configuration_with_registry, normalize_input_modalities,
+    TOP_LEVEL_PROVENANCE_FIELDS, Value, json_truthy, normalize_configuration_with_registry,
+    normalize_input_modalities,
 };
-use emp_domain::{ResolvedRoute, RouteSource, resolved_upstream_model};
+use emp_domain::{Protocol, ProtocolObservationKey, ResolvedRoute, RouteSource};
 use std::time::{SystemTime, UNIX_EPOCH};
+use time::{Date, OffsetDateTime, PrimitiveDateTime, format_description::well_known::Iso8601};
 
 fn utc_date_parts(seconds: u64) -> (i64, u32, u32) {
     let days = (seconds / 86_400) as i64;
@@ -47,180 +48,116 @@ pub fn observed_at_now() -> String {
     }
 }
 
-/// Apply a successful automatic protocol observation to normalized configuration.
-/// Explicit providers and missing identities remain unchanged.
-pub fn remember_resolved_protocol_at(
-    config: &Value,
-    provider_id: &str,
-    requested_model: &str,
-    protocol: &str,
-    observed_at: &str,
-) -> ConfigResult<Option<Value>> {
-    remember_resolved_protocol_at_with_registry(
-        config,
-        provider_id,
-        requested_model,
-        protocol,
-        observed_at,
-        None,
-        super::official_registry::snapshot,
-    )
+pub struct LearnedProtocol {
+    pub provider_id: String,
+    pub requested_model: String,
+    model_id: String,
+    source: RouteSource,
+    key: ProtocolObservationKey,
+    protocol: Protocol,
+    observed_at: String,
 }
 
-fn remember_resolved_protocol_at_with_registry(
-    config: &Value,
-    provider_id: &str,
-    requested_model: &str,
-    protocol: &str,
-    observed_at: &str,
-    route: Option<&ResolvedRoute>,
-    registry: super::RegistrySource,
-) -> ConfigResult<Option<Value>> {
-    if !matches!(
-        protocol,
-        "responses" | "chat_completions" | "anthropic_messages"
-    ) {
-        return Ok(None);
-    }
-    let mut updated = config.clone();
-    let Some(root) = updated.as_object_mut() else {
-        return Ok(None);
-    };
-    let Some(providers) = root.get("providers").and_then(Value::as_array) else {
-        return Ok(None);
-    };
-    let Some(provider_index) = providers.iter().position(|provider| {
-        provider.get("id").and_then(Value::as_str) == Some(provider_id)
-            && provider.get("protocol").and_then(Value::as_str) == Some("auto")
-    }) else {
-        return Ok(None);
-    };
-
-    let model_index = root
-        .get("models")
-        .and_then(Value::as_array)
-        .and_then(|models| {
-            models.iter().position(|model| {
-                model.get("id").and_then(Value::as_str) == Some(requested_model)
-                    && model.get("provider").and_then(Value::as_str) == Some(provider_id)
-            })
-        });
-    let provider = providers[provider_index]
-        .as_object()
-        .expect("normalized providers are objects")
-        .clone();
-    let model = model_index
-        .and_then(|index| root.get("models")?.as_array()?.get(index))
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let endpoint = endpoint_fingerprint(provider.get("base_url").and_then(Value::as_str));
-    let deployment = deployment_identity(&provider, &model);
-    let (endpoint, deployment, upstream_model) = if let Some(route) = route {
-        if (route.source == RouteSource::ExplicitModel && model_index.is_none())
-            || route.endpoint_fingerprint != endpoint
-            || route.deployment_identity != deployment
-            || route.upstream_model != resolved_upstream_model(&provider, &model, requested_model)
-        {
-            return Ok(None);
+impl LearnedProtocol {
+    pub fn from_route(
+        route: &ResolvedRoute,
+        protocol: Protocol,
+        observed_at: String,
+    ) -> Option<Self> {
+        if route.protocol != Protocol::Auto || protocol == Protocol::Auto {
+            return None;
         }
-        (
-            route.endpoint_fingerprint.as_str(),
-            route.deployment_identity.as_str(),
-            route.upstream_model.as_str(),
-        )
-    } else {
-        let upstream = model
-            .get("upstream_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(requested_model);
-        (endpoint.as_str(), deployment.as_str(), upstream)
-    };
-    let observation = serde_json::json!({
-        "source": "observed",
-        "confidence": 1.0,
-        "observed_at": observed_at,
-        "endpoint_fingerprint": endpoint,
-        "deployment_identity": deployment,
-        "upstream_model": upstream_model,
-    });
-
-    let provider = root
-        .get_mut("providers")
-        .and_then(Value::as_array_mut)
-        .and_then(|providers| providers.get_mut(provider_index))
-        .and_then(Value::as_object_mut)
-        .expect("normalized providers are objects");
-    provider.insert(
-        "resolved_protocol".to_owned(),
-        Value::String(protocol.to_owned()),
-    );
-    provider.insert("protocol_observation".to_owned(), observation.clone());
-    if let Some(index) = model_index
-        && let Some(model) = root
-            .get_mut("models")
-            .and_then(Value::as_array_mut)
-            .and_then(|models| models.get_mut(index))
-            .and_then(Value::as_object_mut)
-    {
-        model.insert(
-            "resolved_protocol".to_owned(),
-            Value::String(protocol.to_owned()),
-        );
-        model.insert("protocol_observation".to_owned(), observation);
+        let model = route.model.value();
+        Some(Self {
+            provider_id: route.provider_id.clone(),
+            requested_model: route.requested_model.clone(),
+            model_id: model.get("id")?.as_str()?.to_owned(),
+            source: route.source,
+            key: ProtocolObservationKey::new(route.provider.value(), model),
+            protocol,
+            observed_at,
+        })
     }
-    normalize_configuration_with_registry(Some(&updated), registry).map(Some)
 }
 
-pub fn remember_resolved_protocol(
-    config: &Value,
-    provider_id: &str,
-    requested_model: &str,
-    protocol: &str,
-) -> ConfigResult<Option<Value>> {
-    remember_resolved_protocol_with_registry(
-        config,
-        provider_id,
-        requested_model,
-        protocol,
-        super::official_registry::snapshot,
-    )
+pub enum ProtocolSave {
+    Updated(Value),
+    Superseded,
+    IdentityChanged,
 }
 
-pub fn remember_resolved_protocol_with_registry(
+fn observation_time(value: &str) -> Option<OffsetDateTime> {
+    let format = Iso8601::PARSING;
+    OffsetDateTime::parse(value, &format)
+        .ok()
+        .or_else(|| {
+            PrimitiveDateTime::parse(value, &format)
+                .ok()
+                .map(PrimitiveDateTime::assume_utc)
+        })
+        .or_else(|| {
+            Date::parse(value, &format)
+                .ok()
+                .map(|date| date.midnight().assume_utc())
+        })
+}
+
+pub fn remember_learned_protocol(
     config: &Value,
-    provider_id: &str,
-    requested_model: &str,
-    protocol: &str,
+    candidate: &LearnedProtocol,
     registry: super::RegistrySource,
-) -> ConfigResult<Option<Value>> {
-    remember_resolved_protocol_at_with_registry(
-        config,
-        provider_id,
-        requested_model,
-        protocol,
-        &observed_at_now(),
-        None,
-        registry,
-    )
-}
+) -> ConfigResult<ProtocolSave> {
+    let Some(provider_index) = config["providers"].as_array().and_then(|providers| {
+        providers.iter().position(|provider| {
+            provider["id"] == candidate.provider_id && provider["protocol"] == "auto"
+        })
+    }) else {
+        return Ok(ProtocolSave::IdentityChanged);
+    };
+    let model_index = config["models"].as_array().and_then(|models| {
+        models.iter().position(|model| {
+            model["id"] == candidate.model_id && model["provider"] == candidate.provider_id
+        })
+    });
+    if candidate.source == RouteSource::ExplicitModel && model_index.is_none() {
+        return Ok(ProtocolSave::IdentityChanged);
+    }
+    let provider = &config["providers"][provider_index];
+    let model = model_index.map(|index| &config["models"][index]);
+    let unlisted_model =
+        Map::from_iter([("id".to_owned(), Value::String(candidate.model_id.clone()))]);
+    let key = ProtocolObservationKey::new(
+        provider.as_object().expect("normalized provider"),
+        model.and_then(Value::as_object).unwrap_or(&unlisted_model),
+    );
+    if key != candidate.key {
+        return Ok(ProtocolSave::IdentityChanged);
+    }
 
-pub fn remember_route_protocol(
-    config: &Value,
-    route: &ResolvedRoute,
-    observed_at: &str,
-    registry: super::RegistrySource,
-) -> ConfigResult<Option<Value>> {
-    remember_resolved_protocol_at_with_registry(
-        config,
-        &route.provider_id,
-        &route.requested_model,
-        route.protocol.as_config_str(),
-        observed_at,
-        Some(route),
-        registry,
-    )
+    let observed_at = observation_time(&candidate.observed_at);
+    if std::iter::once(provider).chain(model).any(|entry| {
+        let observation = &entry["protocol_observation"];
+        key.matches_observation(observation)
+            && observation["observed_at"]
+                .as_str()
+                .and_then(observation_time)
+                > observed_at
+    }) {
+        return Ok(ProtocolSave::Superseded);
+    }
+
+    let observation = key.observation(&candidate.observed_at);
+    let protocol = Value::String(candidate.protocol.as_config_str().to_owned());
+    let mut updated = config.clone();
+    let provider = &mut updated["providers"][provider_index];
+    provider["resolved_protocol"] = protocol.clone();
+    provider["protocol_observation"] = observation.clone();
+    if let Some(index) = model_index {
+        let model = &mut updated["models"][index];
+        model["resolved_protocol"] = protocol;
+        model["protocol_observation"] = observation;
+    }
+    normalize_configuration_with_registry(Some(&updated), registry).map(ProtocolSave::Updated)
 }
 
 fn values_by_id(raw: Option<&Value>) -> Map<String, Value> {

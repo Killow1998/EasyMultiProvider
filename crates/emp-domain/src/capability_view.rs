@@ -1,5 +1,5 @@
 //! Credential-free capability records from normalized EMP configuration.
-use crate::{deployment_identity, endpoint_fingerprint};
+use crate::{ProtocolObservationKey, deployment_identity, endpoint_fingerprint};
 use serde_json::{Map, Value, json};
 
 pub fn safe_id(value: Option<&Value>, fallback: &str) -> String {
@@ -127,6 +127,7 @@ pub fn capability_record(provider: &Map<String, Value>, model: &Map<String, Valu
         .unwrap_or("unknown");
     let mut resolved = "unknown";
     let mut observed = provenance(None, "unknown");
+    let observation_key = ProtocolObservationKey::new(provider, model);
     for source in [model, provider] {
         let Some(protocol) = source
             .get("resolved_protocol")
@@ -138,18 +139,7 @@ pub fn capability_record(provider: &Map<String, Value>, model: &Map<String, Valu
         let Some(observation) = source.get("protocol_observation").filter(|v| v.is_object()) else {
             continue;
         };
-        if [
-            ("endpoint_fingerprint", fingerprint.as_str()),
-            ("upstream_model", upstream.as_str()),
-            ("deployment_identity", deployment.as_str()),
-        ]
-        .iter()
-        .any(|(field, expected)| {
-            observation
-                .get(*field)
-                .and_then(Value::as_str)
-                .is_some_and(|s| !s.is_empty() && s != *expected)
-        }) {
+        if !observation_key.matches_partial_observation(observation) {
             continue;
         }
         observed = provenance(Some(observation), "observed");

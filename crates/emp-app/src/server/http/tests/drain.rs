@@ -1185,23 +1185,52 @@ fn drain_native_accounts_for_a_read_terminal_before_previous_frame_flush() {
 #[cfg(unix)]
 #[test]
 fn drain_external_releases_business_before_saving_the_learned_protocol() {
-    drain_external_protocol_learning(false, None);
+    drain_external_protocol_learning(false, None, "demo/model");
 }
 
 #[cfg(unix)]
 #[test]
 fn drain_external_discards_learning_when_the_provider_endpoint_changes() {
-    drain_external_protocol_learning(false, Some("http://127.0.0.1:1/replacement"));
+    drain_external_protocol_learning(false, Some("http://127.0.0.1:1/replacement"), "demo/model");
 }
 
 #[cfg(unix)]
 #[test]
 fn drain_external_saves_the_learned_protocol_after_write_failure() {
-    drain_external_protocol_learning(true, None);
+    drain_external_protocol_learning(true, None, "demo/model");
 }
 
 #[cfg(unix)]
-fn drain_external_protocol_learning(fail_write: bool, replacement_endpoint: Option<&'static str>) {
+#[test]
+fn drain_external_saves_learning_for_the_selected_aggregate_member() {
+    drain_external_protocol_learning(false, None, "auto/learning");
+}
+
+#[cfg(unix)]
+async fn hold_protocol_save(
+    fixture: &Fixture,
+    change: impl FnOnce(&mut Value) + Send + 'static,
+) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    let (locked, at_lock) = oneshot::channel();
+    let (unlock, held) = oneshot::channel();
+    let state = fixture.server.state.clone();
+    let saver_gate = tokio::task::spawn_blocking(move || {
+        let mut config = state.backend.configuration.test_config().lock().unwrap();
+        let _ = locked.send(());
+        if held.blocking_recv().is_ok() {
+            change(&mut config);
+        }
+    });
+    receive(at_lock, "configuration save gate held").await;
+    (unlock, saver_gate)
+}
+
+#[cfg(unix)]
+fn drain_external_protocol_learning(
+    fail_write: bool,
+    replacement_endpoint: Option<&'static str>,
+    requested_model: &str,
+) {
     use super::inference::{
         FIRST, LAST, STREAM_REQUEST, SseClient, fixture_directory, upstream_reply,
     };
@@ -1226,7 +1255,13 @@ fn drain_external_protocol_learning(fail_write: bool, replacement_endpoint: Opti
     let path = directory.path().join("config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     config["providers"][1]["protocol"] = json!("auto");
+    config["models"][0]["upstream_id"] = json!("demo/upstream-model");
+    config["model_groups"] = json!([{
+        "id": "auto/learning", "policy": "priority", "sources": ["demo/model", "native/alias"]
+    }]);
     std::fs::write(&path, config.to_string()).unwrap();
+    let mut body: Value = serde_json::from_slice(STREAM_REQUEST).unwrap();
+    body["model"] = json!(requested_model);
 
     Fixture::with_directory(directory).run_wire(async move |fixture, address| {
         let state = &fixture.server.state;
@@ -1244,8 +1279,8 @@ fn drain_external_protocol_learning(fail_write: bool, replacement_endpoint: Opti
         let request = json_request(
             fixture.port(),
             "/v1/responses",
-            &[&fixture.session()],
-            STREAM_REQUEST,
+            &[&fixture.session(), "session-id: protocol-learning"],
+            body.to_string().as_bytes(),
         );
         let client = RawClient::request(address, &request).await;
         let id = receive(probe.id, "request ID").await;
@@ -1279,21 +1314,12 @@ fn drain_external_protocol_learning(fail_write: bool, replacement_endpoint: Opti
             control.stop(ShutdownReason::Requested);
             send_terminal.send(()).unwrap();
             receive(at_handoff, "terminal queued and calibration complete").await;
-            let (locked, at_lock) = oneshot::channel();
-            let (unlock, held) = oneshot::channel::<()>();
-            let saver_gate = tokio::task::spawn_blocking({
-                let state = state.clone();
-                move || {
-                    let mut config = state.backend.configuration.test_config().lock().unwrap();
-                    let _ = locked.send(());
-                    if held.blocking_recv().is_ok()
-                        && let Some(endpoint) = replacement_endpoint
-                    {
-                        config["providers"][1]["base_url"] = json!(endpoint);
-                    }
+            let (unlock, saver_gate) = hold_protocol_save(fixture, move |config| {
+                if let Some(endpoint) = replacement_endpoint {
+                    config["providers"][1]["base_url"] = json!(endpoint);
                 }
-            });
-            receive(at_lock, "configuration save gate held").await;
+            })
+            .await;
             handoff.send(()).unwrap();
             let mut client = SseClient::from_raw(client);
             timeout(wire_timeout().duration(), async {
@@ -1359,16 +1385,90 @@ fn drain_external_protocol_learning(fail_write: bool, replacement_endpoint: Opti
             assert_eq!(model["resolved_protocol"], "chat_completions");
             let observation = &provider["protocol_observation"];
             assert_eq!(observation, &model["protocol_observation"]);
-            assert_eq!(observation["upstream_model"], "upstream-model");
+            assert_eq!(observation["upstream_model"], "demo/upstream-model");
             assert_eq!(observation["deployment_identity"], "default");
             assert_eq!(
                 observation["endpoint_fingerprint"],
                 emp_domain::endpoint_fingerprint(provider["base_url"].as_str())
             );
             assert!(observation["observed_at"].is_string());
+            let next = emp_domain::resolve_route_without_catalog(&saved, "demo/model").unwrap();
+            assert_eq!(
+                emp_router::observed_protocol(&next),
+                Some(emp_domain::Protocol::ChatCompletions)
+            );
+            let journal = fixture.flushed_journal().await;
+            assert!(
+                journal
+                    .iter()
+                    .all(|row| row["event"] != "protocol_observation_discarded")
+            );
         }
     });
     assert_eq!(upstream.observed().0, "/v1/chat/completions");
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_vertex_discards_learning_when_the_region_changes() {
+    use super::inference::{SseClient, fixture_directory};
+    use crate::tests::VertexFixture;
+
+    let upstream = VertexFixture::start_for("aiplatform.googleapis.com");
+    let directory = fixture_directory("http://127.0.0.1:1/v1");
+    let root = emp_state::config::resolve_user_path(directory.path());
+    let path = root.join("config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["providers"][1]["protocol"] = json!("auto");
+    config["providers"][1]["auth_mode"] = json!("vertex_api_key");
+    config["providers"][1]["vertex"] = json!({"project":"fixture-project","location":"global"});
+    config["models"][0]["upstream_id"] = json!("gemini-3-flash-preview");
+    std::fs::write(&path, config.to_string()).unwrap();
+    let server = RunningServer::start_with_test_options(
+        LOOPBACK.ip(),
+        &path,
+        root.join("codex/auth.json"),
+        "missing-test-codex",
+        Some(upstream.client()),
+    )
+    .unwrap();
+    Fixture { directory, server, upstream: Arc::default() }.run_wire(async move |fixture, address| {
+        let state = &fixture.server.state;
+        let control = &state.lifecycle;
+        let (handing_off, at_handoff) = oneshot::channel();
+        let (handoff, resume_handoff) = oneshot::channel::<()>();
+        *control.test_hooks.on_stream_handoff.lock().unwrap() = Some(Box::new(move || {
+            let _ = handing_off.send(());
+            let _ = resume_handoff.blocking_recv();
+        }));
+        let body = json!({"model":"demo/model","stream":true,"input":"Read",
+            "tools":[{"type":"function","name":"read","parameters":{"type":"object","properties":{}}}]});
+        let request = json_request(fixture.port(), "/v1/responses", &[&fixture.session()], body.to_string().as_bytes());
+        let mut client = SseClient::from_raw(RawClient::request(address, &request).await);
+        receive(at_handoff, "Vertex terminal queued").await;
+        let (unlock, saver_gate) = hold_protocol_save(fixture, |config| {
+            config["providers"][1]["vertex"]["location"] = json!("us");
+        }).await;
+        handoff.send(()).unwrap();
+        timeout(wire_timeout().duration(), control.admission.wait_for_business_idle())
+            .await.expect("Vertex save waits after business handoff");
+        unlock.send(()).unwrap();
+        saver_gate.await.unwrap();
+        timeout(wire_timeout().duration(), async {
+            while client.next().await.expect("terminal Vertex event")["type"] != "response.completed" {}
+            assert!(client.next().await.is_none());
+        }).await.expect("Vertex stream closes after discarding the candidate");
+        let saved: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(saved["providers"][1]["resolved_protocol"], "");
+        assert_eq!(saved["models"][0]["resolved_protocol"], "");
+        assert_eq!(state.backend.configuration.read().unwrap()["providers"][1]["vertex"]["location"], "us");
+        let journal = fixture.flushed_journal().await;
+        assert!(journal.iter().any(|row| {
+            row["event"] == "protocol_observation_discarded"
+                && row["fields"]["provider_id"] == "demo"
+                && row["fields"]["reason"] == "route_identity_changed"
+        }));
+    });
 }
 
 #[cfg(unix)]
@@ -1405,6 +1505,7 @@ fn drain_aero_observes_the_parent_terminal_before_previous_frame_flush() {
         assert_eq!(snapshot["sample_count"], 1);
         assert!(snapshot["records"][0]["observation_id"].is_string());
         assert!(snapshot["records"][0]["observed_at"].is_string());
+        assert!(snapshot["records"][0]["request_id"].is_string());
         let probe = Probe::arm(
             fixture,
             "/v1/responses",
@@ -1445,7 +1546,13 @@ fn drain_aero_observes_the_parent_terminal_before_previous_frame_flush() {
         );
         let reply = exchange_wire(address, &wire, false).await;
         assert_status(&reply, 200);
-        assert_eq!(json_body(&reply)["records"].as_array().unwrap().len(), 1);
+        let calls = json_body(&reply);
+        let records = calls["records"].as_array().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0]["request_id"],
+            snapshot["records"][0]["request_id"]
+        );
     });
 }
 

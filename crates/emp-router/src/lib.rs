@@ -266,44 +266,25 @@ pub fn protocol_candidates(route: &ResolvedRoute) -> Vec<Protocol> {
         .collect()
 }
 
-/// Return a saved protocol only when endpoint, deployment and upstream model identities match;
-/// URL-suffix candidate ordering is not an observation.
 pub fn observed_protocol(route: &ResolvedRoute) -> Option<Protocol> {
-    let upstream = route
-        .model
-        .value()
-        .get("upstream_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|upstream| !upstream.is_empty())?;
-    for source in [route.model.value(), route.provider.value()] {
-        let protocol = match source.get("resolved_protocol").and_then(Value::as_str) {
-            Some("responses") => Protocol::Responses,
-            Some("chat_completions") => Protocol::ChatCompletions,
-            Some("anthropic_messages") => Protocol::AnthropicMessages,
-            _ => continue,
-        };
-        let Some(observation) = source
-            .get("protocol_observation")
-            .and_then(Value::as_object)
-        else {
-            continue;
-        };
-        if observation
-            .get("endpoint_fingerprint")
-            .and_then(Value::as_str)
-            != Some(route.endpoint_fingerprint.as_str())
-            || observation
-                .get("deployment_identity")
-                .and_then(Value::as_str)
-                != Some(route.deployment_identity.as_str())
-            || observation.get("upstream_model").and_then(Value::as_str) != Some(upstream)
-        {
-            continue;
+    let model = route.model.value();
+    let provider = route.provider.value();
+    model
+        .get("upstream_id")?
+        .as_str()
+        .filter(|id| !id.trim().is_empty())?;
+    let key = emp_domain::ProtocolObservationKey::new(provider, model);
+    [model, provider].into_iter().find_map(|entry| {
+        if !key.matches_observation(entry.get("protocol_observation")?) {
+            return None;
         }
-        return Some(protocol);
-    }
-    None
+        match entry.get("resolved_protocol").and_then(Value::as_str) {
+            Some("responses") => Some(Protocol::Responses),
+            Some("chat_completions") => Some(Protocol::ChatCompletions),
+            Some("anthropic_messages") => Some(Protocol::AnthropicMessages),
+            _ => None,
+        }
+    })
 }
 
 /// Project the exact upstream request judged by EMP's destination context guard.

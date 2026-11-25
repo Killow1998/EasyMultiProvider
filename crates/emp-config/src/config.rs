@@ -6,7 +6,6 @@ use emp_domain::model_values::{
     normalize_reasoning_levels, normalize_supported_protocols, output_modalities_known,
     supported_protocols_known, trim_whitespace,
 };
-use emp_domain::{deployment_identity, endpoint_fingerprint};
 use emp_files::filesystem::{
     FileTransaction, FilesystemError, atomic_write_config, read_file_limited, with_file_transaction,
 };
@@ -244,9 +243,8 @@ use crate::official_registry::{self, RegistrySource};
 
 mod merge;
 pub use merge::{
-    merge_web_update, merge_web_update_with_registry, merge_web_update_with_time, observed_at_now,
-    remember_resolved_protocol, remember_resolved_protocol_at,
-    remember_resolved_protocol_with_registry, remember_route_protocol,
+    LearnedProtocol, ProtocolSave, merge_web_update, merge_web_update_with_registry,
+    merge_web_update_with_time, observed_at_now, remember_learned_protocol,
 };
 
 /// Save a normalized configuration and its derived secret files atomically.

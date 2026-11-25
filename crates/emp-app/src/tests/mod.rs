@@ -81,7 +81,7 @@ mod management_operation_contract;
 mod memory_routing_contract;
 mod native_api_contract;
 #[cfg(unix)]
-pub(crate) use native_api_contract::fixture_tls;
+pub(crate) use native_api_contract::{VertexFixture, fixture_tls};
 #[cfg(unix)]
 mod native_login_contract;
 mod other_auth_contract;

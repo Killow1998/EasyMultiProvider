@@ -1,5 +1,5 @@
 use crate::{Dialect, Protocol, ResolvedRoute, RouteSource, ValidationError};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use url::{Host, Url};
@@ -136,6 +136,79 @@ pub fn deployment_identity(provider: &Map<String, Value>, model: &Map<String, Va
         }
     }
     "default".to_owned()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolObservationKey {
+    endpoint_fingerprint: String,
+    deployment_identity: String,
+    upstream_model: String,
+}
+
+impl ProtocolObservationKey {
+    pub fn new(provider: &Map<String, Value>, model: &Map<String, Value>) -> Self {
+        let endpoint_fingerprint = if let Some(vertex) = provider.get("vertex") {
+            let project = &vertex["project"];
+            let api_key =
+                provider.get("auth_mode").and_then(Value::as_str) == Some("vertex_api_key");
+            let location = if api_key && project == "" {
+                "global"
+            } else {
+                vertex["location"].as_str().unwrap_or_default()
+            };
+            let endpoint = json!(["vertex", project, location, api_key]).to_string();
+            format!("sha256:{:x}", Sha256::digest(endpoint.as_bytes()))
+        } else {
+            endpoint_fingerprint(provider.get("base_url").and_then(Value::as_str))
+        };
+        let upstream_model = model
+            .get("upstream_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| model.get("id").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_owned();
+        Self {
+            endpoint_fingerprint,
+            deployment_identity: deployment_identity(provider, model),
+            upstream_model,
+        }
+    }
+
+    fn fields(&self) -> [(&'static str, &str); 3] {
+        [
+            ("endpoint_fingerprint", &self.endpoint_fingerprint),
+            ("deployment_identity", &self.deployment_identity),
+            ("upstream_model", &self.upstream_model),
+        ]
+    }
+
+    pub fn matches_observation(&self, observation: &Value) -> bool {
+        self.fields()
+            .into_iter()
+            .all(|(field, expected)| observation[field].as_str() == Some(expected))
+    }
+
+    pub(crate) fn matches_partial_observation(&self, observation: &Value) -> bool {
+        self.fields().into_iter().all(|(field, expected)| {
+            observation[field]
+                .as_str()
+                .is_none_or(|value| value.is_empty() || value == expected)
+        })
+    }
+
+    pub fn observation(&self, observed_at: &str) -> Value {
+        let mut observation = json!({
+            "source": "observed",
+            "confidence": 1.0,
+            "observed_at": observed_at,
+        });
+        for (field, value) in self.fields() {
+            observation[field] = json!(value);
+        }
+        observation
+    }
 }
 
 pub fn classify_dialect(provider: &Map<String, Value>) -> Dialect {

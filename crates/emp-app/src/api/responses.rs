@@ -19,11 +19,12 @@ use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
 use crate::services::native;
 use crate::services::observation::request::{Phase, RequestObservation};
-use crate::services::providers::persist_protocol_observation;
+use crate::services::providers::save_learned_protocol;
 use crate::services::request_preparation::{PreparedRequest, RequestPreparationError};
 use crate::util::projection_ids;
 use emp_context::HistoryError;
 use emp_domain::json_truthy;
+use emp_state::{config::LearnedProtocol, observed_at_now};
 
 pub(crate) fn execute<'a>(
     downstream: &mut BodyOutput<'a>,
@@ -241,9 +242,10 @@ pub(crate) fn execute<'a>(
                 }
             }
         };
+        let learned = LearnedProtocol::from_route(&route, candidate.protocol, observed_at_now());
         usage.observe(&compacted);
         usage.finish();
-        persist_protocol_observation(state, &candidate);
+        save_learned_protocol(state, learned);
         if body.get("stream").is_some_and(json_truthy) {
             let downstream = ObservedSse::new(downstream, observation, &incoming);
             return serve_generated_response(downstream, compacted, &ids)
@@ -327,6 +329,8 @@ pub(crate) fn execute<'a>(
                 return crate::api::claude_response::http_response_for_route(&error, &route).into();
             }
         };
+        let learned =
+            LearnedProtocol::from_route(&route, completion.route.protocol, observed_at_now());
         let route = &completion.route;
         let mut response_value = completion.response.body;
         if stream_requested {
@@ -340,7 +344,7 @@ pub(crate) fn execute<'a>(
         if response_value["status"] == "completed" {
             crate::services::context::record(state, route, &body, true);
         }
-        crate::services::providers::persist_protocol_observation(state, route);
+        save_learned_protocol(state, learned);
         if stream_requested {
             let _ = live.finish(response_value);
             return InferenceOutcome::Streamed;

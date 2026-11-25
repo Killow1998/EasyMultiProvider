@@ -16,8 +16,7 @@ pub use config::{
     normalize_context_calibrations, normalize_model, normalize_model_capability_sources,
     normalize_pricing_aliases, normalize_provider, normalize_provider_base_url,
     normalize_provider_id, normalize_subscription_search, observed_at_now, provider_api_key,
-    public_configuration_with_file_status, remember_resolved_protocol,
-    remember_resolved_protocol_at, save_configuration, save_configuration_in_transaction,
+    public_configuration_with_file_status, save_configuration, save_configuration_in_transaction,
 };
 pub use migration::{
     DecryptedMigration, ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES,

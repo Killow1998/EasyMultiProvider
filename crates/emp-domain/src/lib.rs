@@ -10,9 +10,9 @@ mod validation;
 pub use validation::{OpaqueJson, OpaqueJsonError, OpaqueJsonErrorReason, ValidationError};
 
 pub use route::{
-    RouteResolutionError, classify_dialect, deployment_identity, endpoint_fingerprint,
-    normalize_endpoint, resolve_route, resolve_route_without_catalog, resolved_route_from_parts,
-    resolved_upstream_model,
+    ProtocolObservationKey, RouteResolutionError, classify_dialect, deployment_identity,
+    endpoint_fingerprint, normalize_endpoint, resolve_route, resolve_route_without_catalog,
+    resolved_route_from_parts, resolved_upstream_model,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

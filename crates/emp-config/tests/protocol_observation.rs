@@ -1,4 +1,9 @@
-use emp_config::{normalize_configuration, remember_resolved_protocol_at};
+use emp_config::{
+    config::{LearnedProtocol, ProtocolSave, remember_learned_protocol},
+    normalize_configuration,
+    official_registry::bundled_snapshot,
+};
+use emp_domain::{Protocol, RouteSource, resolve_route_without_catalog, resolved_route_from_parts};
 use serde_json::{Value, json};
 
 const OBSERVED_AT: &str = "2026-09-22T06:00:00.123456+00:00";
@@ -32,31 +37,49 @@ fn cases() -> Value {
     ])
 }
 
-fn rust_outcomes(cases: &Value) -> Value {
-    Value::Array(
-        cases
-            .as_array()
-            .expect("cases array")
-            .iter()
-            .map(|case| {
-                remember_resolved_protocol_at(
-                    &case["config"],
-                    case["provider_id"].as_str().expect("provider id"),
-                    case["model"].as_str().expect("model id"),
-                    case["protocol"].as_str().expect("protocol"),
-                    OBSERVED_AT,
+fn outcomes(cases: &Value) -> Vec<Value> {
+    cases
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| {
+            let config = &case["config"];
+            let model = case["model"].as_str().expect("model id");
+            let Some(provider) = config["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|provider| provider["id"] == case["provider_id"])
+            else {
+                return Value::Null;
+            };
+            let route = resolve_route_without_catalog(config, model).unwrap_or_else(|_| {
+                resolved_route_from_parts(
+                    model,
+                    provider.as_object().unwrap().clone(),
+                    json!({"id":model}).as_object().unwrap().clone(),
+                    RouteSource::ForwardProvider,
                 )
-                .expect("remember protocol")
-                .unwrap_or(Value::Null)
-            })
-            .collect(),
-    )
+                .unwrap()
+            });
+            let protocol: Protocol = serde_json::from_value(case["protocol"].clone()).unwrap();
+            let Some(candidate) =
+                LearnedProtocol::from_route(&route, protocol, OBSERVED_AT.to_owned())
+            else {
+                return Value::Null;
+            };
+            match remember_learned_protocol(config, &candidate, bundled_snapshot).unwrap() {
+                ProtocolSave::Updated(updated) => updated,
+                _ => Value::Null,
+            }
+        })
+        .collect()
 }
 
 #[test]
 fn successful_protocol_observations_update_provider_and_model_state() {
     let cases = cases();
-    let rust = rust_outcomes(&cases);
+    let rust = outcomes(&cases);
     let first = &rust[0];
     assert_eq!(first["providers"][0]["resolved_protocol"], "responses");
     assert_eq!(first["models"][0]["resolved_protocol"], "responses");
@@ -71,4 +94,32 @@ fn successful_protocol_observations_update_provider_and_model_state() {
         "unlisted-model"
     );
     assert!(rust[4].is_null());
+}
+
+#[test]
+fn an_older_candidate_cannot_overwrite_a_newer_observation() {
+    let cases = cases();
+    let config = &cases[0]["config"];
+    let route = resolve_route_without_catalog(config, "demo/model").unwrap();
+    let earlier = LearnedProtocol::from_route(
+        &route,
+        Protocol::ChatCompletions,
+        "2026-09-22T06:00:00+00:00".to_owned(),
+    )
+    .unwrap();
+    let later =
+        LearnedProtocol::from_route(&route, Protocol::Responses, OBSERVED_AT.to_owned()).unwrap();
+    let ProtocolSave::Updated(saved) =
+        remember_learned_protocol(config, &later, bundled_snapshot).unwrap()
+    else {
+        panic!("the newer observation must save");
+    };
+    assert!(matches!(
+        remember_learned_protocol(&saved, &earlier, bundled_snapshot).unwrap(),
+        ProtocolSave::Superseded
+    ));
+    for entry in [&saved["providers"][0], &saved["models"][0]] {
+        assert_eq!(entry["resolved_protocol"], "responses");
+        assert_eq!(entry["protocol_observation"]["observed_at"], OBSERVED_AT);
+    }
 }
