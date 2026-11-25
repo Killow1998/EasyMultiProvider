@@ -31,6 +31,7 @@ struct PendingRequest {
     models: emp_router::model_observation::ModelObservation,
     source_clock: bool,
     buffered: bool,
+    disconnected_while_opening: bool,
 }
 
 struct RequestOutcome {
@@ -38,6 +39,7 @@ struct RequestOutcome {
     identity: Option<ActivityIdentity>,
     started: Instant,
     aggregate_owner: Option<String>,
+    disconnected_while_opening: bool,
 }
 
 impl<'a> RequestGuard<'a> {
@@ -202,6 +204,7 @@ impl<'a> RequestGuard<'a> {
             models: Default::default(),
             source_clock: false,
             buffered: crate::services::claude_cli::selected(route),
+            disconnected_while_opening: false,
         };
         pending.publish_active(services.activity);
         Self {
@@ -333,6 +336,13 @@ impl<'a> RequestGuard<'a> {
             pending.event["error_class"] = json!("client_disconnect");
             pending.event["success"] = json!(false);
         }
+    }
+
+    pub(crate) fn disconnected_while_opening(&mut self) {
+        if let Some(pending) = &mut self.pending {
+            pending.disconnected_while_opening = true;
+        }
+        self.disconnected();
     }
 
     pub(crate) fn drained(&mut self) {
@@ -513,6 +523,7 @@ impl PendingRequest {
             identity: self.identity,
             started: self.started,
             aggregate_owner: self.aggregate_owner,
+            disconnected_while_opening: self.disconnected_while_opening,
         }
     }
 

@@ -5,6 +5,11 @@ use crate::services::request_preparation::{RequestOperation, prepare_request};
 
 fn settlement_fixture() -> (TempDir, ServerHandle, rusqlite::Connection) {
     let (root, server) = configured_server("http://127.0.0.1:1/v1");
+    let db = settlement_db(root.path(), &server);
+    (root, server, db)
+}
+
+pub(super) fn settlement_db(root: &Path, server: &ServerHandle) -> rusqlite::Connection {
     server
         .state
         .backend
@@ -12,8 +17,12 @@ fn settlement_fixture() -> (TempDir, ServerHandle, rusqlite::Connection) {
         .ledger
         .query(0.0, 1.0, "all", 1.0, None)
         .unwrap();
-    let db = rusqlite::Connection::open(root.path().join("state/usage.sqlite3")).unwrap();
-    (root, server, db)
+    rusqlite::Connection::open(root.join("state/usage.sqlite3")).unwrap()
+}
+
+pub(super) fn lock_settlement_writes(db: &mut rusqlite::Connection) -> rusqlite::Transaction<'_> {
+    db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap()
 }
 
 fn settlement_outcome<'a>(
@@ -102,9 +111,7 @@ fn route_diagnostics_are_visible_before_a_locked_receipt_can_commit() {
             });
         }
         thread::scope(|scope| {
-            let lock = db
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .unwrap();
+            let lock = lock_settlement_writes(&mut db);
             let worker = scope.spawn(move || outcome.finish());
             wait_for(&Deadline::after(response_timeout()), || {
                 server.state.backend.diagnostics.snapshot()["records"]

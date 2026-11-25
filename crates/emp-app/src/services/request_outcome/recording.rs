@@ -23,7 +23,11 @@ pub(super) struct CompletionServices<'a> {
 
 pub(super) fn finish_request(services: &CompletionServices<'_>, outcome: RequestOutcome) {
     let event = &outcome.event;
-    if event["route"] == "prewarm" {
+    let prewarm = event["route"] == "prewarm";
+    if !prewarm {
+        record_route_feedback(services, &outcome);
+    }
+    if prewarm {
         services.diagnostics.journal.event(
             "info",
             "model_prewarm_finished",
@@ -31,11 +35,26 @@ pub(super) fn finish_request(services: &CompletionServices<'_>, outcome: Request
                     "duration_ms":event["duration_ms"],"success":event["success"],
                     "error_class":event["error_class"],"generate":false}),
         );
-        return;
+    } else {
+        record_billing(services, &outcome);
     }
 
-    record_route_feedback(services, &outcome);
+    if !prewarm {
+        services
+            .activity
+            .finish_request(event, outcome.identity.as_ref());
+        notify_projected_call_finished();
+    } else if outcome.disconnected_while_opening {
+        services.activity.finish_request(
+            &json!({"request_id":event["request_id"],"error_class":event["error_class"],
+                    "error_origin":event["error_origin"],"success":event["success"]}),
+            outcome.identity.as_ref(),
+        );
+    }
+}
 
+fn record_billing(services: &CompletionServices<'_>, outcome: &RequestOutcome) {
+    let event = &outcome.event;
     let now = crate::util::system_now();
     let started = now - outcome.started.elapsed().as_secs_f64();
     let finished = started + event["duration_ms"].as_u64().unwrap_or(0) as f64 / 1000.0;
@@ -55,11 +74,6 @@ pub(super) fn finish_request(services: &CompletionServices<'_>, outcome: Request
             &json!({"request_id":event["request_id"]}),
         ),
     }
-
-    services
-        .activity
-        .finish_request(event, outcome.identity.as_ref());
-    notify_projected_call_finished();
 }
 
 fn record_route_feedback(services: &CompletionServices<'_>, outcome: &RequestOutcome) {

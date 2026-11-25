@@ -114,14 +114,10 @@ impl Drop for RefreshUpstream {
     }
 }
 
-#[cfg_attr(
-    windows,
-    allow(
-        dead_code,
-        reason = "The account server fixture is shared with tests gated to Unix"
-    )
-)]
-fn account_server(base_url: &str, codex_binary: &str) -> (TempDir, ServerHandle, PathBuf) {
+pub(super) fn account_server(
+    base_url: &str,
+    codex_binary: &str,
+) -> (TempDir, ServerHandle, PathBuf) {
     let directory = emp_test_support::fixture_dir().expect("account temp dir");
     let root = crate::tests::credential_root(&directory);
     let config_path = root.join("config.json");

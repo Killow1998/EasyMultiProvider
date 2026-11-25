@@ -140,7 +140,7 @@ pub(crate) async fn open_stream_result_with_monitor<'a>(
                 Some(monitor) if monitor.is_interrupted() => usage.interrupted(),
                 _ => {
                     crate::services::observation::request_cancelled(state, incoming);
-                    usage.disconnected();
+                    usage.disconnected_while_opening();
                 }
             }
             return Ok(CancellableNativeStreamOpen::Disconnected);

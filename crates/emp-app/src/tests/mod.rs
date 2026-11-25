@@ -387,7 +387,7 @@ fn read_sse_frames<R: BufRead>(
     })
 }
 
-fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
+fn subscribe_quota_events(server: &ServerHandle, session: &str) -> SseReader {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     let mut stream = deadline.io(deadline.connect(server.local_addr()).expect("connect SSE"));
     stream
@@ -415,6 +415,11 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
         read_sse_frame(&mut reader),
         "event: integration-updated\ndata: {}\n"
     );
+    reader
+}
+
+fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
+    let mut reader = subscribe_quota_events(server, session);
     let activity_frame = read_sse_frame(&mut reader);
     assert_eq!(sse::event(&activity_frame), Some("activity-updated"));
     let activity_body = sse::data(&activity_frame).expect("activity event data");

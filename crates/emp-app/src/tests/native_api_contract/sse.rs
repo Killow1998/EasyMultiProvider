@@ -1,6 +1,11 @@
 use super::support::*;
 use super::*;
+use crate::tests::activity_contract::next_activity_snapshot;
+use crate::tests::request_observation_contract::{lock_settlement_writes, settlement_db};
 use emp_test_support::sse::data;
+
+const SSE_UPSTREAM_HEAD: &[u8] =
+    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
 
 struct NativeErrorSseUpstream {
     address: SocketAddr,
@@ -25,7 +30,7 @@ impl NativeErrorSseUpstream {
                     return Ok(received);
                 }
                 let _ = receive_native_request(&mut stream);
-                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")?;
+                stream.write_all(SSE_UPSTREAM_HEAD)?;
                 for chunk in wire.chunks(13) {
                     stream.write_all(chunk)?;
                     stream.flush()?;
@@ -89,43 +94,78 @@ fn native_sse_activity_terminal_has_a_committed_call_and_usage() {
         "id":"resp_activity_settlement","status":"completed","model":"upstream","output":[],
         "usage":{"input_tokens":17,"output_tokens":3}
     }});
-    let upstream = NativeErrorSseUpstream::start(format!("data: {terminal}\n\n").into_bytes());
-    let (directory, server) = native_alias_server(&upstream.base_url());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (directory, server, _) =
+        super::http::account_server(&format!("http://{address}/v1"), "missing-test-codex");
+    let root = canonical_root(&directory);
+    let mut db = settlement_db(&root, &server);
     let session = session_header(&server);
-    let mut events = open_quota_events(&server, &session);
-    let thread_id = "activity-settlement";
-    let account = "activity-account";
+    let gateway = format!("Authorization: Bearer {}", server.state.backend.gateway_key);
     let socket = open_post_stream(
         &server,
         "/v1/responses",
-        br#"{"model":"native/alias","input":"hello","stream":true}"#,
-        &[
-            &session,
-            "Authorization: Bearer caller",
-            &format!("chatgpt-account-id: {account}"),
-            &format!("thread-id: {thread_id}"),
-        ],
+        br#"{"model":"demo/upstream","input":"hello","stream":true}"#,
+        &[&gateway, "chatgpt-account-id: caller-owner"],
     );
-    let matches_request = |row: &Value| row["thread_id"] == thread_id && row["state"] != "active";
-    let snapshot = super::super::activity_contract::next_activity_snapshot(&mut events, |value| {
+    let deadline = Deadline::after(response_timeout());
+    let mut upstream = accept_before(&listener, &deadline);
+    let observed = receive_native_request(&mut upstream);
+    let request_id = &observed.headers["x-emp-request-id"];
+    assert_eq!(observed.headers["chatgpt-account-id"], "selected-owner");
+
+    db.busy_timeout(Duration::ZERO).unwrap();
+    let write_lock = lock_settlement_writes(&mut db);
+    let reader = rusqlite::Connection::open(root.join("state/usage.sqlite3")).unwrap();
+    let commit_lock = reader.unchecked_transaction().unwrap();
+    let receipt_exists = |connection: &rusqlite::Connection| {
+        connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM call_records WHERE request_id=?)",
+            [request_id],
+            |row| row.get::<_, bool>(0),
+        )
+    };
+    assert!(!receipt_exists(&commit_lock).unwrap());
+    let mut upstream = deadline.io(upstream);
+    upstream.write_all(SSE_UPSTREAM_HEAD).unwrap();
+    write!(upstream, "data: {terminal}\n\n").unwrap();
+    write_lock.rollback().unwrap();
+
+    wait_for(&deadline, || {
+        receipt_exists(&db).is_err_and(|error| {
+            error.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy)
+        })
+    });
+    let mut events = subscribe_quota_events(&server, &session);
+    let matching_request = |row: &&Value| row["request_id"] == request_id.as_str();
+    let blocked = next_activity_snapshot(&mut events, |_| true);
+    let activity = blocked["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(matching_request)
+        .unwrap();
+    assert_eq!(
+        activity["state"], "active",
+        "activity ended while the SQLite commit was blocked"
+    );
+    commit_lock.commit().unwrap();
+
+    let snapshot = next_activity_snapshot(&mut events, |value| {
         value["requests"]
             .as_array()
             .unwrap()
             .iter()
-            .any(matches_request)
+            .find(matching_request)
+            .is_some_and(|row| row["state"] != "active")
     });
     let activity = snapshot["requests"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| matches_request(row))
+        .find(matching_request)
         .unwrap();
-    let request_id = activity["request_id"].as_str().unwrap();
-    let db = rusqlite::Connection::open_with_flags(
-        canonical_root(&directory).join("state/usage.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
     let (state, facts, usage_id, owner, input, output) = db
         .query_row(
             "SELECT c.state, c.facts, u.id, u.owner, u.input_tokens, u.output_tokens
@@ -147,26 +187,29 @@ fn native_sse_activity_terminal_has_a_committed_call_and_usage() {
     let call: Value = serde_json::from_str(&facts).unwrap();
     assert_eq!(activity["state"], "completed");
     assert_eq!(activity["state"], state);
-    assert_eq!(activity["provider_id"], call["provider_id"]);
-    let expected_owner = emp_state::usage::account_owner(&BTreeMap::from([(
-        "chatgpt-account-id".to_owned(),
-        account.to_owned(),
-    )]));
+    assert_eq!(activity["account_id"], call["account_id"]);
+    let expected_owner = emp_state::usage::account_owner(&observed.headers);
     let expected_usage_id = emp_state::usage::identity_hash(&json!([
-        "native",
+        "subscription",
         expected_owner,
         "upstream",
         "responses",
         terminal["response"]["id"]
     ]));
-    assert_eq!(owner, expected_owner);
+    assert_eq!(
+        owner, expected_owner,
+        "usage owner must match the upstream credential"
+    );
     assert_eq!((input, output), (17, 3));
     assert_eq!(call["input_tokens"], input);
     assert_eq!(call["output_tokens"], output);
     assert_eq!(activity["input_tokens"], input);
     assert_eq!(activity["output_tokens"], output);
     assert_eq!(call["usage_event_id"], usage_id);
-    assert_eq!(usage_id, expected_usage_id);
+    assert_eq!(
+        usage_id, expected_usage_id,
+        "usage ID must include the upstream owner"
+    );
     assert_eq!(call["usage_response_id"], terminal["response"]["id"]);
 
     let deadline = Deadline::after(response_timeout());
@@ -178,8 +221,122 @@ fn native_sse_activity_terminal_has_a_committed_call_and_usage() {
         .find(|event| event["type"] == "response.completed")
         .expect("downstream completed event");
     assert_eq!(completed["response"]["id"], terminal["response"]["id"]);
-    upstream.finish();
     server.shutdown().unwrap();
+}
+
+#[test]
+fn native_sse_prewarm_preserves_activity_and_billing_boundaries() {
+    enum End {
+        Success,
+        CancelAfterOpening,
+        UpstreamFailure,
+        DisconnectBeforeHeaders,
+    }
+
+    for end in [
+        End::Success,
+        End::CancelAfterOpening,
+        End::UpstreamFailure,
+        End::DisconnectBeforeHeaders,
+    ] {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (directory, server) = native_alias_server(&format!("http://{address}/v1"));
+        let db = settlement_db(&canonical_root(&directory), &server);
+        let session = session_header(&server);
+        let mut events = open_quota_events(&server, &session);
+        let deadline = Deadline::after(response_timeout());
+        let downstream = open_post_stream(
+            &server,
+            "/v1/responses",
+            br#"{"model":"native/alias","input":"hello","generate":false,"stream":true}"#,
+            &[&session, "Authorization: Bearer caller"],
+        );
+        let mut upstream = accept_before(&listener, &deadline);
+        let observed = receive_native_request(&mut upstream);
+        assert_eq!(observed.body["generate"], false);
+        let request_id = &observed.headers["x-emp-request-id"];
+        let mut wire = deadline.io(&upstream);
+
+        match end {
+            End::Success => {
+                wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
+                let terminal = json!({"type":"response.completed","response":{
+                    "id":"resp_prewarm","status":"completed","output":[],
+                    "usage":{"input_tokens":17,"output_tokens":3}
+                }});
+                write!(wire, "data: {terminal}\n\n").unwrap();
+                let (_, frames) =
+                    read_native_sse(BufReader::new(deadline.io(downstream)), &deadline);
+                assert!(
+                    frames
+                        .iter()
+                        .any(|frame| frame.contains("response.completed"))
+                );
+            }
+            End::UpstreamFailure => {
+                wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
+                let terminal = json!({"type":"response.failed","response":{
+                    "status":"failed","error":{"status":400,"code":"invalid_request"}
+                }});
+                write!(wire, "data: {terminal}\n\n").unwrap();
+                let response = complete_response_from(&mut deadline.io(downstream), &deadline);
+                assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+            }
+            End::CancelAfterOpening => {
+                wire.write_all(SSE_UPSTREAM_HEAD).unwrap();
+                wire.write_all(
+                    b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+                )
+                .unwrap();
+                let (_, mut stream) =
+                    read_sse_head(BufReader::new(deadline.io(downstream)), &deadline);
+                assert!(read_sse_frame(&mut stream).contains("response.output_text.delta"));
+                drop(stream);
+                assert!(upstream_closed_before(&upstream, &deadline));
+            }
+            End::DisconnectBeforeHeaders => {
+                drop(downstream);
+                assert!(upstream_closed_before(&upstream, &deadline));
+            }
+        }
+
+        set_sse_deadline(&mut events, &deadline);
+        let finished = next_activity_snapshot(&mut events, |snapshot| {
+            snapshot["routes"][0]["in_flight"] == 0
+                && snapshot["routes"][0]["last_finished"].is_number()
+        });
+        let activity = finished["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["request_id"] == request_id.as_str());
+        if matches!(end, End::DisconnectBeforeHeaders) {
+            let activity = activity
+                .expect("prewarm disconnected before headers must publish its cancellation");
+            assert_eq!(activity["state"], "cancelled");
+            assert_eq!(activity["error_class"], "client_disconnect");
+            assert_eq!(activity["error_origin"], "client");
+            assert_eq!(activity["duration_ms"], Value::Null);
+        } else {
+            assert!(
+                activity.is_none(),
+                "unexpected prewarm activity: {activity:?}"
+            );
+        }
+        let counts = db.query_row(
+            "SELECT (SELECT COUNT(*) FROM call_records WHERE request_id=?), (SELECT COUNT(*) FROM usage_events)",
+            [request_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        ).unwrap();
+        assert_eq!(
+            counts,
+            (0, 0),
+            "prewarm must not create a call receipt or usage row"
+        );
+        server.shutdown().unwrap();
+    }
 }
 
 #[test]
