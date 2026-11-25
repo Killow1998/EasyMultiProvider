@@ -18,5 +18,11 @@ socket2 = { version = "0.6.5", features = ["all"], optional = true }
 tempfile = "3.27"
 tokio = { version = "1.53.1", features = ["rt", "time"], optional = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["fs", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Pipes"] }
+
 [lints]
 workspace = true

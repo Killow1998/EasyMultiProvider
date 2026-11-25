@@ -4,7 +4,7 @@ use crate::{
     tests::wait_for,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use std::{
     fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicBool,
 };
@@ -36,16 +36,18 @@ fn with_temporary_home(test_name: &str, test: impl FnOnce(&Path)) {
     }
     let home = emp_test_support::fixture_dir().unwrap();
     let (_, module) = module_path!().split_once("::").unwrap();
-    let result = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", &format!("{module}::{test_name}")])
-        .env(CHILD_HOME, home.path())
-        .env("HOME", home.path())
-        .env_remove("XDG_DATA_HOME")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("NVM_DIR")
-        .env("PATH", "/usr/bin:/bin")
-        .output()
-        .unwrap();
+    let result = OwnedChild::output(
+        Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("{module}::{test_name}")])
+            .env(CHILD_HOME, home.path())
+            .env("HOME", home.path())
+            .env_remove("XDG_DATA_HOME")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("NVM_DIR")
+            .env("PATH", "/usr/bin:/bin"),
+        Deadline::after(test_timeout(Duration::from_secs(10))),
+    )
+    .unwrap();
     let stdout = String::from_utf8_lossy(&result.stdout);
     assert!(
         result.status.success() && stdout.contains("1 passed"),

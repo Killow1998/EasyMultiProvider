@@ -1,6 +1,6 @@
 use super::projection::safe_reset_credits;
 use super::*;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
@@ -309,15 +309,17 @@ for line in sys.stdin:
     for name in [b"del-\x7f".to_vec(), b"non-utf8-\xff".to_vec()] {
         let temp_root = root.path().join(std::ffi::OsString::from_vec(name));
         fs::create_dir(&temp_root).unwrap();
-        let result = Command::new(env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "quota::tests::quota_helper_accepts_temp_roots_that_cannot_be_toml_literals",
-            ])
-            .env("EMP_QUOTA_PATH_FIXTURE", &script)
-            .env("TMPDIR", &temp_root)
-            .output()
-            .unwrap();
+        let result = OwnedChild::output(
+            Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "quota::tests::quota_helper_accepts_temp_roots_that_cannot_be_toml_literals",
+                ])
+                .env("EMP_QUOTA_PATH_FIXTURE", &script)
+                .env("TMPDIR", &temp_root),
+            Deadline::after(test_timeout(Duration::from_secs(10))),
+        )
+        .unwrap();
         assert!(
             result.status.success(),
             "{}",

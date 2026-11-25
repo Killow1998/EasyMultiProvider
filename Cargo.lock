@@ -1120,10 +1120,12 @@ dependencies = [
  "emp-domain",
  "emp-transport",
  "polling",
+ "rustix",
  "serde_json",
  "socket2",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

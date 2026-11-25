@@ -1,5 +1,5 @@
 use super::{Emp, Workspace, http::read_message, io_timeout};
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -7,7 +7,7 @@ use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -57,9 +57,7 @@ impl BuiltModule {
                 binary.display()
             )
         });
-        let output = Command::new(binary)
-            .stdin(Stdio::null())
-            .output()
+        let output = OwnedChild::output(&mut Command::new(binary), Deadline::after(io_timeout()))
             .unwrap_or_else(|error| panic!("{}: {error}", binary.display()));
         assert!(
             output.status.success(),
@@ -306,11 +304,12 @@ impl Deref for ModuleEmp {
     }
 }
 
-fn processes() -> Vec<(i32, String)> {
-    let output = Command::new("ps")
-        .args(["-A", "-ww", "-o", "pid=", "-o", "args="])
-        .output()
-        .expect("ps is required to check real module processes");
+fn processes(deadline: Deadline) -> Vec<(i32, String)> {
+    let output = OwnedChild::output(
+        Command::new("ps").args(["-A", "-ww", "-o", "pid=", "-o", "args="]),
+        deadline,
+    )
+    .expect("ps is required to check real module processes");
     assert!(output.status.success(), "ps failed: {output:?}");
     String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -360,7 +359,7 @@ impl ModuleEmp {
             module.digest,
             std::env::consts::EXE_SUFFIX
         ));
-        let snapshot = processes();
+        let snapshot = processes(Deadline::after(io_timeout()));
         assert!(
             snapshot.iter().any(|(pid, args)| {
                 *pid == self.pid() && args.starts_with(env!("CARGO_BIN_EXE_EMP"))
@@ -390,27 +389,23 @@ impl ModuleEmp {
     }
 
     pub fn assert_gone(&self, pid: i32) {
-        eventually(
-            &Deadline::after(test_timeout(Duration::from_secs(5))),
-            "module PID was not reaped",
-            || (!processes().iter().any(|(found, _)| *found == pid)).then_some(()),
-        );
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        eventually(&deadline, "module PID was not reaped", || {
+            (!processes(deadline).iter().any(|(found, _)| *found == pid)).then_some(())
+        });
     }
 
     pub fn stop(mut self) {
         self.emp.take().expect("running EMP").stop();
         let directory = self.root.to_string_lossy();
-        eventually(
-            &Deadline::after(test_timeout(Duration::from_secs(5))),
-            "orphan module processes",
-            || {
-                let observed = self.observed.lock().expect("observed workers");
-                let remaining = processes().into_iter().any(|(pid, args)| {
-                    observed.contains(&pid) || args.starts_with(directory.as_ref())
-                });
-                (!remaining).then_some(())
-            },
-        );
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        eventually(&deadline, "orphan module processes", || {
+            let observed = self.observed.lock().expect("observed workers");
+            let remaining = processes(deadline)
+                .into_iter()
+                .any(|(pid, args)| observed.contains(&pid) || args.starts_with(directory.as_ref()));
+            (!remaining).then_some(())
+        });
     }
 }
 
@@ -438,7 +433,7 @@ impl Drop for ModuleEmp {
             emp.stop();
         }
         let directory = self.root.to_string_lossy();
-        for (pid, args) in processes() {
+        for (pid, args) in processes(Deadline::after(io_timeout())) {
             if args.starts_with(directory.as_ref()) {
                 let _ = Command::new("kill")
                     .args(["-KILL", &pid.to_string()])

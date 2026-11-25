@@ -1,7 +1,7 @@
 //! Online catalog discovery using a real Codex with synthetic subscription credentials.
 use super::installed_codex::Codex;
 use super::*;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
 
 #[test]
 #[ignore = "requires an explicitly selected Codex and isolated loopback access"]
@@ -65,12 +65,14 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool, s
         "models":[{"id":"demo/model","provider":"demo","upstream_id":"upstream","context_window":100000,"enabled":true}]
     })).unwrap()).unwrap();
     let binary = std::env::var("EMP_TEST_CODEX_CLI").expect("explicit installed engine");
-    let version = std::process::Command::new(&binary)
-        .arg("--version")
-        .env("CODEX_HOME", &home)
-        .env("HOME", &home)
-        .output()
-        .expect("selected Codex version");
+    let version = OwnedChild::output(
+        std::process::Command::new(&binary)
+            .arg("--version")
+            .env("CODEX_HOME", &home)
+            .env("HOME", &home),
+        Deadline::after(test_timeout(Duration::from_secs(15))),
+    )
+    .expect("selected Codex version");
     assert!(version.status.success());
     let version = String::from_utf8(version.stdout).unwrap();
     let version = version.strip_prefix("codex-cli ").unwrap().trim();

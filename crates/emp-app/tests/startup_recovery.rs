@@ -4,16 +4,16 @@
     reason = "This target uses only recovery-related shared fixtures"
 )]
 mod support;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 use support::{Workspace, http};
 
 struct Recovery {
-    child: Child,
+    child: OwnedChild,
     lines: Receiver<String>,
     port: u16,
     token: String,
@@ -28,7 +28,9 @@ impl Recovery {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let stdout = child.stdout.take().unwrap();
+        let stdout = child.stdout.take();
+        let child = OwnedChild::new(child);
+        let stdout = stdout.unwrap();
         let (tx, lines) = channel();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -89,22 +91,11 @@ impl Recovery {
     }
 
     fn wait_exit(&mut self) {
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
-        loop {
-            if let Some(status) = self.child.try_wait().unwrap() {
-                deadline
-                    .accept(status, "EMP recovery process exit")
-                    .unwrap();
-                assert!(status.success());
-                return;
-            }
-            assert!(!deadline.is_expired(), "EMP did not exit");
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
-            )]
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        let output = self
+            .child
+            .wait_until(Deadline::after(test_timeout(Duration::from_secs(10))))
+            .unwrap_or_else(|error| panic!("EMP recovery process: {error}"));
+        assert!(output.status.success(), "{}", output.status);
     }
 
     fn normal_quit(&mut self) {
@@ -137,15 +128,6 @@ impl Recovery {
             200
         );
         self.wait_exit();
-    }
-}
-
-impl Drop for Recovery {
-    fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
     }
 }
 
@@ -307,12 +289,14 @@ fn invalid_configuration_can_be_reset_and_external_key_override_stays_a_develope
     );
     recovery.normal_quit();
     let before = std::fs::read(&workspace.config_path).unwrap();
-    let output = workspace
-        .command()
-        .args(workspace.serve_arguments())
-        .env("EASY_MULTI_PROVIDER_MASTER_KEY", "invalid-external-fixture")
-        .output()
-        .unwrap();
+    let output = OwnedChild::output(
+        workspace
+            .command()
+            .args(workspace.serve_arguments())
+            .env("EASY_MULTI_PROVIDER_MASTER_KEY", "invalid-external-fixture"),
+        Deadline::after(test_timeout(Duration::from_secs(10))),
+    )
+    .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("external master key override"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("Recovery page:"));

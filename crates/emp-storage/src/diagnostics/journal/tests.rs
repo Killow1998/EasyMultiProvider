@@ -22,6 +22,7 @@ fn channel(directory: PathBuf) -> (Journal, Receiver<Command>) {
 #[cfg(unix)]
 #[test]
 fn writer_uses_resolved_service_lock_directory() {
+    use emp_test_support::OwnedChild;
     use std::{env, fs, process::Command};
 
     const CHILD: &str = "EMP_JOURNAL_TEST_RESOLVED_PATHS";
@@ -31,16 +32,18 @@ fn writer_uses_resolved_service_lock_directory() {
         let home = root.join("home");
         fs::create_dir(&home).unwrap();
         fs::create_dir(root.join("writer")).unwrap();
-        let output = Command::new(env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "diagnostics::journal::tests::writer_uses_resolved_service_lock_directory",
-            ])
-            .current_dir(&root)
-            .env("HOME", home)
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
+        let output = OwnedChild::output(
+            Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "diagnostics::journal::tests::writer_uses_resolved_service_lock_directory",
+                ])
+                .current_dir(&root)
+                .env("HOME", home)
+                .env(CHILD, "1"),
+            Deadline::after(test_timeout(Duration::from_secs(10))),
+        )
+        .unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             output.status.success() && stdout.contains("1 passed"),

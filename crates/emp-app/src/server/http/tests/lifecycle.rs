@@ -5,17 +5,19 @@ use super::*;
 fn healthz_uses_the_last_available_descriptor() {
     const CHILD: &str = "EMP_TEST_HEALTHZ_LAST_DESCRIPTOR";
     if std::env::var_os(CHILD).is_none() {
-        let child = std::process::Command::new("sh")
-            .args(["-c", "ulimit -n 128 && exec \"$@\"", "emp-fd-limit"])
-            .arg(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "server::http::tests::lifecycle::healthz_uses_the_last_available_descriptor",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
+        let child = emp_test_support::OwnedChild::output(
+            std::process::Command::new("sh")
+                .args(["-c", "ulimit -n 128 && exec \"$@\"", "emp-fd-limit"])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "server::http::tests::lifecycle::healthz_uses_the_last_available_descriptor",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1"),
+            Deadline::after(test_timeout(Duration::from_secs(10))),
+        )
+        .unwrap();
         assert!(
             child.status.success(),
             "{}\n{}",

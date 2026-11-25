@@ -6,7 +6,8 @@
 )]
 mod support;
 
-use std::os::windows::process::CommandExt;
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
+use std::{os::windows::process::CommandExt, time::Duration};
 use support::Workspace;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
@@ -24,12 +25,11 @@ fn cli_output_and_errors_survive_with_or_without_a_console() {
                 "unknown command: unknown-command",
             ),
         ] {
-            let output = workspace
-                .command()
-                .arg(argument)
-                .creation_flags(flags)
-                .output()
-                .expect("run CLI command");
+            let output = OwnedChild::output(
+                workspace.command().arg(argument).creation_flags(flags),
+                Deadline::after(test_timeout(Duration::from_secs(5))),
+            )
+            .expect("run CLI command");
             assert_eq!(output.status.code(), Some(code));
             let text = if stream { output.stdout } else { output.stderr };
             assert!(String::from_utf8_lossy(&text).contains(expected));

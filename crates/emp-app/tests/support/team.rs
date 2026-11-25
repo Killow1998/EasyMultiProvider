@@ -1,13 +1,13 @@
 use super::modules::{BuiltModule, ModuleEmp, ModuleRelease, eventually};
 use super::{Emp, Response, SseClient, Upstream, Workspace, http, io_timeout, write_file};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
@@ -33,10 +33,8 @@ fn listener() -> TcpListener {
 }
 
 fn assert_reaped(pid: u32) {
-    poll("Team process reaped", |_| {
-        let output = Command::new("ps")
-            .args(["-A", "-o", "pid="])
-            .output()
+    poll("Team process reaped", |deadline| {
+        let output = OwnedChild::output(Command::new("ps").args(["-A", "-o", "pid="]), *deadline)
             .expect("process inventory");
         assert!(output.status.success(), "{output:?}");
         (!String::from_utf8_lossy(&output.stdout)
@@ -49,7 +47,7 @@ fn assert_reaped(pid: u32) {
 pub struct TeamServer {
     directory: TempDir,
     pub port: u16,
-    child: Option<Child>,
+    child: Option<OwnedChild>,
     stderr: Option<JoinHandle<()>>,
 }
 
@@ -90,9 +88,10 @@ impl TeamServer {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|error| panic!("{}: {error}", binary.display()));
-        let stderr = child.stderr.take().expect("Team stderr");
+        let stderr = child.stderr.take();
+        self.child = Some(OwnedChild::new(child));
+        let stderr = stderr.expect("Team stderr");
         let (ready, received) = mpsc::channel();
-        self.child = Some(child);
         self.stderr = Some(thread::spawn(move || {
             for line in BufReader::new(stderr).lines() {
                 let line = line.expect("Team server output");
@@ -119,8 +118,7 @@ impl TeamServer {
     pub fn stop(&mut self) {
         let mut child = self.child.take().expect("running Team server");
         let pid = child.id();
-        child.kill().expect("stop Team server");
-        child.wait().expect("reap Team server");
+        child.terminate().expect("stop and reap Team server");
         self.stderr
             .take()
             .expect("Team stderr reader")
@@ -132,10 +130,7 @@ impl TeamServer {
 
 impl Drop for TeamServer {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        drop(self.child.take());
         if let Some(reader) = self.stderr.take() {
             let _ = reader.join();
         }

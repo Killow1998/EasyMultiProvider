@@ -1,6 +1,7 @@
 //! Codex and EMP against a local TLS Vertex fixture, with no cloud credentials.
 use super::installed_codex::Codex;
 use super::*;
+use emp_test_support::OwnedChild;
 use emp_transport::{HttpClient, HttpClientConfig, HttpClientPolicy};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
@@ -10,7 +11,7 @@ use rustls::{
     ServerConfig, ServerConnection, StreamOwned,
     pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
 };
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 
 pub(crate) struct VertexFixture {
     host: String,
@@ -654,14 +655,6 @@ fn vertex_adc_routes_gemini_and_claude_with_refreshed_oauth() {
     }
 }
 
-struct Executor(Child);
-impl Drop for Executor {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 #[test]
 #[ignore = "requires installed Codex CLI and isolated loopback access; run explicitly"]
 fn installed_codex_roundtrips_a_vertex_tool_with_real_emp() {
@@ -681,7 +674,7 @@ fn installed_codex_roundtrips_a_vertex_tool_with_real_emp() {
     let log = home.join("executor.log");
     let stdout = std::fs::File::create(&log).unwrap();
     let stderr = stdout.try_clone().unwrap();
-    let executor = Executor(
+    let executor = OwnedChild::new(
         Command::new(std::env::var_os("EMP_TEST_CODEX_CLI").unwrap_or_else(|| "codex".into()))
             .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
             .env("HOME", &home)

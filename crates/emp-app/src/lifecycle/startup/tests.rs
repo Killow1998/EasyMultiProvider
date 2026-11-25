@@ -1,5 +1,5 @@
 use super::*;
-use emp_test_support::{Deadline, Observation, test_timeout};
+use emp_test_support::{Deadline, Observation, OwnedChild, test_timeout};
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::process::Command;
@@ -148,11 +148,13 @@ fn price_worker_start_failure_closes_admission_and_signals_usage_before_the_jour
     const CHILD_PASSED: &str = "EMP_TEST_PRICE_WORKER_START_FAILURE_PASSED";
     const TEST_NAME: &str = "lifecycle::startup::tests::price_worker_start_failure_closes_admission_and_signals_usage_before_the_journal_receipt";
     if std::env::var_os(CHILD_FLAG).is_none() {
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
-            .env(CHILD_FLAG, "1")
-            .output()
-            .unwrap();
+        let output = OwnedChild::output(
+            Command::new(std::env::current_exe().unwrap())
+                .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
+                .env(CHILD_FLAG, "1"),
+            Deadline::after(test_timeout(Duration::from_secs(10))),
+        )
+        .unwrap_or_else(|error| panic!("price worker startup child: {error}"));
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(

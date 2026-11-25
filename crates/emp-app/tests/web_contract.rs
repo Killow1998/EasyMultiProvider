@@ -1,4 +1,4 @@
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -93,7 +93,7 @@ fn session_from(response: &[u8]) -> String {
         .to_string()
 }
 
-fn spawn_emp(config: &std::path::Path) -> (u16, std::process::Child, String) {
+fn spawn_emp(config: &std::path::Path) -> (u16, OwnedChild, String) {
     let root = config.parent().expect("fixture root");
     std::fs::create_dir_all(root.join("home")).expect("private HOME");
     std::fs::create_dir_all(root.join("codex")).expect("private CODEX_HOME");
@@ -134,7 +134,9 @@ fn spawn_emp(config: &std::path::Path) -> (u16, std::process::Child, String) {
         .stderr(Stdio::inherit())
         .spawn()
         .expect("start EMP");
-    let stdout = child.stdout.take().expect("EMP stdout");
+    let stdout = child.stdout.take();
+    let child = OwnedChild::new(child);
+    let stdout = stdout.expect("EMP stdout");
     let mut stdout = BufReader::new(stdout);
     let mut ready_line = String::new();
     stdout
@@ -178,10 +180,11 @@ fn spawn_emp(config: &std::path::Path) -> (u16, std::process::Child, String) {
 
 #[test]
 fn version_output_reports_the_running_release() {
-    let output = Command::new(env!("CARGO_BIN_EXE_EMP"))
-        .arg("--version")
-        .output()
-        .expect("run EMP --version");
+    let output = OwnedChild::output(
+        Command::new(env!("CARGO_BIN_EXE_EMP")).arg("--version"),
+        Deadline::after(test_timeout(std::time::Duration::from_secs(5))),
+    )
+    .expect("run EMP --version");
     assert!(output.status.success());
     let line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
     assert_eq!(
@@ -237,12 +240,10 @@ fn valid_session_persists_across_restart() {
         .map(|(_, token)| token.to_string())
         .expect("bootstrap token");
     let session = session_from(&bootstrap_session(port, &token));
-    child.kill().expect("stop first EMP");
-    child.wait().expect("reap first EMP");
+    child.terminate().expect("stop and reap first EMP");
 
     let (port, mut child, _) = spawn_emp(&config);
     let restored = request(port, "/api/config", &[&format!("X-EMP-Session: {session}")]);
     assert!(restored.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    child.kill().expect("stop restarted EMP");
-    child.wait().expect("reap restarted EMP");
+    child.terminate().expect("stop and reap restarted EMP");
 }

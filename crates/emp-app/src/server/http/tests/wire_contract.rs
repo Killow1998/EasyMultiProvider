@@ -350,7 +350,11 @@ fn fixture_defaults_stay_under_config_root() {
         } else {
             command.env_remove(emp_state::filesystem::MASTER_KEY_ENV);
         }
-        let output = command.output().unwrap();
+        let output = emp_test_support::OwnedChild::output(
+            &mut command,
+            Deadline::after(test_timeout(Duration::from_secs(10))),
+        )
+        .unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             output.status.success() && stdout.contains("1 passed"),

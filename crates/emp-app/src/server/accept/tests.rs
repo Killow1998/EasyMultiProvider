@@ -2,28 +2,17 @@
 #![cfg(unix)]
 
 use crate::lifecycle::ServerHandle;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 const CHILD_FLAG: &str = "EMP_TEST_ACCEPT_EMFILE_CHILD";
 const TEST_NAME: &str = "server::accept::tests::listener_survives_real_descriptor_exhaustion";
-
-struct OwnedChild(Child);
-
-impl Drop for OwnedChild {
-    fn drop(&mut self) {
-        if self.0.try_wait().ok().flatten().is_none() {
-            let _ = self.0.kill();
-        }
-        let _ = self.0.wait();
-    }
-}
 
 fn command(input: &mut impl Write, value: &str) {
     writeln!(input, "{value}").unwrap();
@@ -112,20 +101,21 @@ fn listener_survives_real_descriptor_exhaustion() {
         child_fixture();
         return;
     }
-    let mut child = OwnedChild(
-        Command::new(std::env::current_exe().unwrap())
-            .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
-            .env(CHILD_FLAG, "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap(),
-    );
-    let mut input = child.0.stdin.take().unwrap();
-    let output = child.0.stdout.take().unwrap();
+    let mut process = Command::new(std::env::current_exe().unwrap())
+        .args([TEST_NAME, "--exact", "--nocapture", "--test-threads=1"])
+        .env(CHILD_FLAG, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let input = process.stdin.take();
+    let output = process.stdout.take();
+    let mut child = OwnedChild::new(process);
+    let mut input = input.unwrap();
+    let output = output.unwrap();
     let (send, receive) = mpsc::channel();
-    thread::spawn(move || {
+    let markers = thread::spawn(move || {
         for line in BufReader::new(output).lines() {
             let Ok(line) = line else {
                 break;
@@ -178,18 +168,12 @@ fn listener_survives_real_descriptor_exhaustion() {
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     drop(health);
     command(&mut input, "stop");
-    let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
-    loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            deadline.accept(status, "child exit").unwrap();
-            assert!(status.success(), "child regression failed: {status}");
-            break;
-        }
-        assert!(!deadline.is_expired(), "child did not exit");
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
-        )]
-        thread::sleep(Duration::from_millis(10));
-    }
+    let result = child.wait_until(Deadline::after(test_timeout(Duration::from_secs(10))));
+    markers.join().unwrap();
+    let output = result.unwrap_or_else(|error| panic!("descriptor exhaustion child: {error}"));
+    assert!(
+        output.status.success(),
+        "child regression failed: {}",
+        output.status
+    );
 }

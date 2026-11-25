@@ -294,16 +294,22 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn exited_parent_is_not_alive_while_its_process_handle_is_retained() {
+        use emp_test_support::{Deadline, OwnedChild, test_timeout};
         use std::process::{Command, Stdio};
+        use std::time::Duration;
         for code in [0, 259] {
-            let mut child = Command::new("cmd.exe")
+            let child = Command::new("cmd.exe")
                 .args(["/D", "/C", &format!("exit {code}")])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
                 .unwrap();
-            assert_eq!(child.wait().unwrap().code(), Some(code));
+            let mut child = OwnedChild::new(child);
+            let output = child
+                .wait_until(Deadline::after(test_timeout(Duration::from_secs(5))))
+                .unwrap();
+            assert_eq!(output.status.code(), Some(code));
             // Retain the handle, including when exit code is STILL_ACTIVE (259).
             assert_eq!(super::created(child.id()), None);
             drop(child);

@@ -1,13 +1,18 @@
 use crate::support::{
     self, Emp, NATIVE_TOKEN, PROVIDER_KEY, Upstream, Workspace, emp_command, write_file,
 };
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, test_timeout};
 use serde_json::{Value, json};
+use std::time::Duration;
 
 #[test]
 fn cli_reports_help() {
     for arguments in [&["--help"][..], &["serve", "--help"], &["doctor", "--help"]] {
-        let help = emp_command().args(arguments).output().expect("run EMP");
+        let help = OwnedChild::output(
+            emp_command().args(arguments),
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+        )
+        .expect("run EMP");
         assert!(help.status.success(), "{arguments:?}");
         assert!(
             String::from_utf8_lossy(&help.stdout).contains("usage:"),
@@ -110,11 +115,11 @@ fn second_service_for_the_same_configuration_is_rejected() {
     let emp = workspace.start();
     let before = std::fs::read(&workspace.config_path).expect("config");
 
-    let contender = workspace
-        .command()
-        .args(workspace.serve_arguments())
-        .output()
-        .expect("run contender");
+    let contender = OwnedChild::output(
+        workspace.command().args(workspace.serve_arguments()),
+        Deadline::after(test_timeout(Duration::from_secs(10))),
+    )
+    .expect("run contender");
     assert_eq!(contender.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&contender.stderr);
     assert!(
