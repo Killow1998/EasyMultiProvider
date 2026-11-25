@@ -3,6 +3,7 @@
 use super::socket::{Downstream, DownstreamEvent};
 use super::{ObservedWebSocket, TurnResult};
 use crate::app::ServerState;
+use crate::modules::hooks::HookOperation;
 use crate::services::disconnect::{DisconnectMonitor, DisconnectReason};
 use serde_json::{Value, json};
 use std::sync::{
@@ -66,12 +67,15 @@ type PendingTurn = (Option<String>, Option<oneshot::Sender<DisconnectReason>>);
 pub(super) struct TurnControl {
     stop: oneshot::Sender<()>,
     worker: JoinSet<PendingTurn>,
+    already_pending: bool,
 }
 
 impl TurnControl {
     pub(super) fn start(
         state: &Arc<ServerState>,
         websocket: &mut ObservedWebSocket<'_>,
+        already_pending: bool,
+        hooks: Option<Arc<HookOperation>>,
     ) -> (Self, DisconnectMonitor) {
         let control = Arc::new(Control {
             previous_id: websocket.last_response_id.clone(),
@@ -99,16 +103,22 @@ impl TurnControl {
                     biased;
                     _ = &mut stopped => break,
                     _ = super::wait_for_drain(&state) => {
+                        if let Some(hooks) = &hooks {
+                            hooks.cancel();
+                        }
                         reader.close(1001, "EMP connection is draining").await;
                         let _ = sender.take().unwrap().send(DisconnectReason::Draining);
                         break;
                     }
-                    event = reader.read(), if pending.is_none() => event,
+                    event = reader.read(), if !already_pending && pending.is_none() => event,
                 };
                 let text = match reader.finish_read(event).await {
                     DownstreamEvent::Text(text) => text,
                     DownstreamEvent::Control => continue,
                     DownstreamEvent::Closed => {
+                        if let Some(hooks) = &hooks {
+                            hooks.cancel();
+                        }
                         let _ = sender.take().unwrap().send(DisconnectReason::Client);
                         break;
                     }
@@ -158,6 +168,9 @@ impl TurnControl {
                     ))
                     .await;
                 } else if valid && !terminal {
+                    if let Some(hooks) = &hooks {
+                        hooks.cancel();
+                    }
                     let _ = sender.take().unwrap().send(DisconnectReason::Interrupted);
                     break;
                 }
@@ -165,7 +178,14 @@ impl TurnControl {
             (pending, sender)
         });
         websocket.control = Some(control);
-        (Self { stop, worker }, monitor)
+        (
+            Self {
+                stop,
+                worker,
+                already_pending,
+            },
+            monitor,
+        )
     }
 
     pub(super) async fn finish(
@@ -181,7 +201,9 @@ impl TurnControl {
             .await
             .expect("websocket control reader")
             .expect("websocket control reader");
-        *pending_request = pending;
+        if !self.already_pending {
+            *pending_request = pending;
+        }
         let control = websocket.control.as_ref().expect("websocket turn control");
         let result = if let Some(event) = control.incomplete().await {
             if websocket.send_json(&event).await.is_ok() {

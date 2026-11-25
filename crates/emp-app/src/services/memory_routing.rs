@@ -1,5 +1,6 @@
 //! Route existing Codex memory jobs; Codex still owns memory generation and files.
 use crate::app::ServerState;
+use crate::modules::hooks::HookOperation;
 use crate::services::management_events::{Change, ManagementEvents};
 use crate::services::request_facts::memory_kind;
 use crate::services::request_preparation::{
@@ -34,6 +35,7 @@ pub(crate) fn prepare(
     state: &ServerState,
     mut body: Value,
     incoming: &BTreeMap<String, String>,
+    hooks: Option<&HookOperation>,
 ) -> Result<PreparedRequest, RequestPreparationError> {
     let config = state
         .backend
@@ -41,7 +43,14 @@ pub(crate) fn prepare(
         .snapshot()
         .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?;
     let Some(kind) = memory_kind(&body, incoming) else {
-        return prepare_with_config(state, config, body, RequestOperation::Responses, incoming);
+        return prepare_with_config(
+            state,
+            config,
+            body,
+            RequestOperation::Responses,
+            incoming,
+            hooks,
+        );
     };
     let (field, effort_field) = if kind == "memory_extraction" {
         ("memory_extraction_model", "memory_extraction_effort")
@@ -78,6 +87,7 @@ pub(crate) fn prepare(
             body,
             RequestOperation::Responses,
             &BTreeMap::new(),
+            hooks,
         );
     }
     let fail = |reason: &'static str| {
@@ -165,9 +175,12 @@ pub(crate) fn prepare(
         body,
         RequestOperation::Responses,
         &BTreeMap::new(),
+        hooks,
     )
     .map_err(|error| match error {
-        RequestPreparationError::TeamAccess(_) => error,
+        RequestPreparationError::TeamAccess(_)
+        | RequestPreparationError::HookRoute(_)
+        | RequestPreparationError::HookAccess => error,
         _ => fail("model_unavailable"),
     })?;
     if prepared.route.dialect != Dialect::CodexNative

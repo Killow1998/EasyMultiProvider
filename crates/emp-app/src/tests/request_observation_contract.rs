@@ -36,6 +36,7 @@ fn settlement_outcome<'a>(
         json!({"model":"demo/model","input":"hello"}),
         RequestOperation::Responses,
         &headers,
+        None,
     )
     .unwrap();
     RequestGuard::new(
@@ -683,6 +684,7 @@ fn downstream_write_failure_does_not_rewrite_or_repeat_upstream_accounting() {
         json!({"model":"demo/model","input":"hello"}),
         RequestOperation::Responses,
         &Default::default(),
+        None,
     )
     .ok()
     .unwrap();

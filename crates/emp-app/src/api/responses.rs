@@ -54,6 +54,7 @@ pub(crate) fn execute<'a>(
         body,
         RequestOperation::Responses,
         &incoming,
+        request.hooks,
         observation,
     ) {
         Ok(prepared) => prepared,

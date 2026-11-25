@@ -22,12 +22,16 @@ pub(crate) struct RawRequestHead(
     usize,
     Arc<Mutex<BodyRead>>,
     RequestMethods,
+    pub(super) Option<Arc<crate::modules::hooks::HookOperation>>,
 );
 
 impl RawRequestHead {
     pub(crate) fn request(&self) -> Request<'_> {
-        parse_request_with_methods(&self.0, self.3)
-            .expect("the connection already parsed the request head")
+        Request {
+            hooks: self.4.as_deref(),
+            ..parse_request_with_methods(&self.0, self.3)
+                .expect("the connection already parsed the request head")
+        }
     }
 
     pub(crate) fn body_prefix_len(&self) -> usize {
@@ -94,6 +98,7 @@ impl GuardedHead {
                     body_prefix.len(),
                     Arc::new(Mutex::new(BodyRead::Waiting(None))),
                     methods,
+                    None,
                 ),
                 account_events: request.method == RequestMethod::Get
                     && request.raw_path() == "/api/accounts/events",

@@ -24,6 +24,7 @@ use std::{
 };
 use tokio::{net::TcpListener, sync::oneshot, time::timeout};
 
+mod hooks;
 mod registry;
 
 const CHILD_MODE: &str = "EMP_TEST_API3_HANDSHAKE";
@@ -111,6 +112,10 @@ fn module_fixture() {
         let manifest = std::env::var("EMP_TEST_API3_REGISTRY_MANIFEST").unwrap();
         write_response(&mut output, &initialize, &manifest);
         read_request(&mut input, "module.exit");
+        return;
+    }
+    if mode == "hooks" {
+        hooks::child(output);
         return;
     }
     if matches!(mode.as_str(), "exit" | "exit-tree" | "duplicate-manifest") {

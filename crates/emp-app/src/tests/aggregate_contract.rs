@@ -66,6 +66,7 @@ fn subscription_balance_keeps_affinity_and_follows_actual_account_after_native_l
             json!({"model":group,"input":"public fixture"}),
             RequestOperation::Responses,
             &incoming,
+            None,
         )
         .unwrap()
         .route

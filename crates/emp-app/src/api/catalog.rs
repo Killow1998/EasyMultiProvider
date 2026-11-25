@@ -58,7 +58,8 @@ pub(crate) fn models_request(
     if rich && preserve_native_catalog(&config).is_err() {
         return Err(EntryError::internal());
     }
-    let catalog = server_catalog(state, &config);
+    let mut catalog = server_catalog(state, &config);
+    catalog::project_catalog(request.hooks, &mut catalog["models"], "slug");
     if let Some(raw_id) = request.raw_path().strip_prefix("/v1/models/") {
         let id = percent_decode(raw_id, false);
         let canonical =
@@ -90,12 +91,15 @@ pub(crate) fn models_request(
     Ok(JsonReply::ok_json(&json!({"object":"list","data":models})))
 }
 
-pub(crate) fn read_configuration(state: &ServerState) -> JsonReply {
+pub(crate) fn read_configuration(
+    state: &ServerState,
+    hooks: Option<&crate::modules::hooks::HookOperation>,
+) -> JsonReply {
     let config = match state.backend.configuration.read() {
         Ok(config) => config.clone(),
         Err(_) => return EntryError::internal().reply(),
     };
-    let mut public = crate::services::catalog::public_configuration(state, &config);
+    let mut public = crate::services::catalog::public_configuration(state, &config, hooks);
     public["provider_balances"] = crate::services::provider_balance::snapshot(state, &config);
     public["provider_quotas"] = crate::services::cpa_quota::snapshot(state, &config);
     public["app_icon"] = state.backend.app_icon.snapshot().metadata();

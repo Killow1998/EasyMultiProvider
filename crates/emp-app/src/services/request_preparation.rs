@@ -1,12 +1,14 @@
 //! Freeze request, configuration and route before history replay or upstream I/O.
 
 use crate::app::ServerState;
+use crate::modules::hooks::{HookOperation, HookPhase};
 use crate::services::auto_review::resolve_auto_review_route;
 use crate::services::providers::hydrate_provider_keys;
 use emp_domain::{
     Dialect, OpaqueJson, Protocol, ResolvedRoute, RouteResolutionError, resolve_route,
 };
-use serde_json::{Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,9 +26,12 @@ pub(crate) enum RequestPreparationError {
     ModelSnapshotTooLarge,
     MemoryUnavailable(&'static str),
     TeamAccess(super::team::RequestDenied),
+    HookRoute(RouteResolutionError),
+    HookAccess,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum RequestOperation {
     Responses,
     Compact,
@@ -44,13 +49,14 @@ pub(crate) fn prepare_request(
     body: Value,
     operation: RequestOperation,
     incoming: &BTreeMap<String, String>,
+    hooks: Option<&HookOperation>,
 ) -> Result<PreparedRequest, RequestPreparationError> {
     let config = state
         .backend
         .configuration
         .snapshot()
         .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?;
-    prepare_with_config(state, config, body, operation, incoming)
+    prepare_with_config(state, config, body, operation, incoming, hooks)
 }
 
 /// A policy that already selected an account must retain that configuration snapshot.
@@ -60,6 +66,7 @@ pub(super) fn prepare_with_config(
     mut body: Value,
     operation: RequestOperation,
     incoming: &BTreeMap<String, String>,
+    hooks: Option<&HookOperation>,
 ) -> Result<PreparedRequest, RequestPreparationError> {
     let request = body
         .as_object_mut()
@@ -73,6 +80,12 @@ pub(super) fn prepare_with_config(
         request.insert("model".to_owned(), canonical.into());
     }
     let model = request["model"].as_str().expect("validated model");
+    if let Some(hooks) = hooks {
+        let accounts = config["accounts"]
+            .as_array_mut()
+            .expect("normalized accounts");
+        project_accounts(hooks, accounts, model);
+    }
     state
         .backend
         .team
@@ -93,19 +106,47 @@ pub(super) fn prepare_with_config(
             Value::String(state.backend.codex.auth_path.to_string_lossy().into_owned()),
         );
     }
-    let automatic =
+    let resolve = |config: &Value, model: &str| {
+        resolve_route(config, model, |config, slug, account| {
+            super::catalog::subscription_model(state, config, slug, account)
+        })
+    };
+    let selected = if let Some(hooks) = hooks.filter(|hooks| hooks.has(HookPhase::ResolveRoute)) {
+        let mut candidate = resolve(&config, model).ok();
+        let ids = candidate
+            .iter()
+            .map(|route| route.requested_model.clone())
+            .collect::<Vec<_>>();
+        hooks
+            .dispatch(
+                HookPhase::ResolveRoute,
+                || json!({"model":model,"candidate_ids":ids}),
+                |_, id: String| {
+                    if ids.contains(&id) {
+                        Ok(candidate.take())
+                    } else {
+                        Err(())
+                    }
+                },
+            )
+            .map_err(|()| {
+                RequestPreparationError::HookRoute(RouteResolutionError::ProviderUnavailable(
+                    model.into(),
+                ))
+            })?
+    } else {
+        None
+    };
+    let automatic = selected.map(Ok).or_else(|| {
         super::aggregate_routing::resolve(state, &config, request, incoming).or_else(|| {
             match operation {
                 RequestOperation::Responses => resolve_auto_review_route(state, &mut config, model),
                 RequestOperation::Compact | RequestOperation::Images => None,
             }
-        });
-    let mut route = automatic
-        .unwrap_or_else(|| {
-            resolve_route(&config, model, |config, slug, account| {
-                crate::services::catalog::subscription_model(state, config, slug, account)
-            })
         })
+    });
+    let mut route = automatic
+        .unwrap_or_else(|| resolve(&config, model))
         .map_err(RequestPreparationError::Route)?;
     state
         .backend
@@ -117,6 +158,13 @@ pub(super) fn prepare_with_config(
         )
         .map_err(RequestPreparationError::TeamAccess)?;
     if !matches!(operation, RequestOperation::Images) {
+        check_hook_access(
+            hooks,
+            &route,
+            request.get("service_tier").and_then(Value::as_str),
+            operation,
+        )
+        .map_err(|()| RequestPreparationError::HookAccess)?;
         state
             .backend
             .team
@@ -129,6 +177,78 @@ pub(super) fn prepare_with_config(
         route,
         body,
     })
+}
+
+fn project_accounts(hooks: &HookOperation, accounts: &mut Vec<Value>, model: &str) {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct AccountRef {
+        id: String,
+        source_id: String,
+    }
+    if !hooks.has(HookPhase::ProjectAccounts) {
+        return;
+    }
+    let base = accounts.len();
+    let facts: Vec<_> = accounts
+        .iter()
+        .map(|account| json!({"id":account["id"], "prefix":account["prefix"]}))
+        .collect();
+    let _ = hooks.dispatch::<Vec<AccountRef>, ()>(
+        HookPhase::ProjectAccounts,
+        || json!({"model":model, "accounts":facts}),
+        |_, refs| {
+            let mut added: Vec<Value> = Vec::new();
+            for account in refs {
+                if account.id.is_empty()
+                    || !account
+                        .id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                    || accounts
+                        .iter()
+                        .chain(&added)
+                        .any(|item| item["id"] == account.id || item["prefix"] == account.id)
+                {
+                    return Err(());
+                }
+                let mut source = accounts[..base]
+                    .iter()
+                    .find(|item| item["id"] == account.source_id)
+                    .cloned()
+                    .ok_or(())?;
+                source["prefix"] = account.id.into();
+                added.push(source);
+            }
+            accounts.extend(added);
+            Ok(None)
+        },
+    );
+}
+
+pub(crate) fn check_hook_access(
+    hooks: Option<&HookOperation>,
+    route: &ResolvedRoute,
+    tier: Option<&str>,
+    operation: RequestOperation,
+) -> Result<(), ()> {
+    if let Some(hooks) = hooks {
+        if hooks.cancelled() {
+            return Err(());
+        }
+        if hooks.dispatch(
+            HookPhase::CheckAccess,
+            || json!({
+                "provider_id":route.provider_id, "model":route.requested_model, "service_tier":tier,
+                "account_id":route.provider.value().get("account").and_then(|account| account.get("id")),
+                "operation":operation,
+            }),
+            |_, allowed: bool| Ok((!allowed).then_some(())),
+        )?.is_some() || hooks.cancelled() {
+            return Err(());
+        }
+    }
+    Ok(())
 }
 
 fn prepare_external_request(

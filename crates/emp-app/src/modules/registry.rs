@@ -120,6 +120,16 @@ impl ModuleRegistry {
             .cloned()
     }
 
+    pub(crate) fn hooks(&self) -> Vec<Arc<ActiveModule>> {
+        self.active
+            .lock()
+            .expect("module registry")
+            .values()
+            .filter(|module| !module.hooks.is_empty())
+            .cloned()
+            .collect()
+    }
+
     pub fn revoke(&self, id: &str, generation: u64) {
         let removed = {
             let mut active = self.active.lock().expect("module registry");

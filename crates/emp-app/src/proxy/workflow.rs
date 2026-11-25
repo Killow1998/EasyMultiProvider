@@ -1,4 +1,5 @@
 use crate::app::ServerState;
+use crate::modules::hooks::HookOperation;
 use crate::server::disconnect::{DisconnectMonitor, WebSocketDisconnect};
 use crate::services::history::{
     DestinationPrepareError, prepare_destination_context, prepare_history,
@@ -24,14 +25,15 @@ pub(crate) fn resolve(
     body: Value,
     operation: RequestOperation,
     incoming: &BTreeMap<String, String>,
+    hooks: Option<&HookOperation>,
     observation: &mut RequestObservation,
 ) -> Result<PreparedRequest, PrepareFailure<'static>> {
     let prepared = match operation {
         RequestOperation::Responses => {
-            crate::services::memory_routing::prepare(state, body, incoming)
+            crate::services::memory_routing::prepare(state, body, incoming, hooks)
         }
         RequestOperation::Compact | RequestOperation::Images => {
-            prepare_request(state, body, operation, incoming)
+            prepare_request(state, body, operation, incoming, hooks)
         }
     }
     .map_err(PrepareFailure::Request)?;

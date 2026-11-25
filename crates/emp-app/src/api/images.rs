@@ -30,6 +30,7 @@ pub(crate) fn execute(
         operation,
         &body,
         &incoming,
+        request.hooks,
         monitor.as_mut(),
     ))
 }

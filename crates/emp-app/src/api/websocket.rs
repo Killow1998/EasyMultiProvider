@@ -3,6 +3,7 @@ use crate::api::failure_response::websocket_router_error;
 use crate::api::history_response::history_stream_error;
 use crate::app::ServerState;
 use crate::http::request::Request;
+use crate::modules::hooks::{HookOperation, HookPhase};
 use crate::proxy::workflow::{self, ContextPreparation, PrepareFailure};
 use crate::server::http::error::HttpReply;
 use crate::services::catalog::response_catalog_etag;
@@ -264,10 +265,21 @@ async fn responses_turns(
         if request
             .source
             .and_then(|source| source.caller.as_ref())
-            .is_some_and(|caller| !matches!(caller.id.as_str(), "local" | "shared"))
+            .is_some_and(|caller| {
+                !matches!(caller.id.as_str(), "local" | "shared")
+                    && !caller.id.starts_with("module:")
+            })
             && block_in_place(|| {
-                crate::http::auth::proxy_identity(request, state, crate::util::system_now(), None)
-                    .is_none()
+                crate::http::auth::proxy_identity(
+                    Request {
+                        hooks: None,
+                        ..request
+                    },
+                    state,
+                    crate::util::system_now(),
+                    None,
+                )
+                .is_none()
             })
         {
             websocket.close(1008, "device key was revoked").await;
@@ -305,9 +317,10 @@ async fn responses_turns(
             }
             continue;
         }
+        let operation_id = random_hex(8).ok();
         let mut observation = RequestObservation::new(
             Arc::clone(&state.backend.diagnostics),
-            random_hex(8).ok(),
+            operation_id.clone(),
             connection_id,
             "websocket",
             "responses",
@@ -398,7 +411,8 @@ async fn responses_turns(
             }
             request_body["stream"] = Value::Bool(true);
             let request_headers = websocket.observation.headers(incoming.clone());
-            let (control, mut monitor) = control::TurnControl::start(state, &mut websocket);
+            let (control, mut monitor) =
+                control::TurnControl::start(state, &mut websocket, false, None);
             let mut source = request.source.expect("authorized WebSocket caller").clone();
             source.aero_lease = Some(crate::services::modules::aero::CallLease {
                 connection: permit.clone(),
@@ -425,19 +439,50 @@ async fn responses_turns(
             }
             continue;
         }
-        let PreparedRequest {
-            config,
-            route,
-            body: request_body,
-        } = match block_in_place(|| {
+        let hooks = HookOperation::capture(state, operation_id.as_deref(), None).filter(|hooks| {
+            [
+                HookPhase::ProjectAccounts,
+                HookPhase::ResolveRoute,
+                HookPhase::CheckAccess,
+            ]
+            .into_iter()
+            .any(|phase| hooks.has(phase))
+        });
+        let hook_control = hooks.as_ref().map(|hooks| {
+            if let Some(caller) = incoming.get("x-emp-caller-id") {
+                hooks.bind_caller(caller);
+            }
+            control::TurnControl::start(state, &mut websocket, false, Some(hooks.clone())).0
+        });
+        let prepared = block_in_place(|| {
             workflow::resolve(
                 state,
                 request_body,
                 RequestOperation::Responses,
                 &incoming,
+                hooks.as_deref(),
                 websocket.observation,
             )
-        }) {
+        });
+        let mut hook_prefetched = false;
+        if let Some(control) = hook_control {
+            control
+                .finish(
+                    &mut websocket,
+                    &mut native_session.pending_request,
+                    TurnResult::Finished,
+                )
+                .await;
+            hook_prefetched = native_session.pending_request.is_some();
+            if hooks.as_ref().is_some_and(|hooks| hooks.cancelled()) {
+                return;
+            }
+        }
+        let PreparedRequest {
+            config,
+            route,
+            body: request_body,
+        } = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 if let Some(event) = prepare_websocket_error(state, error, websocket.observation) {
@@ -562,7 +607,12 @@ async fn responses_turns(
         }
         body.remove("generate");
         body.insert("stream".to_owned(), Value::Bool(true));
-        let (control, mut monitor) = control::TurnControl::start(state, &mut websocket);
+        let (control, mut monitor) = control::TurnControl::start(
+            state,
+            &mut websocket,
+            hook_prefetched && native_session.pending_request.is_some(),
+            None,
+        );
         let result = if crate::services::claude_cli::selected(&turn.route) {
             claude::serve(state, turn, &mut websocket, monitor).await
         } else if turn.route.dialect == emp_domain::Dialect::CodexNative {
@@ -597,8 +647,11 @@ fn prepare_websocket_error(
             RequestPreparationError::ModelRequired => {
                 emp_websocket_error(400, "invalid_request", "request.model is required")
             }
-            RequestPreparationError::Route(error) => {
+            RequestPreparationError::Route(error) | RequestPreparationError::HookRoute(error) => {
                 emp_websocket_error(error.status(), "router_error", &error.to_string())
+            }
+            RequestPreparationError::HookAccess => {
+                emp_websocket_error(403, "router_error", "module access denied")
             }
             RequestPreparationError::MemoryUnavailable(reason) => emp_websocket_error(
                 503,
