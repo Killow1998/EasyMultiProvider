@@ -133,6 +133,7 @@ fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
     let mut visitor = Deadlines {
         test_file,
         emp_app: group(path) == Some("emp-app"),
+        pipe_capture: path == "crates/emp-test-support/src/process/capture.rs",
         socket_implementation: path == TEST_SUPPORT_LIB,
         allows_fixed_wait: path == TEST_SUPPORT_LIB,
         scopes,
@@ -148,6 +149,7 @@ fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
 struct Deadlines<'source> {
     test_file: bool,
     emp_app: bool,
+    pipe_capture: bool,
     socket_implementation: bool,
     allows_fixed_wait: bool,
     scopes: comments::TestScopes,
@@ -398,7 +400,11 @@ impl<'ast> Visit<'ast> for Deadlines<'_> {
         let name = call.method.to_string();
         self.inspect_socket_timeout(&name, call.method.span().start().line);
         if name == "wait_timeout" || name == "wait_timeout_while" {
-            if let Some(expr) = call.args.iter().nth(1) {
+            if let Some(expr) = call.args.iter().nth(1)
+                && !(self.pipe_capture
+                    && name == "wait_timeout"
+                    && matches!(expr, Expr::Path(path) if path.path.is_ident("POLL_INTERVAL")))
+            {
                 self.inspect(expr, true);
             }
         } else {

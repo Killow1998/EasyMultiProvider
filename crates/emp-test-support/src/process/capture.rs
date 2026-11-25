@@ -1,5 +1,5 @@
 use super::{Failure, POLL_INTERVAL};
-use crate::{Deadline, test_timeout};
+use crate::Deadline;
 use std::{
     io::{self, Read},
     sync::{Arc, Condvar, Mutex, PoisonError},
@@ -27,7 +27,7 @@ pub(super) struct Capture {
 }
 
 impl Capture {
-    pub(super) fn start(pipe: impl ReadPipe + Send + 'static) -> io::Result<Self> {
+    pub(super) fn start(pipe: impl NonblockingPipe + Send + 'static) -> io::Result<Self> {
         let shared = Arc::new(Shared::default());
         let reader = Arc::clone(&shared);
         let worker = thread::Builder::new().spawn(move || {
@@ -61,41 +61,38 @@ impl Capture {
 
     pub(super) fn finish(self, deadline: Deadline) -> (Vec<u8>, Result<(), Failure>) {
         let closed = self.wait_closed(deadline);
-        while closed && !self.worker.is_finished() && !deadline.is_expired() {
-            thread::yield_now();
+        if !closed {
+            self.shared
+                .output
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .stop = true;
+            self.shared.changed.notify_all();
         }
+        let joined = self.worker.join();
         let mut output = self
             .shared
             .output
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let bytes = std::mem::take(&mut output.bytes);
-        if !self.worker.is_finished() {
-            output.stop = true;
-            self.shared.changed.notify_all();
-            return (bytes, Err(Failure::CaptureTimeout));
-        }
-        let completion = output.completion;
-        drop(output);
-        let result = match self.worker.join() {
-            Ok(()) => {
-                let (closed_at, result) = completion.expect("reader completion result");
-                deadline
-                    .accept_at(closed_at, result, "child output cleanup")
-                    .map_err(|_| Failure::CaptureTimeout)
-                    .and_then(|result| result.map_err(Failure::Io))
-            }
-            Err(_) => Err(Failure::Io(io::ErrorKind::Other)),
+        let result = match (joined, closed, output.completion) {
+            (Err(_), _, _) => Err(Failure::Io(io::ErrorKind::Other)),
+            (Ok(()), true, Some((closed_at, result))) => deadline
+                .accept_at(closed_at, result, "child output cleanup")
+                .map_err(|_| Failure::CaptureTimeout)
+                .and_then(|result| result.map_err(Failure::Io)),
+            _ => Err(Failure::CaptureTimeout),
         };
         (bytes, result)
     }
 }
 
 impl Shared {
-    fn read_output(&self, mut pipe: impl ReadPipe) -> io::Result<()> {
+    /// The reader must never block in a pipe syscall so stop can always wake and join it.
+    fn read_output(&self, mut pipe: impl NonblockingPipe) -> io::Result<()> {
         pipe.prepare()?;
         let mut buffer = [0; 8192];
-        let idle = test_timeout(POLL_INTERVAL).duration();
         loop {
             let available = pipe.read_limit(buffer.len());
             let mut output = self.output.lock().unwrap();
@@ -114,7 +111,13 @@ impl Shared {
                     self.changed.notify_all();
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    if self.changed.wait_timeout(output, idle).unwrap().0.stop {
+                    if self
+                        .changed
+                        .wait_timeout(output, POLL_INTERVAL)
+                        .unwrap()
+                        .0
+                        .stop
+                    {
                         break;
                     }
                 }
@@ -165,7 +168,7 @@ impl Shared {
 }
 
 #[cfg(unix)]
-pub(super) trait ReadPipe: Read + std::os::fd::AsFd {
+pub(super) trait NonblockingPipe: Read + std::os::fd::AsFd {
     fn prepare(&self) -> io::Result<()> {
         use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
         fcntl_setfl(self, fcntl_getfl(self)? | OFlags::NONBLOCK)?;
@@ -178,7 +181,7 @@ pub(super) trait ReadPipe: Read + std::os::fd::AsFd {
 }
 
 #[cfg(windows)]
-pub(super) trait ReadPipe: Read + std::os::windows::io::AsRawHandle {
+pub(super) trait NonblockingPipe: Read + std::os::windows::io::AsRawHandle {
     fn prepare(&self) -> io::Result<()> {
         Ok(())
     }
@@ -214,8 +217,8 @@ pub(super) trait ReadPipe: Read + std::os::windows::io::AsRawHandle {
     }
 }
 
-impl ReadPipe for std::process::ChildStdout {}
-impl ReadPipe for std::process::ChildStderr {}
+impl NonblockingPipe for std::process::ChildStdout {}
+impl NonblockingPipe for std::process::ChildStderr {}
 
 #[cfg(test)]
 mod tests;

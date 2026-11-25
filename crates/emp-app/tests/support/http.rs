@@ -240,9 +240,20 @@ pub(crate) fn http_before(
     body: &[u8],
     deadline: &Deadline,
 ) -> Response {
-    let stream = deadline
-        .connect(([127, 0, 0, 1], port).into())
-        .expect("connect to EMP");
+    let stream =
+        send_request(port, method, path, headers, body, deadline).expect("send EMP request");
+    Response::read_before(stream, deadline)
+}
+
+pub(super) fn send_request(
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+    deadline: &Deadline,
+) -> io::Result<TcpStream> {
+    let stream = deadline.connect(([127, 0, 0, 1], port).into())?;
     let mut io = deadline.io(&stream);
     let mut request = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
     for (name, value) in headers {
@@ -252,9 +263,9 @@ pub(crate) fn http_before(
         "Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     ));
-    io.write_all(request.as_bytes()).expect("write request");
-    io.write_all(body).expect("write body");
-    Response::read_before(stream, deadline)
+    io.write_all(request.as_bytes())?;
+    io.write_all(body)?;
+    Ok(stream)
 }
 
 pub struct SseClient {

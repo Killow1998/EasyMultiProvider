@@ -15,6 +15,7 @@ mod https;
 pub mod modules;
 mod process;
 mod sse;
+mod startup;
 #[cfg(unix)]
 #[allow(dead_code, reason = "Only the e2e target uses Team process fixtures")]
 pub mod team;
@@ -34,7 +35,7 @@ pub use https::HttpsProxy;
 )]
 pub use self::{
     http::{Response, SseClient, http},
-    process::{Emp, Workspace, emp_command, emp_startup_deadline},
+    process::{Emp, Workspace, emp_command},
     upstream::{Upstream, UpstreamRequest},
     websocket::{WebSocket, WebSocketUpstream},
 };

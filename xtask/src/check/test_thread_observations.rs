@@ -8,7 +8,7 @@ use syn::{
     visit::{self, Visit},
 };
 
-const ALLOWED: &[(&str, usize)] = &[("emp-app", 29), ("emp-transport", 6)];
+const ALLOWED: &[(&str, usize)] = &[("emp-app", 33), ("emp-codex", 3), ("emp-transport", 6)];
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
     let mut counts: BTreeMap<&str, Vec<String>> = ALLOWED
@@ -107,6 +107,7 @@ impl<'ast> Visit<'ast> for TestFunctions {
 struct ThreadBody {
     spawns: Vec<usize>,
     receives: bool,
+    scope_bindings: Vec<syn::Ident>,
 }
 
 fn receive(name: &syn::Ident) -> bool {
@@ -123,8 +124,20 @@ impl<'ast> Visit<'ast> for ThreadBody {
         if let syn::Expr::Path(expr) = call.func.as_ref() {
             let segments = &expr.path.segments;
             let names = segments.iter().map(|segment| &segment.ident);
-            if names.clone().eq(["thread", "spawn"]) || names.eq(["std", "thread", "spawn"]) {
+            let thread_member = |name| {
+                names.clone().eq(["thread", name]) || names.clone().eq(["std", "thread", name])
+            };
+            if thread_member("spawn") {
                 self.spawns.push(call.span().start().line);
+            }
+            if thread_member("scope")
+                && let Some(syn::Expr::Closure(closure)) = call.args.first()
+                && let Some(syn::Pat::Ident(binding)) = closure.inputs.first()
+            {
+                self.scope_bindings.push(binding.ident.clone());
+                self.visit_expr(&closure.body);
+                self.scope_bindings.pop();
+                return;
             }
             if let Some(name) = segments.last()
                 && segments
@@ -141,6 +154,13 @@ impl<'ast> Visit<'ast> for ThreadBody {
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         self.receives |= receive(&call.method);
+        if call.method == "spawn"
+            && let syn::Expr::Path(receiver) = call.receiver.as_ref()
+            && let Some(binding) = receiver.path.get_ident()
+            && self.scope_bindings.contains(binding)
+        {
+            self.spawns.push(call.span().start().line);
+        }
         visit::visit_expr_method_call(self, call);
     }
 
@@ -205,6 +225,24 @@ fn manual() {
         assert_eq!(
             inspect_source("crates/sample/tests/wire.rs", source).unwrap(),
             [5, 6]
+        );
+    }
+
+    #[test]
+    fn counts_scoped_spawn_with_a_manual_observation() {
+        let source = r#"
+fn manual() {
+    thread::scope(|scope| {
+        scope.spawn(|| gate.recv_timeout(deadline.remaining()));
+        task.spawn(job);
+    });
+    std::thread::scope(|s| s.spawn(job).join().unwrap());
+    scope.spawn(job);
+}
+"#;
+        assert_eq!(
+            inspect_source("crates/sample/tests/wire.rs", source).unwrap(),
+            [4, 7]
         );
     }
 }

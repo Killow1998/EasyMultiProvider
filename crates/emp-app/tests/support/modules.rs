@@ -1,5 +1,5 @@
 use super::{Emp, Workspace, http::read_message, io_timeout};
-use emp_test_support::{Deadline, OwnedChild, test_timeout};
+use emp_test_support::{Deadline, OwnedChild, TestBudget, test_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -266,6 +266,7 @@ impl ModuleRelease {
                 format!("{base}/releases?per_page=100"),
             )
             .args(workspace.serve_arguments());
+        let cleanup_budget = io_timeout();
         let emp = Emp::spawn(command);
         eprintln!(
             "Core PID={} sha256={:x}",
@@ -276,6 +277,7 @@ impl ModuleRelease {
             emp: Some(emp),
             root: workspace.root.join("state/modules"),
             observed: Mutex::new(BTreeSet::new()),
+            cleanup_budget,
         }
     }
 
@@ -296,7 +298,7 @@ impl ModuleRelease {
 impl Drop for ModuleRelease {
     fn drop(&mut self) {
         if self.shutdown().is_err() {
-            eprintln!("module release server worker panicked");
+            let _ = writeln!(io::stderr(), "module release server worker panicked");
         }
     }
 }
@@ -305,6 +307,7 @@ pub struct ModuleEmp {
     emp: Option<Emp>,
     root: PathBuf,
     observed: Mutex<BTreeSet<i32>>,
+    cleanup_budget: TestBudget,
 }
 
 impl Deref for ModuleEmp {
@@ -450,10 +453,10 @@ impl Drop for ModuleEmp {
     fn drop(&mut self) {
         drop(self.emp.take());
         let directory = self.root.to_string_lossy();
-        let snapshot = match processes(Deadline::after(io_timeout())) {
+        let snapshot = match processes(Deadline::after(self.cleanup_budget)) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                eprintln!("module process cleanup: {error}");
+                let _ = writeln!(io::stderr(), "module process cleanup: {error}");
                 return;
             }
         };

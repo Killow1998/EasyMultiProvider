@@ -1,6 +1,7 @@
-use crate::{Deadline, test_timeout};
+use crate::{Deadline, TestBudget, test_timeout};
 use std::{
     fmt, io,
+    io::Write as _,
     process::{Child, ChildStdin, Command, ExitStatus, Output, Stdio},
     thread,
     time::Duration,
@@ -101,6 +102,7 @@ pub struct OwnedChild {
     status: Option<ExitStatus>,
     stdout: Option<Capture>,
     stderr: Option<Capture>,
+    reader_cleanup: TestBudget,
     #[cfg(windows)]
     job: windows::Job,
 }
@@ -111,11 +113,13 @@ impl OwnedChild {
         {
             use std::os::unix::process::CommandExt;
             let mut command = command;
+            let reader_cleanup = test_timeout(Duration::from_secs(5));
             Self {
                 child: command.process_group(0).spawn()?,
                 status: None,
                 stdout: None,
                 stderr: None,
+                reader_cleanup,
             }
             .start_capture()
         }
@@ -125,12 +129,14 @@ impl OwnedChild {
 
     #[cfg(windows)]
     pub fn spawn_with_creation_flags(command: Command, flags: u32) -> io::Result<Self> {
+        let reader_cleanup = test_timeout(Duration::from_secs(5));
         let (child, job) = windows::spawn(command, flags)?;
         Self {
             child,
             status: None,
             stdout: None,
             stderr: None,
+            reader_cleanup,
             job,
         }
         .start_capture()
@@ -174,7 +180,7 @@ impl OwnedChild {
         drop(self.child.stdin.take());
         let completed = self.wait_for_exit_and_output(deadline);
         let terminated = self.terminate();
-        let cleanup = reader_cleanup_deadline();
+        let cleanup = Deadline::after(self.reader_cleanup);
         let (stdout, stdout_result) = finish_capture(self.stdout.take(), cleanup);
         let (stderr, stderr_result) = finish_capture(self.stderr.take(), cleanup);
         let result = if [stdout_result, stderr_result].contains(&Err(Failure::CaptureTimeout)) {
@@ -258,19 +264,15 @@ impl OwnedChild {
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         if let Err(error) = self.terminate() {
-            eprintln!("child process cleanup: {}", error.kind());
+            let _ = writeln!(io::stderr(), "child process cleanup: {}", error.kind());
         }
-        let deadline = reader_cleanup_deadline();
+        let deadline = Deadline::after(self.reader_cleanup);
         for capture in [&mut self.stdout, &mut self.stderr] {
             if let Err(error) = finish_capture(capture.take(), deadline).1 {
-                eprintln!("child output cleanup: {error}");
+                let _ = writeln!(io::stderr(), "child output cleanup: {error}");
             }
         }
     }
-}
-
-fn reader_cleanup_deadline() -> Deadline {
-    Deadline::after(test_timeout(Duration::from_secs(5)))
 }
 
 fn finish_capture(capture: Option<Capture>, deadline: Deadline) -> (Vec<u8>, Result<(), Failure>) {

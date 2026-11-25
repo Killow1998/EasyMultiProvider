@@ -241,7 +241,7 @@ impl VertexFixture {
 impl Drop for VertexFixture {
     fn drop(&mut self) {
         if self.shutdown().is_err() {
-            eprintln!("Vertex fixture worker panicked");
+            let _ = writeln!(std::io::stderr(), "Vertex fixture worker panicked");
         }
     }
 }

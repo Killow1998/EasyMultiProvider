@@ -1,5 +1,5 @@
 use emp_test_support::{Deadline, test_timeout};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -10,11 +10,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use super::startup::emp_startup_budget;
 use super::{NATIVE_TOKEN, ORIGINAL_CODEX_CONFIG, PROVIDER_KEY, Response, Upstream, http};
-
-pub fn emp_startup_deadline() -> Deadline {
-    Deadline::after(test_timeout(Duration::from_secs(30)))
-}
 
 pub fn emp_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_EMP"));
@@ -192,6 +189,8 @@ impl Workspace {
 /// A running EMP service with an authenticated management session.
 pub struct Emp {
     child: Child,
+    #[cfg(windows)]
+    shutdown_budget: emp_test_support::TestBudget,
     pub port: u16,
     pub session: String,
     pub bootstrap: String,
@@ -200,6 +199,9 @@ pub struct Emp {
 
 impl Emp {
     pub fn spawn(mut command: Command) -> Self {
+        #[cfg(windows)]
+        let shutdown_budget = super::io_timeout();
+        let startup_budget = emp_startup_budget();
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -222,7 +224,7 @@ impl Emp {
             collected.lock().expect("stderr").push_str(&text);
         });
         let mut startup_output = Vec::new();
-        let deadline = emp_startup_deadline();
+        let deadline = Deadline::after(startup_budget);
         let opened = loop {
             match received
                 .recv_timeout(deadline.remaining())
@@ -275,6 +277,8 @@ impl Emp {
             .to_owned();
         let emp = Self {
             child,
+            #[cfg(windows)]
+            shutdown_budget,
             port,
             session,
             bootstrap,
@@ -361,8 +365,9 @@ impl Emp {
 
     #[cfg(unix)]
     fn send_signal(&self, signal: i32) -> std::io::Result<()> {
+        let pid = libc::pid_t::try_from(self.child.id()).map_err(io::Error::other)?;
         // SAFETY: kill(2) on our own live child process id.
-        if unsafe { libc::kill(self.pid(), signal) } == 0 {
+        if unsafe { libc::kill(pid, signal) } == 0 {
             Ok(())
         } else {
             Err(std::io::Error::last_os_error())
@@ -403,8 +408,19 @@ impl Emp {
         let signal = self.send_signal(libc::SIGTERM);
         #[cfg(windows)]
         let signal = {
-            let _ = self.post("/api/quit", &json!({}));
-            Ok(())
+            let deadline = Deadline::after(self.shutdown_budget);
+            super::http::send_request(
+                self.port,
+                "POST",
+                "/api/quit",
+                &[
+                    ("X-EMP-Session", &self.session),
+                    ("Content-Type", "application/json"),
+                ],
+                b"{}",
+                &deadline,
+            )
+            .and_then(|stream| io::copy(&mut deadline.io(stream), &mut io::sink()).map(|_| ()))
         };
         for _ in 0..500 {
             if self.child.try_wait().ok().flatten().is_some() {
@@ -425,7 +441,7 @@ impl Emp {
 impl Drop for Emp {
     fn drop(&mut self) {
         if let Err(error) = self.shutdown() {
-            eprintln!("EMP shutdown signal: {error}");
+            let _ = writeln!(io::stderr(), "EMP shutdown signal: {error}");
         }
     }
 }

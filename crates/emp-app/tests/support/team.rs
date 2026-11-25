@@ -334,7 +334,7 @@ impl TeamRelay {
 impl Drop for TeamRelay {
     fn drop(&mut self) {
         if self.shutdown().is_err() {
-            eprintln!("Team relay worker panicked");
+            let _ = writeln!(std::io::stderr(), "Team relay worker panicked");
         }
     }
 }

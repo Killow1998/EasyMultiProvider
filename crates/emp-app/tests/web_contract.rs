@@ -1,15 +1,12 @@
-#[allow(
-    dead_code,
-    reason = "This target uses only the shared EMP startup deadline"
-)]
-mod support;
+#[path = "support/startup.rs"]
+mod startup;
 
 use emp_test_support::{Deadline, OwnedChild, test_timeout};
+use startup::emp_startup_budget;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use support::emp_startup_deadline;
 
 use tempfile::TempDir;
 
@@ -140,8 +137,9 @@ fn spawn_emp(config: &std::path::Path) -> (u16, OwnedChild, String) {
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
+    let startup_budget = emp_startup_budget();
     let child = OwnedChild::spawn(command).expect("start EMP");
-    let deadline = emp_startup_deadline();
+    let deadline = Deadline::after(startup_budget);
     let read_line = || {
         child
             .stdout_line(deadline)

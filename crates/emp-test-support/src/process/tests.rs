@@ -47,6 +47,32 @@ fn child_fixture() {
             let lifetime = Deadline::after(test_timeout(Duration::from_secs(10)));
             let _ = lifetime.io(&socket).read(&mut [0]);
         }
+        "escaped" => {
+            #[cfg(unix)]
+            rustix::process::setsid().unwrap();
+            write_fixture_output(b"escaped stdout\n", b"escaped stderr\n");
+            io::stdin().read_exact(&mut [0]).unwrap();
+            let stdout = io::stdout().lock().write_all(b"probe\n");
+            let stderr = io::stderr().lock().write_all(b"probe\n");
+            let pipes_closed = [stdout, stderr].into_iter().all(
+                |result| matches!(result, Err(error) if error.kind() == io::ErrorKind::BrokenPipe),
+            );
+            std::process::exit(if pipes_closed { 0 } else { 24 });
+        }
+        "invalid-time-scale" => {
+            let panic = std::panic::catch_unwind(|| {
+                let _child = OwnedChild::spawn(fixture("exit")).expect("start child fixture");
+                panic!("OwnedChild accepted invalid EMP_TEST_TIME_SCALE");
+            })
+            .unwrap_err();
+            assert_eq!(
+                panic
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str)),
+                Some("EMP_TEST_TIME_SCALE must be a positive finite number")
+            );
+        }
         _ => panic!("unknown child fixture"),
     }
 }
@@ -62,7 +88,7 @@ fn write_fixture_output(stdout: &[u8], stderr: &[u8]) {
     output.flush().unwrap();
 }
 
-fn assert_payload(captured: &[u8], expected: &[u8]) {
+pub(super) fn assert_payload(captured: &[u8], expected: &[u8]) {
     let mark = captured
         .windows(PAYLOAD_START.len())
         .position(|window| window == PAYLOAD_START)
@@ -82,6 +108,24 @@ fn captures_exit_status_and_both_streams() {
     assert_eq!(output.status.code(), Some(7));
     assert_payload(&output.stdout, b"normal stdout\n");
     assert_payload(&output.stderr, b"normal stderr\n");
+}
+
+#[test]
+fn invalid_time_scale_panics_during_construction_without_aborting() {
+    let mut command = fixture("invalid-time-scale");
+    command.env("EMP_TEST_TIME_SCALE", "bad");
+    let output = OwnedChild::output(
+        command,
+        Deadline::after(test_timeout(Duration::from_secs(5))),
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
