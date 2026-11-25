@@ -421,6 +421,11 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
             .starts_with("event: activity-updated\ndata: "),
         "{activity_frame:?}"
     );
+    assert_eq!(
+        activity_frame.event(),
+        Some("activity-updated"),
+        "{activity_frame:?}"
+    );
     let activity_body = activity_frame.data().expect("activity event data");
     let activity: Value = serde_json::from_str(&activity_body).expect("activity snapshot");
     assert_eq!(activity["recent_for_seconds"], 60);

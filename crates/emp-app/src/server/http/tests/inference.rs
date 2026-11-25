@@ -675,51 +675,54 @@ impl SseClient {
     }
 
     pub(super) async fn next(&mut self) -> Option<Value> {
+        let frame = self.next_frame().await?;
+        let event_type = frame.event().expect("SSE event name");
+        let payload = frame.data().expect("SSE event data");
+        let event: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(event["type"], event_type);
+        Some(event)
+    }
+
+    pub(super) async fn next_frame(&mut self) -> Option<sse::Frame> {
         use tokio::io::AsyncBufReadExt as _;
+        let mut ended = false;
         loop {
-            let frame = loop {
-                match sse::read_frame(&mut self.pending.as_slice()) {
-                    Ok(Some(frame)) => {
-                        self.pending.drain(..frame.raw().len());
-                        break frame;
-                    }
-                    Ok(None) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {}
-                    Err(error) => panic!("read SSE frame: {error}"),
-                }
-                {
-                    let mut line = String::new();
-                    assert_ne!(
-                        self.io.read_line(&mut line).await.unwrap(),
-                        0,
-                        "missing terminal HTTP chunk"
-                    );
-                    let len =
-                        usize::from_str_radix(line.strip_suffix("\r\n").unwrap(), 16).unwrap();
-                    let start = self.pending.len();
-                    self.pending.resize(start + len, 0);
-                    self.io
-                        .read_exact(&mut self.pending[start..])
-                        .await
-                        .unwrap();
-                    assert_eq!(
-                        self.io.read_u16().await.unwrap(),
-                        u16::from_be_bytes(*b"\r\n")
-                    );
-                    if len == 0 {
-                        assert!(self.pending.is_empty(), "truncated SSE event");
-                        return None;
-                    }
-                }
-            };
-            if frame.is_comment_or_empty() {
-                continue;
+            let mut available = self.pending.as_slice();
+            if !ended {
+                available = available.strip_suffix(b"\r").unwrap_or(available);
             }
-            let event_type = frame.event().expect("SSE event name");
-            let payload = frame.data().expect("SSE event data");
-            let event: Value = serde_json::from_str(&payload).unwrap();
-            assert_eq!(event["type"], event_type);
-            return Some(event);
+            match sse::read_frame(&mut available) {
+                Ok(Some(frame)) => {
+                    self.pending.drain(..frame.raw().len());
+                    if frame.is_comment_or_empty() {
+                        continue;
+                    }
+                    return Some(frame);
+                }
+                Ok(None) if ended => return None,
+                Ok(None) => {}
+                Err(error) if !ended && error.kind() == std::io::ErrorKind::UnexpectedEof => {}
+                Err(error) => panic!("read SSE frame: {error}"),
+            }
+
+            let mut line = String::new();
+            assert_ne!(
+                self.io.read_line(&mut line).await.unwrap(),
+                0,
+                "missing terminal HTTP chunk"
+            );
+            let len = usize::from_str_radix(line.strip_suffix("\r\n").unwrap(), 16).unwrap();
+            let start = self.pending.len();
+            self.pending.resize(start + len, 0);
+            self.io
+                .read_exact(&mut self.pending[start..])
+                .await
+                .unwrap();
+            assert_eq!(
+                self.io.read_u16().await.unwrap(),
+                u16::from_be_bytes(*b"\r\n")
+            );
+            ended = len == 0;
         }
     }
 

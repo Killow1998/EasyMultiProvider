@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod http;
 mod observation;
 mod process;
 pub mod sse;

@@ -588,19 +588,25 @@ fn inference_responses() {
             assert_head("POST /v1/responses (SSE)", &stream.head, SSE_HEAD);
             let mut stream = SseClient::from_raw(stream);
             timeout(crate::server::raw_tcp::wire_timeout().duration(), async {
-                assert_eq!(
-                    stream.next().await,
-                    Some(json!({"type":"response.output_text.delta","delta":"hello"})),
-                );
-                assert_eq!(
-                    stream.next().await,
-                    Some(json!({
+                for expected in [
+                    json!({"type":"response.output_text.delta","delta":"hello"}),
+                    json!({
                         "type":"response.completed",
                         "response":{"id":"resp_fixture","status":"completed","output":[],
                                     "future":{"opaque":true}},
-                    })),
-                );
-                assert_eq!(stream.next().await, None);
+                    }),
+                ] {
+                    let name = expected["type"].as_str().unwrap();
+                    let frame = stream.next_frame().await.expect("Native SSE frame");
+                    assert!(
+                        frame.raw().starts_with(&format!("event: {name}\ndata: ")),
+                        "{frame:?}"
+                    );
+                    assert_eq!(frame.event(), Some(name), "{frame:?}");
+                    let event: Value = serde_json::from_str(&frame.data().unwrap()).unwrap();
+                    assert_eq!(event, expected);
+                }
+                assert!(stream.next_frame().await.is_none());
             })
             .await
             .expect("complete Native SSE stream");

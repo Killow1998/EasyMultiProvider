@@ -220,6 +220,7 @@ fn assert_missing_summary_output(stream: bool) {
             frame.raw().starts_with("event: response.failed\ndata: "),
             "{frame:?}"
         );
+        assert_eq!(frame.event(), Some("response.failed"), "{frame:?}");
         let data = frame.data().expect("response.failed SSE data");
         let failed: Value = serde_json::from_str(&data).expect("response.failed SSE JSON");
         assert_eq!(failed["type"], "response.failed");

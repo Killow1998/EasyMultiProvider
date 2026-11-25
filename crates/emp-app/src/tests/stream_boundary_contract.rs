@@ -569,6 +569,7 @@ fn stream_boundary_frames_and_activity_are_directly_asserted() {
             frame.raw().starts_with(&format!("event: {name}\ndata: ")),
             "{frame:?}"
         );
+        assert_eq!(frame.event(), Some(name), "{frame:?}");
         assert!(frame.raw().ends_with("\n\n"), "{frame:?}");
         let data = frame.data().expect("SSE data");
         let parsed: Value = serde_json::from_str(&data).expect("SSE JSON");

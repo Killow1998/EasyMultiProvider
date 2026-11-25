@@ -123,17 +123,18 @@ pub(super) fn next_activity_snapshot(
     loop {
         let frame = read_sse_frame(events);
         if frame.raw().starts_with("event: activity-updated\ndata: ") {
+            assert_eq!(frame.event(), Some("activity-updated"), "{frame:?}");
             let data = frame.data().expect("activity frame data");
             let snapshot: Value = serde_json::from_str(&data).expect("activity frame JSON");
             if matches(&snapshot) {
                 return snapshot;
             }
-        } else {
+        } else if !frame.is_comment_or_empty() {
             assert!(
-                frame.is_comment_or_empty()
-                    || frame.raw().starts_with("event: usage-updated\ndata: "),
+                frame.raw().starts_with("event: usage-updated\ndata: "),
                 "request activity emitted an unrelated management event: {frame:?}"
             );
+            assert_eq!(frame.event(), Some("usage-updated"), "{frame:?}");
         }
     }
 }

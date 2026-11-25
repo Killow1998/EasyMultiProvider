@@ -1,3 +1,6 @@
+//! Parses the LF and CRLF line endings emitted by EMP and its test fixtures.
+//! CR-only line endings are unsupported.
+
 use std::io::{self, BufRead};
 
 #[derive(Debug)]
@@ -50,7 +53,15 @@ pub fn read_frame(input: &mut impl BufRead) -> io::Result<Option<Frame>> {
                 ))
             };
         }
-        if matches!(&raw[line_start..], b"\n" | b"\r\n") {
+        let line = &raw[line_start..];
+        let content = line.strip_suffix(b"\r\n").unwrap_or(line);
+        if content.contains(&b'\r') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "不支持单独 CR 换行",
+            ));
+        }
+        if matches!(line, b"\n" | b"\r\n") {
             return String::from_utf8(raw)
                 .map(|raw| Some(Frame(raw)))
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
@@ -116,6 +127,21 @@ mod tests {
         assert_eq!(comment.event(), None);
         assert_eq!(comment.data(), None);
         assert!(comment.is_comment_or_empty());
+    }
+
+    #[test]
+    fn last_event_field_wins() {
+        let frame = frame("event: response.failed\ndata: {}\nevent: response.completed\n\n");
+        assert_eq!(frame.event(), Some("response.completed"));
+    }
+
+    #[test]
+    fn rejects_standalone_cr() {
+        for mut input in [b"data: {}\r\r".as_slice(), b"data: {}\revent: name\n\n"] {
+            let error = read_frame(&mut input).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(error.to_string(), "不支持单独 CR 换行");
+        }
     }
 
     #[test]
