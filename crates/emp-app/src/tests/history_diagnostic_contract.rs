@@ -207,22 +207,23 @@ fn assert_missing_summary_output(stream: bool) {
     if stream {
         body["stream"] = json!(true);
     }
-    let send = if stream { post_stream } else { post };
-    let response = send(
-        &server,
-        "/v1/responses",
-        &serde_json::to_vec(&body).unwrap(),
-        &[&session_header(&server)],
-    );
+    let body = serde_json::to_vec(&body).unwrap();
+    let session = session_header(&server);
     if stream {
-        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-        assert!(
-            response
-                .lines()
-                .any(|line| line == "event: response.failed"),
-            "{response}"
-        );
+        let deadline = Deadline::after(response_timeout());
+        let stream = open_post_stream(&server, "/v1/responses", &body, &[&session]);
+        let (head, mut reader) = read_sse_head(BufReader::new(deadline.io(stream)), &deadline);
+        assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
+        let frame = read_sse_frame(&mut reader);
+        let (event, data) = frame
+            .strip_prefix("event: ")
+            .and_then(|frame| frame.split_once("\ndata: "))
+            .unwrap_or_else(|| panic!("expected SSE event and data lines: {frame:?}"));
+        assert_eq!(event, "response.failed");
+        let failed: Value = serde_json::from_str(data).expect("response.failed SSE JSON");
+        assert_eq!(failed["type"], "response.failed");
     } else {
+        let response = post(&server, "/v1/responses", &body, &[&session]);
         assert!(response.starts_with("HTTP/1.1 409"), "{response}");
         let body: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
         assert_eq!(body["error"]["reason"], "summary_output_missing");
