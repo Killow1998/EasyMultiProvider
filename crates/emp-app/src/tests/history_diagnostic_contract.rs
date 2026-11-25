@@ -89,6 +89,9 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
             let response: Value =
                 serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap();
             assert_eq!(response["error"]["code"], "history_reconstruction_failed");
+            assert_eq!(response["error"]["origin"], "emp");
+            assert_eq!(response.as_object().unwrap().len(), 1);
+            assert!(response["error"].get("type").is_none(), "{response}");
             count += 1;
             assert_failure(
                 &finished(root.path(), count),

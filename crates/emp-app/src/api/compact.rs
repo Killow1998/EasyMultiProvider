@@ -1,20 +1,14 @@
-use crate::api::failure_response::request_router_error_response;
-use crate::api::failure_response::route_resolution_response;
-use crate::api::history_response::destination_error_response;
-use crate::api::history_response::history_http_error;
+use crate::api::history_response::{PreparationOutput, prepare_http_error};
 use crate::app::ServerState;
 use crate::http::request::Request;
+use crate::proxy::workflow::{self, ContextPreparation};
 use crate::server::http::stream::BodyOutput;
 use crate::server::http::{error::HttpReply, inference::InferenceOutcome};
 use crate::services::compaction::external_compaction_response;
-use crate::services::history::prepare_destination_context;
-use crate::services::history::prepare_history;
 use crate::services::native;
 use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::providers::save_learned_protocol;
-use crate::services::request_preparation::{
-    PreparedRequest, RequestOperation, RequestPreparationError,
-};
+use crate::services::request_preparation::{PreparedRequest, RequestOperation};
 use crate::util::projection_ids;
 use emp_state::{config::LearnedProtocol, observed_at_now};
 
@@ -47,57 +41,28 @@ pub(crate) fn execute(
     let PreparedRequest {
         config,
         route,
-        mut body,
-    } = match crate::services::request_preparation::prepare_request(
+        body,
+    } = match workflow::resolve(
         state,
         body,
         RequestOperation::Compact,
         &incoming,
+        observation,
     ) {
         Ok(prepared) => prepared,
-        Err(RequestPreparationError::ModelRequired) => {
-            return InferenceOutcome::Buffered(request_router_error_response(
-                400,
-                "request.model is required",
-            ));
-        }
-        Err(RequestPreparationError::Route(error)) => {
-            return InferenceOutcome::Buffered(route_resolution_response(error));
-        }
-        Err(RequestPreparationError::TeamAccess(error)) => {
-            return InferenceOutcome::Buffered(super::native_response::error_reply(
-                error.public_error(state),
-            ));
-        }
-        Err(RequestPreparationError::ConfigurationUnavailable) => {
-            return InferenceOutcome::Buffered(HttpReply::error(
-                500,
-                "configuration is unavailable",
-                None,
-            ));
-        }
-        Err(_) => {
-            return InferenceOutcome::Buffered(HttpReply::error(
-                500,
-                "internal server error",
-                None,
-            ));
+        Err(error) => {
+            return prepare_http_error(state, error, observation, PreparationOutput::Compact);
         }
     };
-    observation.selected(&route);
-    observation.phase(Phase::PrepareHistory);
-    body = match prepare_history(state, &route, body, &incoming) {
+    let body = match ContextPreparation::begin(state, &route, &incoming, observation).prepare(
+        body,
+        observation,
+        || downstream.disconnect().ok(),
+    ) {
         Ok(body) => body,
-        Err(error) => return InferenceOutcome::Buffered(history_http_error(&error, observation)),
-    };
-    observation.phase(Phase::PrepareDestination);
-    let destination_context = {
-        let mut monitor = downstream.disconnect().ok();
-        prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
-    };
-    body = match destination_context {
-        Ok(body) => body,
-        Err(error) => return destination_error_response(error, observation).into(),
+        Err(error) => {
+            return prepare_http_error(state, error, observation, PreparationOutput::Compact);
+        }
     };
     observation.phase(Phase::Execute);
     if route.dialect == emp_domain::Dialect::CodexNative {

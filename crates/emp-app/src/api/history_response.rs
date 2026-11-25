@@ -1,11 +1,95 @@
-use crate::api::failure_response::{route_resolution_response, router_error_reply};
+use crate::api::failure_response::{
+    request_router_error_response, route_resolution_response, router_error_reply,
+};
+use crate::api::streaming::ObservedSse;
+use crate::app::ServerState;
+use crate::proxy::workflow::PrepareFailure;
 use crate::server::http::error::HttpReply;
+use crate::server::http::{inference::InferenceOutcome, stream::BodyOutput};
 use crate::services::compaction::{CompactionError, SummaryExecutionError};
+use crate::services::events::sse_frame;
 use crate::services::history::DestinationPrepareError;
 use crate::services::observation::request::RequestObservation;
+use crate::services::request_preparation::RequestPreparationError;
 use crate::util::random_hex;
 use emp_context::HistoryError;
 use serde_json::Value;
+use std::collections::BTreeMap;
+
+pub(super) enum PreparationOutput<'a, 'connection> {
+    Compact,
+    Responses,
+    Sse(
+        &'a mut BodyOutput<'connection>,
+        &'a BTreeMap<String, String>,
+    ),
+}
+
+pub(super) fn prepare_http_error(
+    state: &ServerState,
+    error: PrepareFailure<'_>,
+    observation: &mut RequestObservation,
+    output: PreparationOutput<'_, '_>,
+) -> InferenceOutcome {
+    let (history, at_destination) = match error {
+        PrepareFailure::Request(error) => {
+            let reply = match error {
+                RequestPreparationError::ModelRequired => {
+                    request_router_error_response(400, "request.model is required")
+                }
+                RequestPreparationError::Route(error) => route_resolution_response(error),
+                RequestPreparationError::TeamAccess(error) => {
+                    super::native_response::error_reply(error.public_error(state))
+                }
+                RequestPreparationError::MemoryUnavailable(reason)
+                    if !matches!(output, PreparationOutput::Compact) =>
+                {
+                    request_router_error_response(
+                        503,
+                        crate::services::memory_routing::error_message(reason),
+                    )
+                }
+                RequestPreparationError::ConfigurationUnavailable
+                    if matches!(output, PreparationOutput::Compact) =>
+                {
+                    HttpReply::error(500, "configuration is unavailable", None)
+                }
+                RequestPreparationError::ConfigurationUnavailable
+                | RequestPreparationError::ModelSnapshotTooLarge
+                | RequestPreparationError::MemoryUnavailable(_) => {
+                    HttpReply::error(500, "internal server error", None)
+                }
+            };
+            return reply.into();
+        }
+        PrepareFailure::History(error) => (error, false),
+        PrepareFailure::Destination(DestinationPrepareError::History(reason), _)
+            if matches!(output, PreparationOutput::Sse(..)) =>
+        {
+            (HistoryError::new(reason), true)
+        }
+        PrepareFailure::Destination(DestinationPrepareError::Disconnected, _)
+            if !matches!(output, PreparationOutput::Compact) =>
+        {
+            return InferenceOutcome::Streamed;
+        }
+        PrepareFailure::Destination(error, _) => {
+            return destination_error_response(error, observation).into();
+        }
+    };
+    let PreparationOutput::Sse(downstream, headers) = output else {
+        return history_http_error(&history, observation).into();
+    };
+    let failed = history_stream_error(&history, observation);
+    if let Ok(frame) = sse_frame("response.failed", &failed) {
+        let mut downstream = ObservedSse::new(downstream, observation, headers);
+        let _ = downstream.head();
+        let _ = downstream.frames(&[frame], "response.failed");
+    } else if !at_destination {
+        return HttpReply::error(500, "internal server error", None).into();
+    }
+    InferenceOutcome::Streamed
+}
 
 fn history_error_detail(error: &HistoryError) -> Value {
     let diagnostic = error.diagnostic();
@@ -51,7 +135,7 @@ pub(crate) fn history_stream_error(
     })
 }
 
-pub(crate) fn destination_error_response(
+fn destination_error_response(
     error: DestinationPrepareError,
     observation: &mut RequestObservation,
 ) -> Option<HttpReply> {

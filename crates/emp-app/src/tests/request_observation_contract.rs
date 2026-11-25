@@ -119,6 +119,17 @@ fn chat_answer() -> Value {
         "usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})
 }
 
+fn request_phases<'a>(records: &'a [Value], request_id: &Value) -> Vec<&'a str> {
+    records
+        .iter()
+        .filter(|record| {
+            record["event"] == "request_phase_started"
+                && record["fields"]["request_id"] == *request_id
+        })
+        .map(|record| record["fields"]["phase"].as_str().unwrap())
+        .collect()
+}
+
 #[test]
 fn http_and_compact_use_one_id_from_entry_through_dispatch_and_write() {
     for path in ["/v1/responses", "/v1/responses/compact"] {
@@ -190,6 +201,19 @@ fn http_and_compact_use_one_id_from_entry_through_dispatch_and_write() {
         assert_eq!(done["fields"]["requested_effort"], "medium");
         assert_eq!(done["fields"]["provider_id"], "demo");
         assert_eq!(done["fields"]["last_phase"], "execute_and_relay");
+        let mut expected_phases = vec!["read_body", "resolve_route"];
+        if path == "/v1/responses" {
+            expected_phases.push("validate_input");
+        }
+        expected_phases.extend([
+            "prepare_history",
+            "prepare_destination",
+            "execute_and_relay",
+        ]);
+        assert_eq!(
+            request_phases(&records, &done["fields"]["request_id"]),
+            expected_phases
+        );
         let outcome = records
             .iter()
             .find(|r| r["event"] == "route_observation")
@@ -388,8 +412,24 @@ fn websocket_rejection_and_success_have_separate_turn_ids_on_the_same_connection
         .send_json(&json!({"type":"private-invalid-type"}))
         .unwrap();
     assert_eq!(socket.receive_json().unwrap().unwrap()["type"], "error");
-    socket.send_json(&json!({"type":"response.create","model":"demo/model","input":"private-question","reasoning":{"effort":"low"}})).unwrap();
     let deadline = Deadline::after(test_timeout(Duration::from_secs(300)));
+    socket
+        .send_json(&json!({"type":"response.create","input":"private-question"}))
+        .unwrap();
+    assert_eq!(
+        websocket_event_before(&mut socket, &deadline),
+        json!({
+            "type":"error",
+            "status":400,
+            "error":{
+                "code":"invalid_request",
+                "origin":"emp",
+                "message":"EMP 请求处理出错\n[EMP] request.model is required",
+                "summary":"EMP 请求处理出错"
+            }
+        })
+    );
+    socket.send_json(&json!({"type":"response.create","model":"demo/model","input":"private-question","reasoning":{"effort":"low"}})).unwrap();
     loop {
         let event = websocket_event_before(&mut socket, &deadline);
         assert!(
@@ -404,7 +444,7 @@ fn websocket_rejection_and_success_have_separate_turn_ids_on_the_same_connection
         }
     }
     let (_, sent_headers, _) = upstream.observed();
-    let records = finished(root.path(), 2);
+    let records = finished(root.path(), 3);
     let done: Vec<_> = records
         .iter()
         .filter(|r| r["event"] == "request_finished")
@@ -419,11 +459,27 @@ fn websocket_rejection_and_success_have_separate_turn_ids_on_the_same_connection
     );
     assert!(done[0]["fields"]["connection_id"].as_str().is_some());
     assert_eq!(done[0]["fields"]["downstream_terminal"], "error");
+    assert_eq!(done[1]["fields"]["downstream_terminal"], "error");
     assert_eq!(
-        done[1]["fields"]["request_id"],
+        request_phases(&records, &done[1]["fields"]["request_id"]),
+        ["read_body", "resolve_route"]
+    );
+    assert_eq!(
+        done[2]["fields"]["request_id"],
         sent_headers["x-emp-request-id"]
     );
-    assert_eq!(done[1]["fields"]["downstream_terminal"], "completed");
+    assert_eq!(done[2]["fields"]["downstream_terminal"], "completed");
+    assert_eq!(
+        request_phases(&records, &done[2]["fields"]["request_id"]),
+        [
+            "read_body",
+            "resolve_route",
+            "validate_input",
+            "prepare_history",
+            "prepare_destination",
+            "execute_and_relay",
+        ]
+    );
     assert_eq!(
         records
             .iter()

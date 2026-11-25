@@ -5,6 +5,9 @@ mod error;
 mod http;
 mod lifecycle;
 pub mod modules;
+mod proxy {
+    pub(crate) mod workflow;
+}
 mod server;
 mod services;
 mod startup_recovery;

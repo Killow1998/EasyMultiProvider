@@ -1,28 +1,20 @@
-use crate::api::failure_response::request_router_error_response;
-use crate::api::failure_response::route_resolution_response;
-use crate::api::history_response::destination_error_response;
-use crate::api::history_response::history_http_error;
-use crate::api::history_response::history_stream_error;
+use crate::api::history_response::{PreparationOutput, prepare_http_error};
 use crate::api::streaming::ObservedSse;
 use crate::api::streaming::serve_external_stream;
 use crate::api::streaming::serve_generated_response;
 use crate::api::streaming::serve_native_stream;
 use crate::app::ServerState;
 use crate::http::request::Request;
+use crate::proxy::workflow::{self, ContextPreparation};
 use crate::server::http::stream::BodyOutput;
 use crate::server::http::{error::HttpReply, inference::InferenceOutcome};
 use crate::services::compaction::external_compaction_response;
 use crate::services::compaction::has_trailing_compaction_trigger;
-use crate::services::events::sse_frame;
-use crate::services::history::DestinationPrepareError;
-use crate::services::history::prepare_destination_context;
-use crate::services::history::prepare_history;
 use crate::services::native;
 use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::providers::save_learned_protocol;
-use crate::services::request_preparation::{PreparedRequest, RequestPreparationError};
+use crate::services::request_preparation::{PreparedRequest, RequestOperation};
 use crate::util::projection_ids;
-use emp_context::HistoryError;
 use emp_domain::json_truthy;
 use emp_state::{config::LearnedProtocol, observed_at_now};
 
@@ -56,38 +48,19 @@ pub(crate) fn execute<'a>(
     let PreparedRequest {
         config,
         route,
-        mut body,
-    } = match crate::services::memory_routing::prepare(state, body, &incoming) {
+        body,
+    } = match workflow::resolve(
+        state,
+        body,
+        RequestOperation::Responses,
+        &incoming,
+        observation,
+    ) {
         Ok(prepared) => prepared,
-        Err(RequestPreparationError::ModelRequired) => {
-            return InferenceOutcome::Buffered(request_router_error_response(
-                400,
-                "request.model is required",
-            ));
-        }
-        Err(RequestPreparationError::Route(error)) => {
-            return InferenceOutcome::Buffered(route_resolution_response(error));
-        }
-        Err(RequestPreparationError::TeamAccess(error)) => {
-            return InferenceOutcome::Buffered(super::native_response::error_reply(
-                error.public_error(state),
-            ));
-        }
-        Err(RequestPreparationError::MemoryUnavailable(reason)) => {
-            return InferenceOutcome::Buffered(request_router_error_response(
-                503,
-                crate::services::memory_routing::error_message(reason),
-            ));
-        }
-        Err(_) => {
-            return InferenceOutcome::Buffered(HttpReply::error(
-                500,
-                "internal server error",
-                None,
-            ));
+        Err(error) => {
+            return prepare_http_error(state, error, observation, PreparationOutput::Responses);
         }
     };
-    observation.selected(&route);
     state
         .backend
         .claude_turns
@@ -109,49 +82,19 @@ pub(crate) fn execute<'a>(
         }
     };
     let stream_requested = body.get("stream").is_some_and(json_truthy);
-    observation.phase(Phase::PrepareHistory);
-    body = match prepare_history(state, &route, body, &incoming) {
+    let body = match ContextPreparation::begin(state, &route, &incoming, observation).prepare(
+        body,
+        observation,
+        || downstream.disconnect().ok(),
+    ) {
         Ok(body) => body,
-        Err(error) if stream_requested => {
-            let failed = history_stream_error(&error, observation);
-            let frame = match sse_frame("response.failed", &failed) {
-                Ok(frame) => frame,
-                Err(_) => {
-                    return InferenceOutcome::Buffered(HttpReply::error(
-                        500,
-                        "internal server error",
-                        None,
-                    ));
-                }
+        Err(error) => {
+            let output = if stream_requested {
+                PreparationOutput::Sse(downstream, &incoming)
+            } else {
+                PreparationOutput::Responses
             };
-            let mut downstream = ObservedSse::new(downstream, observation, &incoming);
-            let _ = downstream.head();
-            let _ = downstream.frames(&[frame], "response.failed");
-            return InferenceOutcome::Streamed;
-        }
-        Err(error) => {
-            return InferenceOutcome::Buffered(history_http_error(&error, observation));
-        }
-    };
-    observation.phase(Phase::PrepareDestination);
-    let destination_context = {
-        let mut monitor = downstream.disconnect().ok();
-        prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
-    };
-    body = match destination_context {
-        Ok(body) => body,
-        Err(DestinationPrepareError::History(reason)) if stream_requested => {
-            let failed = history_stream_error(&HistoryError::new(reason), observation);
-            if let Ok(frame) = sse_frame("response.failed", &failed) {
-                let mut downstream = ObservedSse::new(downstream, observation, &incoming);
-                let _ = downstream.head();
-                let _ = downstream.frames(&[frame], "response.failed");
-            }
-            return InferenceOutcome::Streamed;
-        }
-        Err(DestinationPrepareError::Disconnected) => return InferenceOutcome::Streamed,
-        Err(error) => {
-            return destination_error_response(error, observation).into();
+            return prepare_http_error(state, error, observation, output);
         }
     };
     observation.phase(Phase::Execute);

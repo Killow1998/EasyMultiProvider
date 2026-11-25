@@ -3,13 +3,14 @@ use crate::api::failure_response::websocket_router_error;
 use crate::api::history_response::history_stream_error;
 use crate::app::ServerState;
 use crate::http::request::Request;
+use crate::proxy::workflow::{self, ContextPreparation, PrepareFailure};
 use crate::server::http::error::HttpReply;
 use crate::services::catalog::response_catalog_etag;
 use crate::services::history::DestinationPrepareError;
-use crate::services::history::prepare_destination_context;
-use crate::services::history::prepare_history;
 use crate::services::observation::request::{Phase, RequestObservation};
-use crate::services::request_preparation::{PreparedRequest, RequestPreparationError};
+use crate::services::request_preparation::{
+    PreparedRequest, RequestOperation, RequestPreparationError,
+};
 use crate::util::projection_ids;
 use crate::util::random_hex;
 use emp_context::HistoryError;
@@ -424,59 +425,27 @@ async fn responses_turns(
             }
             continue;
         }
-        let (config, route, mut request_body) = match block_in_place(|| {
-            crate::services::memory_routing::prepare(state, request_body, &incoming)
+        let PreparedRequest {
+            config,
+            route,
+            body: request_body,
+        } = match block_in_place(|| {
+            workflow::resolve(
+                state,
+                request_body,
+                RequestOperation::Responses,
+                &incoming,
+                websocket.observation,
+            )
         }) {
-            Ok(PreparedRequest {
-                config,
-                route,
-                body: body @ Value::Object(_),
-            }) => (config, route, body),
-            Err(RequestPreparationError::ModelRequired) => {
-                let _ = websocket.send_json(&serde_json::json!({
-                    "type":"error", "status":400,
-                    "error":{"code":"invalid_request","origin":"emp","message":"[EMP] request.model is required"}
-                })).await;
-                continue;
-            }
-            Err(RequestPreparationError::Route(error)) => {
-                let _ = websocket.send_json(&serde_json::json!({
-                    "type":"error", "status":error.status(),
-                    "error":{"code":"router_error","origin":"emp","message":crate::services::error_origin::message("emp", &error.to_string())}
-                })).await;
-                continue;
-            }
-            Err(RequestPreparationError::MemoryUnavailable(reason)) => {
-                let _ = websocket
-                    .send_json(&emp_websocket_error(
-                        503,
-                        "memory_routing_unavailable",
-                        crate::services::memory_routing::error_message(reason),
-                    ))
-                    .await;
-                continue;
-            }
-            Err(RequestPreparationError::TeamAccess(denial)) => {
-                let error = denial.public_error(state);
-                let _ = websocket
-                    .send_json(&serde_json::json!({
-                        "type":"error", "status":error.status, "error":error.body["error"]
-                    }))
-                    .await;
-                continue;
-            }
-            Ok(_) | Err(_) => {
-                let _ = websocket
-                    .send_json(&emp_websocket_error(
-                        500,
-                        "internal_error",
-                        "internal server error",
-                    ))
-                    .await;
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if let Some(event) = prepare_websocket_error(state, error, websocket.observation) {
+                    let _ = websocket.send_json(&event).await;
+                }
                 continue;
             }
         };
-        websocket.observation.selected(&route);
         state
             .backend
             .claude_turns
@@ -510,7 +479,8 @@ async fn responses_turns(
             }
         };
         let request_headers = websocket.observation.headers(incoming.clone());
-        websocket.observation.phase(Phase::PrepareHistory);
+        let context =
+            ContextPreparation::begin(state, &route, &request_headers, websocket.observation);
         let request_scope = match emp_context::request_history_anchor(
             request_body.as_object().unwrap(),
             &request_headers,
@@ -543,108 +513,17 @@ async fn responses_turns(
                 .await;
             continue;
         }
-        request_body =
-            match block_in_place(|| prepare_history(state, &route, request_body, &request_headers))
-            {
-                Ok(body @ Value::Object(_)) => body,
-                Ok(_) => {
-                    let error = HistoryError::new("invalid_history_projection");
-                    let failed = history_stream_error(&error, websocket.observation);
-                    if websocket.send_json(&failed).await.is_err() {
-                        return;
-                    }
-                    continue;
-                }
-                Err(error) => {
-                    let failed = history_stream_error(&error, websocket.observation);
-                    if websocket.send_json(&failed).await.is_err() {
-                        return;
-                    }
-                    continue;
-                }
-            };
-        websocket.observation.phase(Phase::PrepareDestination);
-        let destination_context = if let Some(disconnect) = monitor {
-            disconnect
-                .watch(|monitor| {
-                    prepare_destination_context(
-                        state,
-                        &route,
-                        request_body,
-                        &request_headers,
-                        Some(monitor),
-                    )
-                })
-                .await
-        } else {
-            block_in_place(|| {
-                prepare_destination_context(state, &route, request_body, &request_headers, None)
-            })
-        };
-        request_body = match destination_context {
-            Ok(body @ Value::Object(_)) => body,
-            Ok(_) => {
-                let error = HistoryError::new("invalid_history_projection");
-                let failed = history_stream_error(&error, websocket.observation);
-                if websocket.send_json(&failed).await.is_err() {
+        let request_body = match context
+            .prepare_websocket(request_body, websocket.observation, monitor)
+            .await
+        {
+            Ok(body) => body,
+            Err(error) => {
+                let Some(event) = prepare_websocket_error(state, error, websocket.observation)
+                else {
                     return;
-                }
-                continue;
-            }
-            Err(DestinationPrepareError::Collaboration {
-                status,
-                code,
-                message,
-            }) => {
-                if websocket
-                    .send_json(&emp_websocket_error(status, code, message))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                continue;
-            }
-            Err(DestinationPrepareError::Router(error)) => {
-                if websocket
-                    .send_json(&websocket_router_error(&error))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                continue;
-            }
-            Err(DestinationPrepareError::ClaudeCli(error)) => {
-                if websocket
-                    .send_json(&crate::api::claude_response::websocket_value_for_route(
-                        &error, &route,
-                    ))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                continue;
-            }
-            Err(DestinationPrepareError::Disconnected) => return,
-            Err(DestinationPrepareError::History(reason)) => {
-                let failed =
-                    history_stream_error(&HistoryError::new(reason), websocket.observation);
-                if websocket.send_json(&failed).await.is_err() {
-                    return;
-                }
-                continue;
-            }
-            Err(DestinationPrepareError::Context(_)) => {
-                let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
-                let failed = native_stream_error_value(
-                    413,
-                    FailureClass::ContextLengthExceeded,
-                    Some("context_length_exceeded"),
-                    &id,
-                );
-                if websocket.send_json(&failed).await.is_err() {
+                };
+                if websocket.send_json(&event).await.is_err() {
                     return;
                 }
                 continue;
@@ -706,4 +585,59 @@ async fn responses_turns(
             return;
         }
     }
+}
+
+fn prepare_websocket_error(
+    state: &ServerState,
+    error: PrepareFailure<'_>,
+    observation: &mut RequestObservation,
+) -> Option<Value> {
+    Some(match error {
+        PrepareFailure::Request(error) => match error {
+            RequestPreparationError::ModelRequired => {
+                emp_websocket_error(400, "invalid_request", "request.model is required")
+            }
+            RequestPreparationError::Route(error) => {
+                emp_websocket_error(error.status(), "router_error", &error.to_string())
+            }
+            RequestPreparationError::MemoryUnavailable(reason) => emp_websocket_error(
+                503,
+                "memory_routing_unavailable",
+                crate::services::memory_routing::error_message(reason),
+            ),
+            RequestPreparationError::TeamAccess(denial) => {
+                let error = denial.public_error(state);
+                serde_json::json!({"type":"error", "status":error.status, "error":error.body["error"]})
+            }
+            RequestPreparationError::ConfigurationUnavailable
+            | RequestPreparationError::ModelSnapshotTooLarge => {
+                emp_websocket_error(500, "internal_error", "internal server error")
+            }
+        },
+        PrepareFailure::History(error) => history_stream_error(&error, observation),
+        PrepareFailure::Destination(error, route) => match error {
+            DestinationPrepareError::Collaboration {
+                status,
+                code,
+                message,
+            } => emp_websocket_error(status, code, message),
+            DestinationPrepareError::Router(error) => websocket_router_error(&error),
+            DestinationPrepareError::ClaudeCli(error) => {
+                crate::api::claude_response::websocket_value_for_route(&error, route)
+            }
+            DestinationPrepareError::Disconnected => return None,
+            DestinationPrepareError::History(reason) => {
+                history_stream_error(&HistoryError::new(reason), observation)
+            }
+            DestinationPrepareError::Context(_) => {
+                let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
+                native_stream_error_value(
+                    413,
+                    FailureClass::ContextLengthExceeded,
+                    Some("context_length_exceeded"),
+                    &id,
+                )
+            }
+        },
+    })
 }
