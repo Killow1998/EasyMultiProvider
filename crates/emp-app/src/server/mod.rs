@@ -231,10 +231,7 @@ impl Drop for ServerHandle {
     }
 }
 
-pub(crate) async fn serve_http(
-    listener: TcpListener,
-    state: Arc<ServerState>,
-) -> Result<(), ServeError> {
+async fn serve_http(listener: TcpListener, state: Arc<ServerState>) -> Result<(), ServeError> {
     let router = http_router(state.clone());
     serve(listener, router, state.lifecycle.clone(), Some(state)).await
 }

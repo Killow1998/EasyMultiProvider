@@ -72,6 +72,7 @@ impl ServerHandle {
                 },
             }),
         );
+        diagnostics.journal.flush_blocking();
         result
     }
 

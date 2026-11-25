@@ -1,4 +1,7 @@
-use crate::services::migration::{MigrationError, lan::Delivery};
+use crate::services::migration::{
+    MigrationError,
+    lan::{ClaimError, Delivery, SendResult},
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -180,25 +183,25 @@ pub(crate) fn serve(
                     if cancel.load(Ordering::Acquire) || Instant::now() >= expires {
                         break;
                     }
-                    if delivery.receiver.is_none() {
-                        delivery.receiver = Some((peer.ip(), nonce));
-                        delivery.status = "confirmation";
-                    }
-                    if delivery.receiver != Some((peer.ip(), nonce)) {
+                    if !delivery.bind_receiver(peer.ip(), nonce) {
                         let _ = stream.write_all(b"X");
                         continue;
                     }
-                    if !delivery.approved {
-                        let _ = stream.write_all(b"P");
-                        continue;
-                    }
-                    let Some(bundle) = delivery.bundle.take() else {
-                        break;
+                    let bundle = match delivery.claim_approved_bundle() {
+                        Ok(bundle) => bundle,
+                        Err(ClaimError::Pending) => {
+                            let _ = stream.write_all(b"P");
+                            continue;
+                        }
+                        Err(ClaimError::Taken) => break,
                     };
-                    delivery.status = "sending";
                     drop(delivery);
-                    let result = send_bundle(&mut stream, &bundle, &cancel, expires);
-                    shared.lock().unwrap().status = if result.is_ok() { "sent" } else { "failed" };
+                    let result = if send_bundle(&mut stream, &bundle, &cancel, expires).is_ok() {
+                        SendResult::Sent
+                    } else {
+                        SendResult::Failed
+                    };
+                    shared.lock().unwrap().record_send_result(result);
                     cancel.store(true, Ordering::Release);
                     return;
                 }
@@ -212,9 +215,10 @@ pub(crate) fn serve(
                 Err(_) => break,
             }
         }
-        let mut delivery = shared.lock().unwrap();
-        delivery.bundle = None;
-        delivery.status = "expired";
+        shared
+            .lock()
+            .unwrap()
+            .record_send_result(SendResult::Expired);
     })
 }
 

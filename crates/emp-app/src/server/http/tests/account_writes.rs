@@ -284,7 +284,7 @@ fn account_writes_persist_configuration_and_credentials() {
         assert_eq!(models, fixture.read(ACCOUNT_READ).await);
         assert_eq!(commits.get(), 1, "account catalog commits");
         assert_eq!(
-            crate::tests::live_journal(fixture.directory.path()).iter().filter(|record| {
+            fixture.flushed_journal().await.iter().filter(|record| {
                 record["event"] == "operation_finished"
                     && record["fields"]["operation"] == "subscription_catalog_refresh"
                     && record["fields"]["checks"]["account_catalog_persisted"] == true

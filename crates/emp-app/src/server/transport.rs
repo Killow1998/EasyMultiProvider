@@ -89,9 +89,24 @@ impl HttpListener {
         Ok((Self(listener), address))
     }
 
-    pub(crate) fn into_async(self) -> io::Result<tokio::net::TcpListener> {
+    pub(crate) fn start(
+        self,
+        state: Arc<crate::app::ServerState>,
+    ) -> io::Result<std::thread::JoinHandle<Result<(), super::ServeError>>> {
         self.0.set_nonblocking(true)?;
-        tokio::net::TcpListener::from_std(self.0)
+        let listener = {
+            let _entered = state.backend.transport.runtime.enter();
+            tokio::net::TcpListener::from_std(self.0)?
+        };
+        std::thread::Builder::new()
+            .name("emp-http".into())
+            .spawn(move || {
+                state
+                    .backend
+                    .transport
+                    .runtime
+                    .block_on(super::serve_http(listener, state.clone()))
+            })
     }
 }
 

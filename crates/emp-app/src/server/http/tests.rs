@@ -362,6 +362,15 @@ impl Fixture {
         self.server.shutdown().unwrap();
     }
 
+    #[cfg(unix)]
+    async fn flushed_journal(&self) -> Vec<Value> {
+        let root = self.directory.path().to_owned();
+        let state = self.server.state.clone();
+        tokio::task::spawn_blocking(move || crate::tests::flushed_journal(&root, &state))
+            .await
+            .unwrap()
+    }
+
     fn router(&self) -> Router {
         let management_calls = self.upstream.clone();
         let proxy_calls = self.upstream.clone();

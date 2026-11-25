@@ -1,5 +1,5 @@
 //! The real management endpoints retain their contracts and expose partial work.
-use super::internal_events_contract::{final_journal, live_journal};
+use super::internal_events_contract::{final_journal, flushed_journal};
 use super::*;
 use crate::services::observation::diagnostics::Diagnostics;
 
@@ -176,7 +176,10 @@ fn configuration_application_is_not_runtime_or_routing_verification() {
     let status: Value = serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(status["configuration"]["state"], "emp_applied");
     assert_ne!(status["runtime"]["state"], "catalog_loaded");
-    let done = completed(&live_journal(root.path()), "integration_enable");
+    let done = completed(
+        &flushed_journal(root.path(), &server.state),
+        "integration_enable",
+    );
     assert_eq!(done["outcome"], "completed");
     assert_eq!(done["checks"]["saved_configuration_matches_target"], true);
     assert!(done["checks"]["runtime_catalog_matches_target"].is_null());

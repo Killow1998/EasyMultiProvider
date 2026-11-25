@@ -5,13 +5,23 @@ pub(crate) fn live_journal(root: &Path) -> Vec<Value> {
     read_journal(root, true)
 }
 
+pub(crate) fn flushed_journal(root: &Path, state: &crate::app::ServerState) -> Vec<Value> {
+    state.backend.diagnostics.journal.flush_blocking();
+    live_journal(root)
+}
+
 pub(super) fn final_journal(root: &Path) -> Vec<Value> {
     read_journal(root, false)
 }
 
 fn read_journal(root: &Path, complete_lines_only: bool) -> Vec<Value> {
-    std::fs::read_dir(root.join("state/logs"))
-        .unwrap()
+    let entries = match std::fs::read_dir(root.join("state/logs")) {
+        Err(error) if complete_lines_only && error.kind() == std::io::ErrorKind::NotFound => {
+            return Vec::new();
+        }
+        result => result.unwrap(),
+    };
+    entries
         .flat_map(|entry| {
             let path = entry.unwrap().path();
             let bytes = std::fs::read(&path).unwrap();

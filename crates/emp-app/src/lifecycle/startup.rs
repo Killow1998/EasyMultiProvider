@@ -256,6 +256,7 @@ impl ServerHandle {
                     },
                 }),
             );
+            diagnostics.journal.flush_blocking();
         }
         result
     }
@@ -383,22 +384,7 @@ impl ServerHandle {
             _service_owner: service_owner,
         };
         let started = (|| {
-            let listener = {
-                let _entered = handle.state.backend.transport.runtime.enter();
-                listener.into_async()?
-            };
-            let state = handle.state.clone();
-            handle.listener = Some(
-                std::thread::Builder::new()
-                    .name("emp-http".to_owned())
-                    .spawn(move || {
-                        state
-                            .backend
-                            .transport
-                            .runtime
-                            .block_on(crate::server::serve_http(listener, state.clone()))
-                    })?,
-            );
+            handle.listener = Some(listener.start(handle.state.clone())?);
             if enable_catalog_refresh_worker {
                 handle.spawn_worker("emp-catalog-refresh", |state| {
                     crate::services::account_catalog::run_refresh_worker(&state);

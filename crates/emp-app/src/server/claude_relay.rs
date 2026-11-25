@@ -89,7 +89,7 @@ impl RelayListener {
         Ok((Self(listener), port))
     }
 
-    pub(crate) fn accept(&self) -> Result<Option<RelayStream>, ClaudeCliError> {
+    pub(crate) fn accept_peer(&self) -> Result<Option<RelayStream>, ClaudeCliError> {
         match self.0.accept() {
             Ok((stream, _)) => Ok(Some(RelayStream(stream))),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),

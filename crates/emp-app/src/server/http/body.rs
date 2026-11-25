@@ -187,7 +187,14 @@ impl JsonBody {
             .to_owned();
         let raw = raw.clone();
         let mut body = Vec::new();
-        read_json_body(request.into_body(), &raw, &mut config, &mut body).await?;
+        read_json_body(
+            request.into_body(),
+            &raw,
+            &mut config,
+            &mut body,
+            Vec::try_reserve_exact,
+        )
+        .await?;
         let value = run_blocking(move || decode_json(body, &encoding, config))
             .await
             .map_err(|_| EntryError::internal())??;
@@ -200,11 +207,10 @@ async fn read_json_body(
     raw: &crate::server::head::RawRequestHead,
     config: &mut JsonRead,
     bytes: &mut Vec<u8>,
+    reserve: impl FnOnce(&mut Vec<u8>, usize) -> Result<(), std::collections::TryReserveError>,
 ) -> Result<(), BodyError> {
     let length = config.length;
-    bytes
-        .try_reserve_exact(length)
-        .map_err(|_| allocation_capacity_error(length))?;
+    reserve(bytes, length).map_err(|_| allocation_capacity_error(length))?;
     raw.allow_body();
     read_body(body, length, bytes, |bytes, chunk| {
         let projected = bytes.len() + chunk.len();
@@ -292,9 +298,11 @@ async fn read_body<E: From<BodyError>>(
 #[cfg(test)]
 mod body_capacity_tests {
     use super::*;
-    use crate::server::head::{GuardedHead, RawRequestHead};
+    use crate::server::{
+        head::{GuardedHead, RawRequestHead},
+        http::tests::json_body,
+    };
     use emp_test_support::test_timeout;
-    use emp_transport::RequestCapacityReason;
 
     async fn json_head(length: usize) -> RawRequestHead {
         let head = format!(
@@ -323,6 +331,7 @@ mod body_capacity_tests {
             &raw,
             &mut config,
             &mut body,
+            Vec::try_reserve_exact,
         )
         .await;
         assert!(matches!(result, Err(BodyError::Invalid(_))));
@@ -332,7 +341,7 @@ mod body_capacity_tests {
 
     #[tokio::test]
     async fn allocation_failure_maps_to_safe_memory_capacity_error() {
-        let length = usize::MAX;
+        let length = isize::MAX as usize + 2;
         let raw = json_head(length).await;
         let mut config = JsonRead {
             length,
@@ -340,12 +349,48 @@ mod body_capacity_tests {
             budget: None,
         };
         let mut bytes = Vec::new();
-        let result = read_json_body(axum::body::Body::empty(), &raw, &mut config, &mut bytes).await;
-        let Err(BodyError::Capacity(error)) = result else {
+        let result = read_json_body(
+            axum::body::Body::empty(),
+            &raw,
+            &mut config,
+            &mut bytes,
+            Vec::try_reserve_exact,
+        )
+        .await;
+        assert_allocation_error(result, isize::MAX as usize + 1 + 16 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn ordinary_json_allocation_failure_reports_a_rounded_limit() {
+        let length = 1024;
+        let raw = json_head(length).await;
+        let limits =
+            RequestLimits::new(RequestLimitsConfig::default(), || None, || 0, "body-test").unwrap();
+        let mut config = prepare_json(raw.request(), &limits)
+            .ok()
+            .expect("valid declared length");
+        let result = read_json_body(
+            axum::body::Body::empty(),
+            &raw,
+            &mut config,
+            &mut Vec::new(),
+            |bytes, requested| {
+                assert_eq!(requested, length);
+                bytes.try_reserve_exact(usize::MAX)
+            },
+        )
+        .await;
+        assert_allocation_error(result, 16 * 1024 * 1024);
+    }
+
+    fn assert_allocation_error(result: Result<(), BodyError>, limit: usize) {
+        let Err(error @ BodyError::Capacity(_)) = result else {
             panic!("allocation failure must map to capacity error");
         };
-        assert_eq!(error.reason, RequestCapacityReason::MemoryLimit);
-        assert_eq!(error.http_status(), 503);
-        assert_eq!(error.limit, length);
+        let reply = EntryError::from(error).reply().encode();
+        assert!(reply.starts_with(b"HTTP/1.1 503"));
+        let detail = &json_body(&reply)["error"];
+        assert_eq!(detail["reason"], "memory_limit");
+        assert_eq!(detail["limit_bytes"], limit);
     }
 }

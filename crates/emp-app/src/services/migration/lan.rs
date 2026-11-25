@@ -1,11 +1,13 @@
 //! One-use LAN delivery of an existing encrypted migration package. The code
 //! carries the endpoint and secret; the wire carries a proof, never that secret.
 mod network;
+#[cfg(test)]
+mod tests;
 use super::{ExportOptions, MigrationError};
 use crate::app::ServerState;
 use crate::server::lan as wire;
 use serde_json::{Value, json};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -33,11 +35,53 @@ struct Sender {
     worker: Option<JoinHandle<()>>,
 }
 pub(crate) struct Delivery {
-    pub(crate) status: &'static str,
-    pub(crate) receiver: Option<(std::net::IpAddr, [u8; 32])>,
-    pub(crate) approved: bool,
-    pub(crate) bundle: Option<Vec<u8>>,
+    status: &'static str,
+    receiver: Option<(IpAddr, [u8; 32])>,
+    approved: bool,
+    bundle: Option<Vec<u8>>,
 }
+
+pub(crate) enum ClaimError {
+    Pending,
+    Taken,
+}
+
+pub(crate) enum SendResult {
+    Sent,
+    Failed,
+    Expired,
+}
+
+impl Delivery {
+    pub(crate) fn bind_receiver(&mut self, ip: IpAddr, nonce: [u8; 32]) -> bool {
+        if self.receiver.is_none() {
+            self.receiver = Some((ip, nonce));
+            self.status = "confirmation";
+        }
+        self.receiver == Some((ip, nonce))
+    }
+
+    pub(crate) fn claim_approved_bundle(&mut self) -> Result<Vec<u8>, ClaimError> {
+        if !self.approved {
+            return Err(ClaimError::Pending);
+        }
+        let bundle = self.bundle.take().ok_or(ClaimError::Taken)?;
+        self.status = "sending";
+        Ok(bundle)
+    }
+
+    pub(crate) fn record_send_result(&mut self, result: SendResult) {
+        self.status = match result {
+            SendResult::Sent => "sent",
+            SendResult::Failed => "failed",
+            SendResult::Expired => {
+                self.bundle = None;
+                "expired"
+            }
+        };
+    }
+}
+
 impl Drop for Sender {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);

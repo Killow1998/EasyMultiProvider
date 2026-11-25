@@ -8,6 +8,9 @@ fn model_checks_do_not_evict_conversation_samples_after_restart() {
     let diagnostics = Diagnostics::new(root.path());
     diagnostics.record(&json!({"route":"responses", "request_id":"0123456789abcdef"}));
     for index in 0..600 {
+        if index == 300 {
+            diagnostics.journal.flush_blocking();
+        }
         let probe = json!({"route":"model_test", "operation":"model_test",
             "request_id":format!("{index:016x}"), "outcome":"completed"});
         diagnostics.record(&probe);

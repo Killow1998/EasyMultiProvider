@@ -73,7 +73,7 @@ mod gateway_contract;
 mod history_diagnostic_contract;
 mod integration_sideband_contract;
 mod internal_events_contract;
-pub(crate) use internal_events_contract::live_journal;
+pub(crate) use internal_events_contract::{flushed_journal, live_journal};
 mod management_http_contract;
 mod management_operation_contract;
 mod memory_routing_contract;

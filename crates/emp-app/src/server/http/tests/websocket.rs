@@ -62,18 +62,22 @@ fn slow_model_journal_leaves_other_connections_responsive_and_cancellable() {
         let state = &fixture.server.state;
         let port = fixture.port();
         let session = fixture.session();
-        for transport in ["responses", "compact", "websocket"] {
+        for (transport, event) in [
+            ("websocket", "request_phase_started"),
+            ("responses", "request_started"),
+            ("compact", "request_started"),
+        ] {
             let (entered, writing) = tokio::sync::oneshot::channel();
             let (resume, release) = tokio::sync::oneshot::channel();
             state
                 .backend
                 .diagnostics
                 .journal
-                .gate_next_event("request_started", move || {
+                .gate_next_event(event, move || {
                     let _ = entered.send(());
                     let _ = release.blocking_recv();
                 });
-            let socket = if transport == "websocket" {
+            let (socket, mut websocket) = if transport == "websocket" {
                 let mut client = RawClient::request(
                     address,
                     &upgrade(port, "/v1/responses", &session, &[], &[]),
@@ -85,7 +89,7 @@ fn slow_model_journal_leaves_other_connections_responsive_and_cancellable() {
                     .write_all(&websocket_frame(0x81, MASK, b"{}"))
                     .await
                     .unwrap();
-                client.io
+                (None, Some(client))
             } else {
                 let path = if transport == "compact" {
                     "/v1/responses/compact"
@@ -97,7 +101,7 @@ fn slow_model_journal_leaves_other_connections_responsive_and_cancellable() {
                     .write_all(&json_request(port, path, &[&session], b"{}"))
                     .await
                     .unwrap();
-                client
+                (Some(client), None)
             };
             timeout(wire_timeout(), writing).await.unwrap().unwrap();
             let health = request(port, "GET", "/healthz", &[], b"");
@@ -116,6 +120,10 @@ fn slow_model_journal_leaves_other_connections_responsive_and_cancellable() {
             })
             .await
             .unwrap();
+            if let Some(client) = &mut websocket {
+                let error = receive_event(client, "error").await;
+                assert_eq!(error["error"]["code"], "invalid_request");
+            }
             resume.send(()).unwrap();
             drop(socket);
         }
@@ -125,6 +133,26 @@ fn slow_model_journal_leaves_other_connections_responsive_and_cancellable() {
             .unwrap()
             .unwrap()
             .unwrap();
+        let records = fixture.flushed_journal().await;
+        let started = records
+            .iter()
+            .find(|record| {
+                record["event"] == "request_started" && record["fields"]["transport"] == "websocket"
+            })
+            .unwrap();
+        let request_id = &started["fields"]["request_id"];
+        let sequence = |event: &str| {
+            records
+                .iter()
+                .find(|record| {
+                    record["event"] == event && &record["fields"]["request_id"] == request_id
+                })
+                .unwrap()["sequence"]
+                .as_u64()
+                .unwrap()
+        };
+        assert!(sequence("request_started") < sequence("request_phase_started"));
+        assert!(sequence("request_phase_started") < sequence("request_finished"));
     });
 }
 
@@ -531,8 +559,9 @@ fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
             &websocket_frame(0x89, MASK, b"ready"),
         );
         let root = fixture.directory.path().to_owned();
+        let state = fixture.server.state.clone();
         let completed = move || {
-            live_journal(&root)
+            crate::tests::flushed_journal(&root, &state)
                 .into_iter()
                 .filter(|record| {
                     record["event"] == "http_request_completed"
@@ -551,7 +580,10 @@ fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
             );
             let idle = Duration::from_millis(50);
             assert!(timeout(idle, client.io.read_u8()).await.is_err());
-            assert_eq!(completed().len(), previous, "WebSocket is still open");
+            let before_close = tokio::task::spawn_blocking(completed.clone())
+                .await
+                .unwrap();
+            assert_eq!(before_close.len(), previous, "WebSocket is still open");
             client.io.shutdown().await.unwrap();
             assert_eq!(
                 client.rest(&Deadline::after(wire_timeout())).await,

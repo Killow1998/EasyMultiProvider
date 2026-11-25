@@ -253,10 +253,10 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
             }
             return Poll::Ready(Ok(bytes.len()));
         }
-        let result = Pin::new(&mut this.io).poll_write(cx, bytes);
+        let mut write = |cx: &mut Context<'_>| Pin::new(&mut this.io).poll_write(cx, bytes);
         let count = ready!(match &mut this.stream_deadline {
-            Some(deadline) => deadline.check(cx, result, |&count| count > 0),
-            None => result,
+            Some(deadline) => deadline.poll(cx, write, |&count| count > 0),
+            None => write(cx),
         })?;
         if let Some(delivery) = &this.delivery {
             delivery.written(count);
@@ -264,13 +264,14 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
         Poll::Ready(Ok(count))
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let result = Pin::new(&mut self.io).poll_flush(cx);
-        ready!(match &mut self.stream_deadline {
-            Some(deadline) => deadline.check(cx, result, |()| true),
-            None => result,
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let mut flush = |cx: &mut Context<'_>| Pin::new(&mut this.io).poll_flush(cx);
+        ready!(match &mut this.stream_deadline {
+            Some(deadline) => deadline.poll(cx, flush, |()| true),
+            None => flush(cx),
         })?;
-        if let Some(delivery) = &self.delivery {
+        if let Some(delivery) = &this.delivery {
             delivery.flushed();
         }
         Poll::Ready(Ok(()))
@@ -285,12 +286,20 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
 struct WriteDeadline(Option<Pin<Box<Sleep>>>);
 
 impl WriteDeadline {
-    fn check<T>(
+    fn poll<T>(
         &mut self,
         cx: &mut Context<'_>,
-        result: Poll<io::Result<T>>,
+        io: impl FnOnce(&mut Context<'_>) -> Poll<io::Result<T>>,
         progressed: impl FnOnce(&T) -> bool,
     ) -> Poll<io::Result<T>> {
+        if self
+            .0
+            .as_ref()
+            .is_some_and(|timer| Instant::now() >= timer.deadline())
+        {
+            return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
+        }
+        let result = io(cx);
         match &result {
             Poll::Ready(Ok(value)) if progressed(value) => self.0 = None,
             Poll::Pending => {
@@ -360,8 +369,61 @@ mod tests {
         advance(Duration::from_millis(4_999)).await;
         assert!(poll_once(stalled.as_mut()).await.is_pending());
         advance(Duration::from_millis(2)).await;
+        let mut chunk = [0; 5];
+        client.read_exact(&mut chunk).await.unwrap();
         assert!(matches!(
             poll_once(stalled.as_mut()).await,
+            Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::TimedOut
+        ));
+    }
+
+    struct FlushIo(bool);
+
+    impl AsyncWrite for FlushIo {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            unreachable!()
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            if self.0 {
+                Poll::Ready(Ok(()))
+            } else {
+                Poll::Pending
+            }
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn account_event_flush_deadline_precedes_a_ready_flush() {
+        pause();
+        let request = b"GET /api/accounts/events HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let head = GuardedHead::read(
+            &mut request.as_slice(),
+            Instant::now() + test_timeout(REQUEST_READ_TIMEOUT),
+        )
+        .await
+        .ok()
+        .unwrap();
+        let mut stream = head.replay(
+            FlushIo(false),
+            "/",
+            Arc::new(OnceLock::from(None)),
+            ServerMode::Http,
+            None,
+        );
+        assert!(poll_once(pin!(stream.flush())).await.is_pending());
+        advance(Duration::from_secs(5)).await;
+        stream.io.0 = true;
+        assert!(matches!(
+            poll_once(pin!(stream.flush())).await,
             Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::TimedOut
         ));
     }

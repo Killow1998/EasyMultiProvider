@@ -1,15 +1,16 @@
 //! Bounded replay of diagnostic receipts; never retain request content.
 use super::super::{PROBE_CAPACITY, is_probe};
-use super::{Journal, MAX_RECORD, sanitize};
+use super::{Journal, MAX_RECORD, parts, sanitize};
 use serde_json::Value;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 
 impl Journal {
     pub fn read_observations(&self, limit: usize) -> (Vec<Value>, Vec<Value>) {
+        self.flush_blocking();
         let mut groups = [Vec::new(), Vec::new()];
         let mut order = 0;
-        for (_, _, path, _) in self.parts() {
+        for (_, _, path, _) in parts(&self.directory) {
             let mut options = OpenOptions::new();
             options.read(true);
             #[cfg(unix)]

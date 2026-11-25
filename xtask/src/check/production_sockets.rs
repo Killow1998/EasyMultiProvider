@@ -70,13 +70,17 @@ impl SocketUses {
                 | "set_keepalive"
                 | "set_nonblocking"
                 | "set_broadcast"
+                | "local_addr"
                 | "peer_addr"
+                | "set_ttl"
                 | "as_raw_socket"
                 | "into_raw_socket"
                 | "recv_from"
                 | "send_to"
                 | "socket"
-        ) || (matches!(api.as_str(), "peek" | "shutdown") && has_arguments)
+        ) || (matches!(api.as_str(), "peek" | "shutdown" | "try_read" | "try_write")
+            && has_arguments)
+            || (api == "accept" && !has_arguments)
         {
             self.0.insert((method.span().start().line, api));
         }
@@ -139,6 +143,30 @@ impl<'ast> Visit<'ast> for SocketUses {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_methods_on_an_inferred_listener_and_stream() {
+        let source = r#"
+async fn probe() {
+    let listener = open_listener()?;
+    listener.set_ttl(32)?;
+    let _ = listener.local_addr()?;
+    let (stream, _) = listener.accept().await?;
+    stream.try_write(b"data")?;
+}
+fn unrelated() { state.try_read(); state.try_write(); }
+"#;
+        let mut errors = Vec::new();
+        check("crates/emp-app/src/lifecycle/probe.rs", source, &mut errors).unwrap();
+        assert_eq!(errors.len(), 4, "{errors:?}");
+        for api in ["set_ttl", "local_addr", "accept", "try_write"] {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains(&format!("{api} 只能")))
+            );
+        }
+    }
 
     #[test]
     fn rejects_socket_access_in_production_business_code() {

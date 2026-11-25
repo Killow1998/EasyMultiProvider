@@ -624,11 +624,10 @@ fn native_endpoint_matches_retry_and_terminal_error_decisions() {
         );
         let status: u16 = wire.split_whitespace().nth(1).unwrap().parse().unwrap();
         assert_eq!(status, expected_status, "scenario {case}: {wire}");
-        let decisions: Vec<_> =
-            crate::tests::internal_events_contract::live_journal(directory.path())
-                .into_iter()
-                .filter(|record| record["event"] == "native_retry_decision")
-                .collect();
+        let decisions: Vec<_> = crate::tests::flushed_journal(directory.path(), &server.state)
+            .into_iter()
+            .filter(|record| record["event"] == "native_retry_decision")
+            .collect();
         assert_eq!(decisions.len(), attempts - 1, "scenario {case}");
         if let Some(decision) = decisions.first() {
             assert_eq!(decision["fields"]["retry"], true);

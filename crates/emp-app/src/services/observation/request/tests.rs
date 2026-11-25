@@ -1,6 +1,7 @@
 use super::*;
 
-fn records(root: &std::path::Path) -> Vec<Value> {
+fn records(root: &std::path::Path, diagnostics: &Diagnostics) -> Vec<Value> {
+    diagnostics.journal.flush_blocking();
     std::fs::read_dir(root.join("logs"))
         .unwrap()
         .flat_map(|entry| {
@@ -31,7 +32,7 @@ fn error_receipts_record_the_boundary_without_trusting_upstream_claims_or_loggin
         .unwrap();
     drop(receipt);
     let mut receipt = RequestObservation::new(
-        diagnostics,
+        Arc::clone(&diagnostics),
         Some("fedcba9876543210".into()),
         None,
         "websocket",
@@ -46,7 +47,7 @@ fn error_receipts_record_the_boundary_without_trusting_upstream_claims_or_loggin
         )
         .unwrap_err();
     drop(receipt);
-    let journal = records(root.path());
+    let journal = records(root.path(), &diagnostics);
     let failures: Vec<_> = journal
         .iter()
         .filter(|event| event["event"] == "response_error")
@@ -70,7 +71,7 @@ fn a_failed_terminal_write_is_not_completion_and_does_not_change_the_error() {
     let root = emp_test_support::fixture_dir().unwrap();
     let diagnostics = Arc::new(Diagnostics::new(&root.path().canonicalize().unwrap()));
     let mut receipt = RequestObservation::new(
-        diagnostics,
+        Arc::clone(&diagnostics),
         Some("0123456789abcdef".into()),
         None,
         "sse",
@@ -82,7 +83,7 @@ fn a_failed_terminal_write_is_not_completion_and_does_not_change_the_error() {
     let result: std::io::Result<()> = receipt.event_written(&terminal, Err(error));
     assert_eq!(result.unwrap_err().to_string(), "private-error");
     drop(receipt);
-    let records = records(root.path());
+    let records = records(root.path(), &diagnostics);
     let done = records
         .iter()
         .find(|r| r["event"] == "request_finished")
@@ -103,12 +104,17 @@ fn partial_and_successful_delivery_remain_distinct_even_when_dropped() {
     for terminal in [false, true] {
         let root = emp_test_support::fixture_dir().unwrap();
         let diagnostics = Arc::new(Diagnostics::new(&root.path().canonicalize().unwrap()));
-        let mut receipt =
-            RequestObservation::new(diagnostics, None, None, "websocket", "responses");
+        let mut receipt = RequestObservation::new(
+            Arc::clone(&diagnostics),
+            None,
+            None,
+            "websocket",
+            "responses",
+        );
         let event = json!({"type":if terminal { "response.incomplete" } else { "response.output_text.delta" },"delta":"private-output"});
         assert_eq!(receipt.event_written(&event, Ok::<_, ()>(7)), Ok(7));
         drop(receipt);
-        let records = records(root.path());
+        let records = records(root.path(), &diagnostics);
         let done: Vec<_> = records
             .iter()
             .filter(|r| r["event"] == "request_finished")
@@ -146,7 +152,7 @@ fn history_reason_survives_a_failed_write_and_unknown_text_is_not_logged() {
         let root = emp_test_support::fixture_dir().unwrap();
         let diagnostics = Arc::new(Diagnostics::new(&root.path().canonicalize().unwrap()));
         let mut receipt = RequestObservation::new(
-            diagnostics,
+            Arc::clone(&diagnostics),
             Some("0123456789abcdef".into()),
             None,
             "sse",
@@ -163,7 +169,7 @@ fn history_reason_survives_a_failed_write_and_unknown_text_is_not_logged() {
             std::io::ErrorKind::BrokenPipe
         );
         drop(receipt);
-        let records = records(root.path());
+        let records = records(root.path(), &diagnostics);
         let failure = records
             .iter()
             .find(|r| r["event"] == "history_reconstruction_failed")

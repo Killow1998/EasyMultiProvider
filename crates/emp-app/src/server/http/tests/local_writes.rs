@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     services::app_icon::{AppIcon, DEFAULT_PNG},
-    tests::{live_journal, wait_for},
+    tests::wait_for,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use emp_test_support::{Deadline, test_timeout};
@@ -94,8 +94,10 @@ async fn read(fixture: &Fixture, address: SocketAddr, path: &str) -> Value {
     json_body(&reply)
 }
 
-fn event_fields(fixture: &Fixture) -> Vec<(Value, Value)> {
-    live_journal(fixture.directory.path())
+async fn event_fields(fixture: &Fixture) -> Vec<(Value, Value)> {
+    fixture
+        .flushed_journal()
+        .await
         .into_iter()
         .filter(|entry| entry["event"] == "web_client_phase")
         .map(|mut entry| (entry["level"].take(), entry["fields"].take()))
@@ -293,7 +295,7 @@ fn compare_local_writes(home: &Path) {
             assert_eq!(config["language"], "zh-CN");
             assert_eq!(config["app_icon"], icon);
             assert_eq!(read(fixture, address, "/api/usage").await["history"], history);
-            assert_eq!(event_fields(fixture), events);
+            assert_eq!(event_fields(fixture).await, events);
             assert_catalog_refresh_queued(fixture).await;
             assert_eq!(
                 read(fixture, address, "/api/integration").await["codex_compatibility"],
@@ -320,7 +322,7 @@ fn compare_local_writes(home: &Path) {
             assert_eq!(config["language"], "zh-CN");
             assert_eq!(config["app_icon"], icon);
             assert_eq!(read(fixture, address, "/api/usage").await["history"], history);
-            assert_eq!(event_fields(fixture), events);
+            assert_eq!(event_fields(fixture).await, events);
         }
     });
 }

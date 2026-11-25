@@ -122,7 +122,7 @@ pub(super) fn run(
             Err(mpsc::TryRecvError::Disconnected) => return Err(ClaudeCliError::Disconnected),
             Err(mpsc::TryRecvError::Empty) => {}
         }
-        let Some(mut stream) = context.listener.accept()? else {
+        let Some(mut stream) = context.listener.accept_peer()? else {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "非阻塞中继监听器按固定间隔轮询，并检查消息和会话截止时间"

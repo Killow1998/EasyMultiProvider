@@ -49,6 +49,7 @@ impl ServerHandle {
         self.listener.as_ref().is_some_and(JoinHandle::is_finished)
     }
 
+    #[cfg(test)]
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
@@ -122,7 +123,7 @@ pub(crate) fn run_server(
             .state
             .backend
             .configuration
-            .set_listener(host, server.local_addr().port())
+            .set_listener(host, server.local_addr.port())
             .map_err(|_| AppError::ServerStopped)?;
         server.reconcile_startup();
         let usage_workers = crate::services::usage::workers(&server.state)?;
@@ -140,7 +141,7 @@ pub(crate) fn run_server(
         return Err(error);
     }
     let result = server.state.backend.transport.runtime.block_on(async {
-        let local_addr = server.local_addr();
+        let local_addr = server.local_addr;
         println!("EMP listening on http://{local_addr}");
         println!(
             "Configuration file: {}",

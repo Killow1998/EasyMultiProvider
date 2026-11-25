@@ -673,7 +673,7 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
             release.send(()).unwrap();
             hold_config.await.unwrap();
             let state = state.clone();
-            tokio::task::spawn_blocking(move || {
+            let records = tokio::task::spawn_blocking(move || {
                 assert!(
                     state
                         .lifecycle
@@ -687,10 +687,10 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
                         .quiesce(0, Duration::from_secs(5))
                         .is_some()
                 );
+                crate::tests::flushed_journal(&root, &state)
             })
             .await
             .unwrap();
-            let records = live_journal(&root);
             assert_eq!(
                 records
                     .iter()

@@ -195,17 +195,7 @@ pub(super) async fn drive_http(
     let streaming =
         inference || head.account_events || report.is_some_and(|report| report.is_stream(request));
     let watch_report = report.is_some();
-    let Ok(mut observation) = run_blocking({
-        let raw = head.raw.clone();
-        move || {
-            observation.received(raw.request());
-            observation
-        }
-    })
-    .await
-    else {
-        return;
-    };
+    observation.received(request);
     state
         .lifecycle
         .test_hooks

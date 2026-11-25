@@ -725,7 +725,7 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
         }
 
         {
-            assert_writes_completed_once(&live_journal(fixture.directory.path()));
+            assert_writes_completed_once(&fixture.flushed_journal().await);
         }
     });
 }

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     server::raw_tcp::{RawClient, wire_timeout},
-    tests::{OneShotUpstream, live_journal, wait_for},
+    tests::{OneShotUpstream, flushed_journal, live_journal, wait_for},
 };
 use emp_test_support::{Deadline, test_timeout};
 use std::{collections::BTreeMap, io::Read, sync::mpsc};
@@ -764,7 +764,7 @@ async fn assert_settled(
             .admission
             .quiesce(0, wire_timeout())
             .expect("inference connection settled");
-        let records = live_journal(&root);
+        let records = flushed_journal(&root, &state);
         let mut finished = records
             .iter()
             .filter(|row| row["event"] == "request_finished" && row["fields"]["request_id"] == id);

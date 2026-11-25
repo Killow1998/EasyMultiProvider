@@ -132,7 +132,7 @@ mod tests {
             }
             let diagnostics = Arc::new(Diagnostics::new(&path));
             let mut receipt = RequestObservation::new(
-                diagnostics,
+                Arc::clone(&diagnostics),
                 Some("0123456789abcdef".into()),
                 None,
                 "http",
@@ -150,6 +150,7 @@ mod tests {
             assert_eq!(body["error"]["category"], "destination_compaction");
             assert_eq!(body["error"]["reason"], "summary_output_missing");
             if !disabled {
+                diagnostics.journal.flush_blocking();
                 let records: Vec<Value> = std::fs::read_dir(path.join("logs"))
                     .unwrap()
                     .flat_map(|entry| {

@@ -6,8 +6,12 @@ use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{
+    Arc, LazyLock, Mutex,
+    mpsc::{self, Receiver, SyncSender, TrySendError},
+};
 mod replay;
+const QUEUE_CAPACITY: usize = 1024;
 const MAX_RECORD: usize = 16 * 1024;
 const MAX_PART: u64 = 2 * 1024 * 1024;
 const MAX_DIRECTORY: u64 = 10 * 1024 * 1024;
@@ -128,29 +132,131 @@ fn private(path: &Path, mode: u32) -> std::io::Result<()> {
     let _ = (path, mode);
     Ok(())
 }
+enum Command {
+    Event(Event),
+    Flush(mpsc::Sender<()>),
+}
+
+struct Event {
+    timestamp: String,
+    level: &'static str,
+    name: String,
+    fields: Value,
+}
+
+#[cfg(feature = "test-support")]
+type EventGate = Arc<Mutex<Option<(&'static str, Box<dyn FnOnce() + Send>)>>>;
+
+pub struct Journal {
+    directory: PathBuf,
+    run_id: String,
+    sender: SyncSender<Command>,
+    dropped: Arc<Mutex<usize>>,
+    #[cfg(feature = "test-support")]
+    event_gate: EventGate,
+}
+
+impl Journal {
+    pub fn new(directory: PathBuf) -> Self {
+        let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
+        let journal = Self {
+            directory,
+            run_id: super::random_id(8),
+            sender,
+            dropped: Arc::default(),
+            #[cfg(feature = "test-support")]
+            event_gate: Arc::default(),
+        };
+        let mut writer = Writer::new(
+            journal.directory.clone(),
+            journal.run_id.clone(),
+            #[cfg(feature = "test-support")]
+            journal.event_gate.clone(),
+        );
+        let dropped = journal.dropped.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("emp-diagnostic-journal".into())
+            .spawn(move || writer.run(receiver, &dropped))
+        {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "EMP diagnostic journal unavailable ({:?}); forwarding remains available",
+                error.kind()
+            );
+        }
+        journal
+    }
+
+    pub fn pseudonym(&self, value: &str) -> String {
+        format!(
+            "{:x}",
+            Sha256::digest(format!("emp-pseudonym:{}:{value}", self.run_id).as_bytes())
+        )[..16]
+            .to_owned()
+    }
+
+    pub fn event(&self, level: &str, name: &str, fields: &Value) {
+        let name = redact_sensitive_text(name).chars().take(256).collect();
+        let fields = sanitize(fields, 0);
+        let mut dropped = self.dropped.lock().unwrap();
+        let event = Event {
+            timestamp: super::timestamp(),
+            level: match level {
+                "debug" => "debug",
+                "warning" => "warning",
+                "error" => "error",
+                _ => "info",
+            },
+            name,
+            fields,
+        };
+        if matches!(
+            self.sender.try_send(Command::Event(event)),
+            Err(TrySendError::Full(_))
+        ) {
+            *dropped = dropped.saturating_add(1);
+        }
+    }
+
+    pub fn flush_blocking(&self) {
+        let (done, receipt) = mpsc::channel();
+        if self.sender.send(Command::Flush(done)).is_ok() {
+            let _ = receipt.recv();
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn gate_next_event(&self, name: &'static str, gate: impl FnOnce() + Send + 'static) {
+        assert!(
+            self.event_gate
+                .lock()
+                .unwrap()
+                .replace((name, Box::new(gate)))
+                .is_none()
+        );
+    }
+}
+
 struct Writer {
+    directory: PathBuf,
+    run_id: String,
+    basename: String,
     file: Option<File>,
     part: u32,
     bytes: u64,
     sequence: u64,
     managed: u64,
-}
-
-#[cfg(feature = "test-support")]
-type EventGate = (&'static str, Box<dyn FnOnce() + Send>);
-
-pub struct Journal {
-    directory: PathBuf,
-    run_id: String,
-    basename: String,
-    writer: Mutex<Writer>,
     #[cfg(feature = "test-support")]
-    event_gate: Mutex<Option<EventGate>>,
+    event_gate: EventGate,
 }
-impl Journal {
-    pub fn new(directory: PathBuf) -> Self {
+
+impl Writer {
+    fn new(
+        directory: PathBuf,
+        run_id: String,
+        #[cfg(feature = "test-support")] event_gate: EventGate,
+    ) -> Self {
         let now = time::OffsetDateTime::now_utc();
-        let run_id = super::random_id(8);
         let basename = format!(
             "emp-{:04}{:02}{:02}T{:02}{:02}{:02}Z-{}-{run_id}",
             now.year(),
@@ -161,41 +267,62 @@ impl Journal {
             now.second(),
             std::process::id()
         );
-        let journal = Self {
+        Self {
             directory,
             run_id,
             basename,
+            file: None,
+            part: 1,
+            bytes: 0,
+            sequence: 0,
+            managed: 0,
             #[cfg(feature = "test-support")]
-            event_gate: Mutex::default(),
-            writer: Mutex::new(Writer {
-                file: None,
-                part: 1,
-                bytes: 0,
-                sequence: 0,
-                managed: 0,
-            }),
-        };
-        let mut writer = journal.writer.lock().unwrap();
+            event_gate,
+        }
+    }
+
+    fn run(&mut self, receiver: Receiver<Command>, dropped: &Mutex<usize>) {
         let opened = (|| -> std::io::Result<()> {
-            no_symlinks(&journal.directory)?;
-            std::fs::create_dir_all(&journal.directory)?;
-            no_symlinks(&journal.directory)?;
-            private(&journal.directory, 0o700)?;
-            writer.file = Some(journal.open_part(1)?);
-            journal.prune(&mut writer);
+            no_symlinks(&self.directory)?;
+            std::fs::create_dir_all(&self.directory)?;
+            no_symlinks(&self.directory)?;
+            private(&self.directory, 0o700)?;
+            self.file = Some(self.open_part(self.part)?);
+            self.prune();
             Ok(())
         })();
         if let Err(error) = opened {
-            writer.file = None;
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "EMP diagnostic journal unavailable ({:?}); forwarding remains available",
                 error.kind()
             );
         }
-        drop(writer);
-        journal
+        for command in receiver {
+            let dropped = std::mem::take(&mut *dropped.lock().unwrap());
+            if dropped != 0 {
+                self.write_event(&Event {
+                    timestamp: super::timestamp(),
+                    level: "warning",
+                    name: "journal_records_dropped".into(),
+                    fields: json!({"count":dropped}),
+                });
+                if self.file.is_none() {
+                    let _ = writeln!(
+                        std::io::stderr().lock(),
+                        "EMP diagnostic journal dropped {dropped} records (queue full)"
+                    );
+                }
+            }
+            match command {
+                Command::Event(event) => self.write_event(&event),
+                Command::Flush(done) => {
+                    let _ = done.send(());
+                }
+            }
+        }
     }
+
     fn path(&self, part: u32) -> PathBuf {
         self.directory
             .join(format!("{}-p{part:03}.jsonl", self.basename))
@@ -211,126 +338,65 @@ impl Journal {
         }
         options.open(self.path(part))
     }
-    pub fn pseudonym(&self, value: &str) -> String {
-        format!(
-            "{:x}",
-            Sha256::digest(format!("emp-pseudonym:{}:{value}", self.run_id).as_bytes())
-        )[..16]
-            .to_owned()
-    }
-    fn parts(&self) -> Vec<(std::time::SystemTime, String, PathBuf, u64)> {
-        if no_symlinks(&self.directory).is_err() {
-            return Vec::new();
-        }
-        let Ok(entries) = self.directory.read_dir() else {
-            return Vec::new();
-        };
-        let mut parts = entries
-            .flatten()
-            .filter_map(|entry| {
-                let name = entry.file_name().into_string().ok()?;
-                if !PART.is_match(&name) {
-                    return None;
-                }
-                let metadata = entry.path().symlink_metadata().ok()?;
-                if !metadata.is_file() {
-                    return None;
-                }
-                Some((
-                    metadata.modified().ok()?,
-                    name,
-                    entry.path(),
-                    metadata.len(),
-                ))
-            })
-            .collect::<Vec<_>>();
-        parts.sort();
-        parts
-    }
-    fn prune(&self, writer: &mut Writer) {
-        let parts = self.parts();
-        writer.managed = parts.iter().map(|part| part.3).sum();
+    fn prune(&mut self) {
+        let parts = parts(&self.directory);
+        self.managed = parts.iter().map(|part| part.3).sum();
         let newest = parts.last().map(|part| part.2.as_path());
         for (_, _, path, size) in &parts {
-            if writer.managed <= MAX_DIRECTORY {
+            if self.managed <= MAX_DIRECTORY {
                 break;
             }
-            if *path != self.path(writer.part)
+            if *path != self.path(self.part)
                 && Some(path.as_path()) != newest
                 && std::fs::remove_file(path).is_ok()
             {
-                writer.managed -= size;
+                self.managed -= size;
             }
         }
-    }
-    #[cfg(feature = "test-support")]
-    pub fn gate_next_event(&self, name: &'static str, gate: impl FnOnce() + Send + 'static) {
-        assert!(
-            self.event_gate
-                .lock()
-                .unwrap()
-                .replace((name, Box::new(gate)))
-                .is_none()
-        );
     }
 
-    pub fn event(&self, level: &str, name: &str, fields: &Value) {
-        #[cfg(feature = "test-support")]
-        {
-            let gate = {
-                let mut armed = self.event_gate.lock().unwrap();
-                if armed.as_ref().is_some_and(|(event, _)| *event == name) {
-                    armed.take()
-                } else {
-                    None
-                }
-            };
-            if let Some((_, wait)) = gate {
-                wait();
-            }
-        }
-        let Ok(mut writer) = self.writer.lock() else {
-            return;
-        };
-        if writer.file.is_none() {
+    fn write_event(&mut self, event: &Event) {
+        if self.file.is_none() {
             return;
         }
-        let level = if ["debug", "info", "warning", "error"].contains(&level) {
-            level
-        } else {
-            "info"
-        };
-        let name = redact_sensitive_text(name)
-            .chars()
-            .take(256)
-            .collect::<String>();
-        let mut record = json!({"timestamp":super::timestamp(),"sequence":writer.sequence+1,"run_id":self.run_id,"level":level,"event":name,"fields":sanitize(fields,0)});
+        let mut record = json!({"timestamp":event.timestamp,"sequence":self.sequence+1,"run_id":self.run_id,"level":event.level,"event":event.name,"fields":event.fields});
         let mut bytes = serde_json::to_vec(&record).expect("diagnostic JSON");
         if bytes.len() > MAX_RECORD {
-            record["fields"] = json!({"_dropped":true,"_event":name});
+            record["fields"] = json!({"_dropped":true,"_event":event.name});
             bytes = serde_json::to_vec(&record).unwrap();
         }
         bytes.push(b'\n');
         let result = (|| -> std::io::Result<()> {
-            if writer.bytes > 0 && writer.bytes + bytes.len() as u64 > MAX_PART {
-                writer.file = None;
-                writer.part += 1;
-                writer.file = Some(self.open_part(writer.part)?);
-                writer.bytes = 0;
-                self.prune(&mut writer);
+            if self.bytes > 0 && self.bytes + bytes.len() as u64 > MAX_PART {
+                self.file = None;
+                self.part += 1;
+                self.file = Some(self.open_part(self.part)?);
+                self.bytes = 0;
+                self.prune();
             }
-            writer.file.as_mut().unwrap().write_all(&bytes)?;
-            writer.file.as_mut().unwrap().flush()?;
-            writer.sequence += 1;
-            writer.bytes += bytes.len() as u64;
-            writer.managed += bytes.len() as u64;
-            if writer.managed > MAX_DIRECTORY {
-                self.prune(&mut writer);
+            let file = self.file.as_mut().unwrap();
+            #[cfg(feature = "test-support")]
+            {
+                let gate = {
+                    let mut armed = self.event_gate.lock().unwrap();
+                    armed.take_if(|(name, _)| *name == event.name)
+                };
+                if let Some((_, wait)) = gate {
+                    wait();
+                }
+            }
+            file.write_all(&bytes)?;
+            file.flush()?;
+            self.sequence += 1;
+            self.bytes += bytes.len() as u64;
+            self.managed += bytes.len() as u64;
+            if self.managed > MAX_DIRECTORY {
+                self.prune();
             }
             Ok(())
         })();
         if let Err(error) = result {
-            writer.file = None;
+            self.file = None;
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "EMP diagnostic journal stopped ({:?}); forwarding remains available",
@@ -338,4 +404,34 @@ impl Journal {
             );
         }
     }
+}
+
+fn parts(directory: &Path) -> Vec<(std::time::SystemTime, String, PathBuf, u64)> {
+    if no_symlinks(directory).is_err() {
+        return Vec::new();
+    }
+    let Ok(entries) = directory.read_dir() else {
+        return Vec::new();
+    };
+    let mut parts = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            if !PART.is_match(&name) {
+                return None;
+            }
+            let metadata = entry.path().symlink_metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            Some((
+                metadata.modified().ok()?,
+                name,
+                entry.path(),
+                metadata.len(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    parts.sort();
+    parts
 }

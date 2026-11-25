@@ -304,27 +304,17 @@ async fn responses_turns(
             }
             continue;
         }
-        let Ok(mut observation) = crate::server::run_blocking({
-            let state = Arc::clone(state);
-            let connection_id = connection_id.map(str::to_owned);
-            move || {
-                RequestObservation::new(
-                    Arc::clone(&state.backend.diagnostics),
-                    random_hex(8).ok(),
-                    connection_id.as_deref(),
-                    "websocket",
-                    "responses",
-                )
-                .with_ledger(
-                    Arc::clone(&state.backend.usage.ledger),
-                    Arc::clone(&state.backend.management_events),
-                )
-            }
-        })
-        .await
-        else {
-            return;
-        };
+        let mut observation = RequestObservation::new(
+            Arc::clone(&state.backend.diagnostics),
+            random_hex(8).ok(),
+            connection_id,
+            "websocket",
+            "responses",
+        )
+        .with_ledger(
+            Arc::clone(&state.backend.usage.ledger),
+            Arc::clone(&state.backend.management_events),
+        );
         let mut presentation = crate::services::error_presentation::ErrorPresentation::new(state);
         presentation.thread(incoming.get("thread-id").map(String::as_str));
         observation = observation.with_errors(presentation);
