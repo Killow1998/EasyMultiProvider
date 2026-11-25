@@ -60,7 +60,8 @@ impl ModuleProcess {
         handlers: Handlers,
         timeout: Duration,
     ) -> Result<(Self, ModuleManifest), StartError> {
-        Self::start_with_connector(command, state_dir, handlers, timeout, Peer::connect).await
+        Self::start_with_connector(command, state_dir, handlers, timeout, Peer::connect, || {})
+            .await
     }
 
     pub(crate) async fn start_with_connector(
@@ -69,6 +70,7 @@ impl ModuleProcess {
         handlers: Handlers,
         timeout: Duration,
         connect: impl FnOnce(Side, BufReader<Reader>, Writer, Handlers) -> io::Result<Peer>,
+        process_exited: impl FnOnce() + Send + 'static,
     ) -> Result<(Self, ModuleManifest), StartError> {
         #[derive(Serialize)]
         struct Initialize<'a> {
@@ -106,13 +108,7 @@ impl ModuleProcess {
             .map_err(StartError::Io)?;
         let mut child = command.spawn().map_err(StartError::Io)?;
         drop(command);
-        #[cfg(windows)]
-        use std::os::windows::io::AsRawHandle;
-        let tree = match ProcessTree::attach(
-            child.id(),
-            #[cfg(windows)]
-            child.as_raw_handle(),
-        ) {
+        let tree = match ProcessTree::attach(&child) {
             Ok(tree) => tree,
             Err(error) => {
                 let _ = child.kill();
@@ -137,6 +133,7 @@ impl ModuleProcess {
                 let status = process_tree.wait(&mut child);
                 #[cfg(unix)]
                 drop(close_pipes);
+                process_exited();
                 let _ = finished.send(peer.join().and(status));
             }))
             .expect("module monitor is waiting for the child");

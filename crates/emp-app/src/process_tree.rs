@@ -13,7 +13,7 @@ use rustix::{
     process::{Pid, Signal, WaitId, WaitIdOptions, kill_process, kill_process_group, waitid},
 };
 #[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 #[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::INVALID_HANDLE_VALUE,
@@ -48,7 +48,7 @@ impl ProcessTree {
         }
     }
 
-    pub(crate) fn attach(pid: u32, #[cfg(windows)] child: RawHandle) -> io::Result<Self> {
+    pub(crate) fn attach(child: &Child) -> io::Result<Self> {
         #[cfg(windows)]
         let job = {
             // SAFETY: Null security attributes and name are valid for an unnamed job.
@@ -58,17 +58,18 @@ impl ProcessTree {
             }
             // SAFETY: CreateJobObjectW returned a newly owned job handle.
             let job = unsafe { OwnedHandle::from_raw_handle(handle) };
+            let child_handle = child.as_raw_handle();
             // SAFETY: Both handles are live; the child is suspended until assignment succeeds.
-            if unsafe { AssignProcessToJobObject(job.as_raw_handle(), child) } == 0 {
+            if unsafe { AssignProcessToJobObject(job.as_raw_handle(), child_handle) } == 0 {
                 return Err(io::Error::last_os_error());
             }
-            resume_primary_thread(pid)?;
+            resume_primary_thread(child.id())?;
             job
         };
         Ok(Self {
             stopped: Mutex::new(false),
             #[cfg(unix)]
-            leader: Pid::from_raw(pid as i32).unwrap(),
+            leader: Pid::from_child(child),
             #[cfg(windows)]
             job,
         })
@@ -77,7 +78,13 @@ impl ProcessTree {
     pub(crate) fn request_graceful_stop(&self) {
         #[cfg(unix)]
         {
-            let _ = kill_process_group(self.leader, Signal::TERM);
+            {
+                let stopped = self.stopped.lock().unwrap();
+                if *stopped {
+                    return;
+                }
+                let _ = kill_process_group(self.leader, Signal::TERM);
+            }
             #[expect(
                 clippy::disallowed_methods,
                 reason = "向进程组发送 SIGTERM 后保留既有宽限期，再发送 SIGKILL"
@@ -99,34 +106,56 @@ impl ProcessTree {
         self.terminate();
     }
 
-    pub(crate) fn has_exited(&self, #[cfg(windows)] child: &mut Child) -> io::Result<bool> {
+    pub(crate) fn has_exited(&self, child: &mut Child) -> io::Result<bool> {
         #[cfg(unix)]
-        return self.observe_exit(WaitIdOptions::NOHANG);
+        return self
+            .observe_exit(WaitIdOptions::NOHANG)
+            .map_err(|error| self.handle_observation_error(child, error));
         #[cfg(windows)]
         return child.try_wait().map(|status| status.is_some());
     }
 
     #[cfg(unix)]
-    fn observe_exit(&self, options: WaitIdOptions) -> io::Result<bool> {
+    fn observe_exit(&self, options: WaitIdOptions) -> rustix::io::Result<bool> {
         let options = options | WaitIdOptions::EXITED | WaitIdOptions::NOWAIT;
         loop {
             match waitid(WaitId::Pid(self.leader), options) {
                 Ok(status) => return Ok(status.is_some()),
                 Err(Errno::INTR) => continue,
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(error),
             }
         }
     }
 
     pub(crate) fn wait(&self, child: &mut Child) -> io::Result<ExitStatus> {
         #[cfg(unix)]
-        self.observe_exit(WaitIdOptions::empty())?;
+        {
+            self.observe_exit(WaitIdOptions::empty())
+                .map_err(|error| self.handle_observation_error(child, error))?;
+            self.terminate_and_reap(child)
+        }
         #[cfg(windows)]
-        let status = child.wait();
+        {
+            let status = child.wait();
+            self.terminate();
+            status
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn handle_observation_error(&self, child: &mut Child, error: Errno) -> io::Error {
+        if error == Errno::CHILD {
+            *self.stopped.lock().unwrap() = true;
+        } else {
+            let _ = self.terminate_and_reap(child);
+        }
+        error.into()
+    }
+
+    #[cfg(unix)]
+    fn terminate_and_reap(&self, child: &mut Child) -> io::Result<ExitStatus> {
         self.terminate();
-        #[cfg(unix)]
-        let status = child.wait();
-        status
+        child.wait()
     }
 
     pub(crate) fn is_stopped(&self) -> bool {

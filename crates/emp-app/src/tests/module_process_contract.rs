@@ -1,15 +1,23 @@
-use crate::modules::process::{ModuleProcess, StartError};
+use crate::{
+    modules::process::{ModuleProcess, StartError},
+    process_tree::ProcessTree,
+};
 use emp_modules::{
     manifest::{ApiRequirement, HOST_API_V3, ManifestError, ModuleManifest},
     peer::{CallError, Handlers, Peer, Side},
 };
 use emp_test_support::{Deadline, fixture_dir, test_timeout};
+use rustix::{
+    io::Errno,
+    process::{Pid, Signal, WaitId, WaitIdOptions, waitid},
+};
 use serde_json::{Value, json};
 use std::{
     fs::OpenOptions,
     io::{self, BufRead, BufReader, Read, Write},
     net::Ipv4Addr,
-    process::{Command, Stdio},
+    os::unix::process::ExitStatusExt,
+    process::{Child, Command, Stdio},
     sync::mpsc,
     time::Duration,
 };
@@ -318,6 +326,7 @@ async fn duplicate_keys_in_the_handshake_manifest_disconnect() {
                 || {},
             )
         },
+        || {},
     );
     let (outcome, ()) = tokio::join!(start, async {
         let _report = accept_sideband(&listener).await;
@@ -439,6 +448,7 @@ async fn stop_waits_for_each_io_thread_after_interrupting_detached_pipes() {
                     writer_exit,
                 )
             },
+            || {},
         )
         .await
         .unwrap();
@@ -503,6 +513,7 @@ async fn a_final_response_is_drained_after_exit_even_with_a_detached_descendant(
     let state_dir = fixture_dir().unwrap();
     let (command, listener) = fixture_with_sideband("escape-final").await;
     let (release_reader, held) = mpsc::channel();
+    let (pipes_closed, closed) = oneshot::channel();
     let (writer_ended, writer_exit) = oneshot::channel();
     let (process, _) = ModuleProcess::start_with_connector(
         command,
@@ -526,6 +537,9 @@ async fn a_final_response_is_drained_after_exit_even_with_a_detached_descendant(
                 },
             )
         },
+        move || {
+            pipes_closed.send(()).unwrap();
+        },
     )
     .await
     .unwrap();
@@ -537,9 +551,10 @@ async fn a_final_response_is_drained_after_exit_even_with_a_detached_descendant(
     let pending = connection
         .start_request("module.blocked", json!("x".repeat(2 * 1024 * 1024)))
         .unwrap();
-    timeout(budget(), writer_exit).await.unwrap().unwrap();
+    timeout(budget(), closed).await.unwrap().unwrap();
     release_reader.send(()).unwrap();
     assert_eq!(final_response.wait(budget()).unwrap(), json!(42));
+    timeout(budget(), writer_exit).await.unwrap().unwrap();
     assert!(matches!(
         pending.wait(budget()),
         Err(CallError::Disconnected)
@@ -555,6 +570,44 @@ async fn a_final_response_is_drained_after_exit_even_with_a_detached_descendant(
         descendant.try_read(&mut [0]).unwrap_err().kind(),
         io::ErrorKind::WouldBlock
     );
+}
+
+fn child_waiting_for_input() -> (Child, ProcessTree) {
+    let mut command = Command::new("cat");
+    command.stdin(Stdio::piped()).stdout(Stdio::null());
+    ProcessTree::configure(&mut command);
+    let child = command.spawn().unwrap();
+    let tree = ProcessTree::attach(&child).unwrap();
+    (child, tree)
+}
+
+#[test]
+fn echild_disables_process_tree_signals() {
+    let (mut child, tree) = child_waiting_for_input();
+    let error = tree.handle_observation_error(&mut child, Errno::CHILD);
+    let stopped = tree.is_stopped();
+    tree.request_stop();
+    tree.request_graceful_stop();
+    drop(tree);
+    assert!(child.wait().unwrap().success());
+    assert!(stopped);
+    assert_eq!(error.raw_os_error(), Some(Errno::CHILD.raw_os_error()));
+}
+
+#[test]
+fn observation_failure_kills_and_reaps_the_child_before_returning_the_original_error() {
+    let (mut child, tree) = child_waiting_for_input();
+    let leader = Pid::from_child(&child);
+    let error = tree.handle_observation_error(&mut child, Errno::PERM);
+    let observed = waitid(
+        WaitId::Pid(leader),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    );
+    let status = child.wait().unwrap();
+    assert!(matches!(observed, Err(Errno::CHILD)));
+    assert_eq!(status.signal(), Some(Signal::KILL.as_raw()));
+    assert!(tree.is_stopped());
+    assert_eq!(error.raw_os_error(), Some(Errno::PERM.raw_os_error()));
 }
 
 #[tokio::test]

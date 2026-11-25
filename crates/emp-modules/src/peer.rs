@@ -118,6 +118,18 @@ struct Connection {
     incoming: HashMap<RequestId, CancellationToken>,
 }
 
+impl Connection {
+    fn disconnect(self, result: io::Result<()>) {
+        for pending in self.pending.into_values() {
+            pending.reply.complete(Err(CallError::Disconnected));
+        }
+        for token in self.incoming.into_values() {
+            token.cancel();
+        }
+        let _ = self.closed.send(result);
+    }
+}
+
 struct PendingReply {
     reply: Arc<Reply>,
     sent: bool,
@@ -248,7 +260,10 @@ impl Peer {
 
 impl Drop for Peer {
     fn drop(&mut self) {
-        self.handle.close();
+        let mut state = self.handle.connection.lock().unwrap();
+        if let Some(connection) = state.take_if(|connection| connection.writer.is_some()) {
+            connection.disconnect(Ok(()));
+        }
     }
 }
 
@@ -317,13 +332,7 @@ impl PeerHandle {
     fn disconnect(&self, result: io::Result<()>) {
         let mut state = self.connection.lock().unwrap();
         if let Some(connection) = state.take() {
-            for pending in connection.pending.into_values() {
-                pending.reply.complete(Err(CallError::Disconnected));
-            }
-            for token in connection.incoming.into_values() {
-                token.cancel();
-            }
-            let _ = connection.closed.send(result);
+            connection.disconnect(result);
         }
     }
 

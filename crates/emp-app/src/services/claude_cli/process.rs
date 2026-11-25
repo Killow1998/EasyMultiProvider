@@ -91,14 +91,7 @@ fn run_with_timeout_policy(
             creation_flags,
         );
         let mut child = command.spawn().map_err(|_| "claude_cli_spawn_failed")?;
-        #[cfg(windows)]
-        use std::os::windows::io::AsRawHandle;
-        let tree = ProcessTree::attach(
-            child.id(),
-            #[cfg(windows)]
-            child.as_raw_handle(),
-        )
-        .map_err(|_| {
+        let tree = ProcessTree::attach(&child).map_err(|_| {
             let _ = child.kill();
             let _ = child.wait();
             "claude_cli_process_tree_unavailable"
@@ -125,10 +118,7 @@ fn run_with_timeout_policy(
         let mut cancellation_reason = None;
         let deadline = Instant::now() + timeout;
         loop {
-            match child.tree.has_exited(
-                #[cfg(windows)]
-                &mut child.child,
-            ) {
+            match child.tree.has_exited(&mut child.child) {
                 Ok(true) => break,
                 Ok(false) => {}
                 Err(_) => {
@@ -155,7 +145,11 @@ fn run_with_timeout_policy(
             )]
             thread::sleep(CHILD_POLL);
         }
-        let status = child.stop().ok();
+        let status = if child.tree.is_stopped() {
+            None
+        } else {
+            child.stop().ok()
+        };
         let input_ok = input_task.join().unwrap_or(false);
         let stdout = stdout_task.join().unwrap_or_default();
         let stderr = stderr_task.join().unwrap_or_default();

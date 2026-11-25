@@ -365,6 +365,7 @@ fn a_broken_write_pipe_releases_unsent_requests_and_keeps_written_replies() {
 }
 
 fn check_broken_write_pipe() {
+    let exited;
     let (input, writer) = io::pipe().unwrap();
     let (reader, mut output) = io::pipe().unwrap();
     let (entered, writing) = mpsc::channel();
@@ -381,6 +382,9 @@ fn check_broken_write_pipe() {
     )
     .unwrap();
     let host = peer.handle();
+    exited = Observation::spawn(move |probe| {
+        probe.observe(|_| peer.wait());
+    });
     let written = host.start_request("module.echo", json!(1)).unwrap();
     let failing = host.start_request("module.echo", json!(2)).unwrap();
     writing.recv_timeout(budget()).unwrap();
@@ -391,11 +395,33 @@ fn check_broken_write_pipe() {
     };
     assert_eq!(received.params, json!(1));
     drop(input);
+    let (registered, registration) = mpsc::channel();
+    let waiter = Observation::spawn(move |probe| {
+        probe.observe(|deadline| {
+            queued.wait_registered(deadline.remaining(), || registered.send(()).unwrap())
+        });
+    });
+    let queued_result = waiter.begin(
+        Deadline::after(test_timeout(Duration::from_secs(10))),
+        "queued waiter after write failure",
+    );
+    registration.recv_timeout(budget()).unwrap();
+    let write_failure = exited.begin(
+        Deadline::after(test_timeout(Duration::from_secs(5))),
+        "write failure while stdout is open",
+    );
+    let disconnect_deadline = Deadline::after(test_timeout(Duration::from_secs(1)));
     release.send(()).unwrap();
-    for request in [failing, queued] {
-        let result = request.wait(budget());
-        assert!(matches!(result, Err(CallError::Disconnected)), "{result:?}");
-    }
+    let result = queued_result.wait_for(disconnect_deadline).unwrap();
+    assert!(matches!(result, Err(CallError::Disconnected)), "{result:?}");
+    assert_eq!(
+        write_failure.wait().unwrap().unwrap_err().kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert!(matches!(
+        failing.wait(budget()),
+        Err(CallError::Disconnected)
+    ));
     assert!(matches!(
         host.start_request("module.echo", json!(4)),
         Err(CallError::Disconnected)
@@ -404,20 +430,6 @@ fn check_broken_write_pipe() {
         .write(&mut output)
         .unwrap();
     assert_eq!(written.wait(budget()).unwrap(), json!(1));
-    let exited = Observation::spawn(move |probe| {
-        probe.observe(|_| peer.wait());
-    });
-    let result = exited
-        .begin(
-            Deadline::after(test_timeout(Duration::from_secs(5))),
-            "write failure while stdout is open",
-        )
-        .wait();
-    drop(output);
-    assert_eq!(
-        result.unwrap().unwrap_err().kind(),
-        io::ErrorKind::BrokenPipe
-    );
 }
 
 #[test]
