@@ -57,6 +57,14 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # --all-targets unifies features enabled by dev-dependencies, which can hide production branches from Clippy.
       - run: cargo clippy --locked --workspace --lib --bins -- -D warnings
+      - name: Verify request cancellation with a symlinked temporary directory
+        shell: bash
+        run: |
+          root=$(mktemp -d)
+          trap 'rm -rf -- "$root"' EXIT
+          mkdir "$root/real"
+          ln -s real "$root/link"
+          EMP_TEST_TMPDIR="$root/link" cargo test --locked -p emp-app --lib disconnect -- --test-threads=1
       - run: cargo test --locked --workspace --all-targets --no-fail-fast
 
   windows-exit:

@@ -52,9 +52,15 @@ pub fn accept_blocking(listener: &TcpListener) -> io::Result<(TcpStream, SocketA
 }
 
 pub fn fixture_root() -> PathBuf {
-    std::env::var_os("EMP_TEST_TMPDIR")
+    let root = std::env::var_os("EMP_TEST_TMPDIR")
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+        .unwrap_or_else(std::env::temp_dir);
+    if cfg!(unix) {
+        root.canonicalize()
+            .unwrap_or_else(|error| panic!("canonicalize test fixture root {root:?}: {error}"))
+    } else {
+        root
+    }
 }
 
 pub fn fixture_dir() -> std::io::Result<tempfile::TempDir> {
