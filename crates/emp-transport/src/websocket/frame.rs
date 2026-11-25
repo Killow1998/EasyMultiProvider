@@ -443,7 +443,7 @@ mod tests {
         let (mut decoder, mut input, poll) = loop {
             tokio::select! {
                 result = &mut decoder => break result.unwrap(),
-                _ = tokio::time::sleep(test_timeout(Duration::from_millis(25))), if sent < payload.len() => {
+                _ = tokio::time::sleep(test_timeout(Duration::from_millis(25)).duration()), if sent < payload.len() => {
                     peer.write_all(&payload[sent..=sent]).await.unwrap();
                     sent += 1;
                 }

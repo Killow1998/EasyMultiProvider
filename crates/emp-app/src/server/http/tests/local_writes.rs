@@ -176,7 +176,11 @@ async fn assert_catalog_refresh_queued(fixture: &Fixture) {
                 .wait_for_work(|| stop.load(Ordering::Acquire))
         }
     });
-    let result = timeout(test_timeout(Duration::from_secs(5)), &mut pending).await;
+    let result = timeout(
+        test_timeout(Duration::from_secs(5)).duration(),
+        &mut pending,
+    )
+    .await;
     if result.is_err() {
         stop.store(true, Ordering::Release);
         state.catalog_refresh.stop();

@@ -67,7 +67,7 @@ fn session_exchange_uses_admission_time_while_blocking_worker_is_queued() {
             hold_worker.await.unwrap();
             let mut reply = Vec::new();
             timeout(
-                test_timeout(Duration::from_secs(5)),
+                test_timeout(Duration::from_secs(5)).duration(),
                 client.read_to_end(&mut reply),
             )
             .await
@@ -173,7 +173,7 @@ async fn drain_updates(fixture: &Fixture) {
         tokio::task::spawn_blocking(move || state
             .lifecycle
             .updates()
-            .drain_for_test(test_timeout(Duration::from_secs(5))))
+            .drain_for_test(test_timeout(Duration::from_secs(5)).duration()))
         .await
         .unwrap()
     );

@@ -228,7 +228,7 @@ fn fixture_defaults_stay_under_config_root() {
                 let (reply, ()) = tokio::join!(
                     assert_wire(address, &discover, false, 200),
                     async {
-                        timeout(crate::server::raw_tcp::wire_timeout(), async {
+                        timeout(crate::server::raw_tcp::wire_timeout().duration(), async {
                             let (mut io, _) = upstream.accept().await.unwrap();
                             let head = crate::server::raw_tcp::head(&mut io).await.unwrap();
                             assert!(head.starts_with(b"GET /v1/models HTTP/1.1\r\n"));
@@ -582,7 +582,7 @@ fn inference_responses() {
             let stream = RawClient::request(address, &wire).await;
             assert_head("POST /v1/responses (SSE)", &stream.head, SSE_HEAD);
             let mut stream = SseClient::from_raw(stream);
-            timeout(crate::server::raw_tcp::wire_timeout(), async {
+            timeout(crate::server::raw_tcp::wire_timeout().duration(), async {
                 assert_eq!(
                     stream.next().await,
                     Some(json!({"type":"response.output_text.delta","delta":"hello"})),

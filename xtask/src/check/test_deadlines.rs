@@ -1,3 +1,7 @@
+//! 检查常规测试写法中的裸期限、直接设置 socket 超时和固定产品等待。
+//! 同一文件内展开 `use` 别名至不动点，识别带初始化式的 `let` 和简单赋值 `x = …`。
+//! 有意规避、局部遮蔽分析、跨函数或跨文件的数据流和宏生成的名字超出适用范围。
+
 use super::{Path, Result, comments, imports::Imports, read};
 use std::collections::BTreeMap;
 use syn::{
@@ -23,10 +27,23 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
         if !root.join(path).is_file() {
             continue;
         }
-        let (bare, sockets) = inspect_source(path, &read(root, path)?)?;
+        let violations = inspect_source(path, &read(root, path)?)?;
         let (bare_locations, socket_locations) = counts.entry(group).or_default();
-        bare_locations.extend(bare.into_iter().map(|line| format!("{path}:{line}")));
-        socket_locations.extend(sockets.into_iter().map(|line| format!("{path}:{line}")));
+        bare_locations.extend(
+            violations
+                .bare
+                .into_iter()
+                .map(|line| format!("{path}:{line}")),
+        );
+        socket_locations.extend(
+            violations
+                .sockets
+                .into_iter()
+                .map(|line| format!("{path}:{line}")),
+        );
+        for line in violations.product_waits {
+            errors.push(format!("[test-deadlines] {path}:{line}: with_product_wait 只接受产品常量路径及其索引或方法调用；测试余量使用 test_timeout 缩放"));
+        }
     }
     for (group, (bare, sockets)) in counts {
         for (rule, locations, baseline, label, fix) in [
@@ -87,11 +104,18 @@ pub(super) fn group(path: &str) -> Option<&str> {
     }
 }
 
-fn inspect_source(path: &str, contents: &str) -> Result<(Vec<usize>, Vec<usize>)> {
+#[derive(Default)]
+struct Violations {
+    bare: Vec<usize>,
+    sockets: Vec<usize>,
+    product_waits: Vec<usize>,
+}
+
+fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
     let test_support = path.starts_with("crates/emp-test-support/src/");
     let test_file = test_support || comments::test_file(path);
     if !(test_file || (contents.contains("test") && contents.contains("#["))) {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Violations::default());
     }
     let source = syn::parse_file(contents).map_err(|error| format!("{path}: {error}"))?;
     let mut scopes = comments::TestScopes::default();
@@ -104,13 +128,12 @@ fn inspect_source(path: &str, contents: &str) -> Result<(Vec<usize>, Vec<usize>)
         socket_implementation: path == "crates/emp-test-support/src/lib.rs",
         scopes,
         imports: Imports::module(&source.items),
-        lines: Vec::new(),
-        socket_lines: Vec::new(),
+        violations: Violations::default(),
     };
     visitor.visit_file(&source);
-    visitor.lines.sort_unstable();
-    visitor.socket_lines.sort_unstable();
-    Ok((visitor.lines, visitor.socket_lines))
+    visitor.violations.bare.sort_unstable();
+    visitor.violations.sockets.sort_unstable();
+    Ok(visitor.violations)
 }
 
 struct Deadlines {
@@ -119,8 +142,7 @@ struct Deadlines {
     socket_implementation: bool,
     scopes: comments::TestScopes,
     imports: Imports,
-    lines: Vec<usize>,
-    socket_lines: Vec<usize>,
+    violations: Violations,
 }
 
 impl Deadlines {
@@ -132,7 +154,7 @@ impl Deadlines {
         let line = expr.span().start().line;
         if self.in_test(line) && bare_duration(expr, constants, self.emp_app, false, &self.imports)
         {
-            self.lines.push(line);
+            self.violations.bare.push(line);
         }
     }
 
@@ -141,7 +163,14 @@ impl Deadlines {
             && self.in_test(line)
             && (name == "set_read_timeout" || name == "set_write_timeout")
         {
-            self.socket_lines.push(line);
+            self.violations.sockets.push(line);
+        }
+    }
+
+    fn inspect_product_wait(&mut self, expr: &Expr) {
+        let line = expr.span().start().line;
+        if self.in_test(line) && !product_wait(expr, &self.imports) {
+            self.violations.product_waits.push(line);
         }
     }
 
@@ -149,7 +178,6 @@ impl Deadlines {
         let argument = match name {
             "set_read_timeout"
             | "set_write_timeout"
-            | "capped"
             | "read_timeout"
             | "write_timeout"
             | "timeout"
@@ -176,6 +204,25 @@ impl Deadlines {
     }
 }
 
+fn constant_name(name: &str) -> bool {
+    name.bytes().any(|byte| byte.is_ascii_uppercase())
+        && !name.bytes().any(|byte| byte.is_ascii_lowercase())
+}
+
+fn product_wait(expr: &Expr, imports: &Imports) -> bool {
+    match expr {
+        Expr::Path(path) => imports
+            .resolve(&path.path)
+            .last()
+            .is_some_and(|name| constant_name(name)),
+        Expr::Index(index) => product_wait(&index.expr, imports),
+        Expr::MethodCall(call) => product_wait(&call.receiver, imports),
+        Expr::Paren(paren) => product_wait(&paren.expr, imports),
+        Expr::Group(group) => product_wait(&group.expr, imports),
+        _ => false,
+    }
+}
+
 fn bare_duration(
     expr: &Expr,
     constants: bool,
@@ -186,6 +233,9 @@ fn bare_duration(
     match expr {
         Expr::Paren(paren) => bare_duration(&paren.expr, constants, emp_app, arithmetic, imports),
         Expr::Group(group) => bare_duration(&group.expr, constants, emp_app, arithmetic, imports),
+        Expr::MethodCall(call) if call.method == "duration" && call.args.is_empty() => {
+            arithmetic && bare_duration(&call.receiver, constants, emp_app, true, imports)
+        }
         Expr::Binary(binary) if matches!(binary.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) => {
             if starts_at_now(&binary.left, imports) {
                 return false;
@@ -226,23 +276,14 @@ fn bare_duration(
         }
         Expr::Path(path) if constants => {
             let path = imports.resolve(&path.path);
-            if emp_app
-                && [
-                    &["crate", "server", "REQUEST_DRAIN_TIMEOUT"][..],
-                    &["crate", "services", "shutdown", "QUIT_PRECHECK_WAIT"],
-                    &["crate", "services", "runtime", "CODEX_CATALOG_APPLY_DELAY"],
-                ]
-                .iter()
-                .any(|expected| path == *expected)
-            {
+            if emp_app && path == ["crate", "server", "REQUEST_DRAIN_TIMEOUT"] {
                 return false;
             }
             let name = path.last().expect("expression path");
             arithmetic
                 || (!path.iter().rev().nth(1).is_some_and(|part| {
                     part == "Duration" && matches!(name.as_str(), "ZERO" | "MAX")
-                }) && name.bytes().any(|byte| byte.is_ascii_uppercase())
-                    && !name.bytes().any(|byte| byte.is_ascii_lowercase()))
+                }) && constant_name(name))
         }
         Expr::Lit(literal) => matches!(literal.lit, syn::Lit::Int(_) | syn::Lit::Float(_)),
         _ => arithmetic,
@@ -303,11 +344,10 @@ impl<'ast> Visit<'ast> for Deadlines {
             let path = self.imports.resolve(&path.path);
             let resolved = path.last().expect("expression path");
             self.inspect_socket_timeout(resolved, name.ident.span().start().line);
-            if matches!(path.as_slice(), [.., owner, name] if owner == "Deadline" && name == "after")
+            if resolved == "with_product_wait"
+                && let Some(wait) = call.args.iter().nth(1)
             {
-                if let Some(argument) = call.args.first() {
-                    self.inspect(argument, true);
-                }
+                self.inspect_product_wait(wait);
             } else {
                 self.arguments(resolved, &call.args);
             }
@@ -318,7 +358,11 @@ impl<'ast> Visit<'ast> for Deadlines {
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.to_string();
         self.inspect_socket_timeout(&name, call.method.span().start().line);
-        if name == "wait_timeout" || name == "wait_timeout_while" {
+        if name == "with_product_wait"
+            && let Some(wait) = call.args.first()
+        {
+            self.inspect_product_wait(wait);
+        } else if name == "wait_timeout" || name == "wait_timeout_while" {
             if let Some(expr) = call.args.iter().nth(1) {
                 self.inspect(expr, true);
             }
@@ -356,6 +400,15 @@ impl<'ast> Visit<'ast> for Deadlines {
             self.inspect(&init.expr, false);
         }
         visit::visit_local(self, local);
+    }
+
+    fn visit_expr_assign(&mut self, assignment: &'ast syn::ExprAssign) {
+        if let Expr::Path(path) = assignment.left.as_ref()
+            && path.path.get_ident().is_some_and(deadline_name)
+        {
+            self.inspect(&assignment.right, false);
+        }
+        visit::visit_expr_assign(self, assignment);
     }
 }
 
@@ -396,7 +449,7 @@ mod tests {
     use super::*;
 
     fn violations(path: &str, source: &str) -> Result<Vec<usize>> {
-        Ok(inspect_source(path, source)?.0)
+        Ok(inspect_source(path, source)?.bare)
     }
 
     #[test]
@@ -413,8 +466,8 @@ mod fixture {
         stream.set_write_timeout(Some(Duration::from_secs(5)));
         tokio::time::timeout(
             Duration::from_millis(200), future);
-        receiver.recv_timeout(test_timeout(Duration::from_secs(5)));
-        let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
+        receiver.recv_timeout(test_timeout(Duration::from_secs(5)).duration());
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(5)).duration();
         tokio::time::advance(Duration::from_secs(3));
         assert!(elapsed < Duration::from_secs(10));
         TcpStream::connect_timeout(&address, Duration::from_secs(5));
@@ -463,47 +516,63 @@ fn account_import() {
 #[test]
 fn drain() {
     timeout(crate::server::REQUEST_DRAIN_TIMEOUT, future);
-    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + test_timeout(Duration::from_secs(5)));
+    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + test_timeout(Duration::from_secs(5)).duration());
     rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + Duration::from_secs(5));
-    rx.recv_timeout(FIXTURE_WAIT + test_timeout(Duration::from_secs(5)));
-    rx.recv_timeout(test_timeout(Duration::from_secs(5)) - FIXTURE_WAIT);
-    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT - test_timeout(Duration::from_secs(5)));
-    rx.recv_timeout(test_timeout(Duration::from_secs(5)) + (FIXTURE_WAIT - test_timeout(Duration::from_secs(1))));
-    let budget = Deadline::after(Duration::from_secs(5));
-    let budget = Deadline::after(test_timeout(Duration::from_secs(5)));
-    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::wire_timeout());
-    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + wire_timeout());
-    let budget = Deadline::after(crate::services::shutdown::QUIT_PRECHECK_WAIT + crate::server::raw_tcp::wire_timeout());
-    let budget = Deadline::after(crate::services::shutdown::QUIT_PRECHECK_WAIT + Duration::from_secs(5));
-    let budget = Deadline::after(crate::services::runtime::CODEX_CATALOG_APPLY_DELAY + test_timeout(Duration::from_secs(3)));
-    let budget = Deadline::after(crate::services::runtime::CODEX_CATALOG_APPLY_DELAY + Duration::from_secs(3));
+    rx.recv_timeout(FIXTURE_WAIT + test_timeout(Duration::from_secs(5)).duration());
+    rx.recv_timeout(test_timeout(Duration::from_secs(5)).duration() - FIXTURE_WAIT);
+    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT - test_timeout(Duration::from_secs(5)).duration());
+    rx.recv_timeout(test_timeout(Duration::from_secs(5)).duration() + (FIXTURE_WAIT - test_timeout(Duration::from_secs(1)).duration()));
+    rx.recv_timeout((base_budget + extra_budget).duration());
 }
 "#;
         assert_eq!(
             violations("crates/emp-app/tests/wire.rs", source).unwrap(),
-            [6, 7, 8, 10, 11, 14, 16, 18]
+            [6, 7, 8, 10]
         );
     }
 
     #[test]
     fn compares_imported_and_qualified_deadlines_by_path() {
         let source = r#"
-use crate::server::{REQUEST_DRAIN_TIMEOUT as DRAIN, raw_tcp::wire_timeout};
+use crate::server::{REQUEST_DRAIN_TIMEOUT as DRAIN, raw_tcp as wire};
+use wire::wire_timeout;
 fn drain() {
-    timeout(wire_timeout(), future);
-    timeout(crate::server::raw_tcp::wire_timeout(), future);
-    timeout(DRAIN + wire_timeout(), future);
-    timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::wire_timeout(), future);
+    timeout(wire_timeout().duration(), future);
+    timeout(crate::server::raw_tcp::wire_timeout().duration(), future);
+    timeout(DRAIN + wire_timeout().duration(), future);
+    timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::wire_timeout().duration(), future);
     {
         use crate::fixture::wire_timeout;
-        timeout(DRAIN + wire_timeout(), future);
+        timeout(DRAIN + wire_timeout().duration(), future);
     }
-    timeout(DRAIN + wire_timeout(), future);
+    timeout(DRAIN + wire_timeout().duration(), future);
 }
 "#;
         assert_eq!(
             violations("crates/emp-app/tests/wire.rs", source).unwrap(),
-            [10]
+            [11]
+        );
+    }
+
+    #[test]
+    fn requires_a_product_constant_for_unscaled_waits() {
+        let source = r#"
+use crate::retry as retry;
+use retry::NETWORK_RETRY_BACKOFF as backoff;
+fn fixture(budget: TestBudget, wait: Duration) {
+    budget.with_product_wait(crate::shutdown::QUIT_PRECHECK_WAIT);
+    budget.with_product_wait(backoff[0]);
+    budget.with_product_wait(backoff.iter().sum());
+    budget.with_product_wait(wait);
+    budget.with_product_wait(Duration::from_secs(1));
+    TestBudget::with_product_wait(budget, 1);
+}
+"#;
+        assert_eq!(
+            inspect_source("crates/emp-app/tests/wire.rs", source)
+                .unwrap()
+                .product_waits,
+            [8, 9, 10]
         );
     }
 
@@ -526,9 +595,9 @@ fn drain() {
         let source = r#"
 #[test]
 fn deadlines() {
-    timeout_at(Instant::now() + test_timeout(margin) + FIXTURE_WAIT, work);
-    let deadline = (Instant::now() - FIXTURE_WAIT) + test_timeout(margin) - OTHER_WAIT;
-    let deadline = Instant::now() + test_timeout(margin) - test_timeout(margin);
+    timeout_at(Instant::now() + test_timeout(margin).duration() + FIXTURE_WAIT, work);
+    let deadline = (Instant::now() - FIXTURE_WAIT) + test_timeout(margin).duration() - OTHER_WAIT;
+    let deadline = Instant::now() + test_timeout(margin).duration() - test_timeout(margin).duration();
 }
 "#;
         assert_eq!(
@@ -543,7 +612,7 @@ fn deadlines() {
 fn poll() {
     socket.poll_receive_text_with_timeout(Duration::from_secs(5));
     ClientWebSocket::poll_receive_text_with_timeout(&mut socket, Duration::from_secs(5));
-    socket.poll_receive_text_with_timeout(test_timeout(Duration::from_secs(5)));
+    socket.poll_receive_text_with_timeout(test_timeout(Duration::from_secs(5)).duration());
     socket.poll_receive_text_with_timeout(deadline.remaining());
 }
 "#;
@@ -560,7 +629,7 @@ fn production() { socket.set_read_timeout(Some(timeout)); }
 #[cfg(test)]
 mod tests {
     fn fixture() {
-        socket.set_read_timeout(Some(test_timeout(limit)));
+        socket.set_read_timeout(Some(test_timeout(limit).duration()));
         TcpStream::set_write_timeout(&socket, Some(limit));
         assert!(socket.set_write_timeout(None).is_ok());
         let reader = Deadline::after(test_timeout(limit)).io(socket);
@@ -575,7 +644,7 @@ mod tests {
                 &[2, 6, 7, 8][..],
             ),
         ] {
-            assert_eq!(inspect_source(path, source).unwrap().1, expected);
+            assert_eq!(inspect_source(path, source).unwrap().sockets, expected);
         }
     }
 

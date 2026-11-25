@@ -120,6 +120,15 @@ workspace lints 统一禁止无理由的 `allow`、调试宏和未完成实现�
 文档存量措辞的精确允许清单位于 `xtask/src/check/prose.rs`，新增正文描述当前行为。
 Linux Rust CI 执行这些规则；单元测试随已有 workspace 测试运行。
 
+`test-deadlines`、`test-socket-timeouts` 和 `test-fixture-root` 检查常规写法中的失误。
+复核时按各规则的职责检查同一文件内的 `use` 声明（别名按声明作用域展开到不动点）、
+带初始化式的 `let` 和简单赋值 `x = …`。有意规避、局部遮蔽分析、跨函数或跨文件的
+数据流和宏生成的名字超出适用范围。
+
+`Deadline::after` 接受 `TestBudget`。用 `test_timeout` 缩放测试余量，叠加固定产品等待时
+用 `with_product_wait` 引用产品常量、常量的索引或以常量为接收者的方法调用，让缩放
+和固定等待的来源清楚可查。需要 `Duration` 的接口通过 `duration()` 取值。
+
 前端先注册产品文案，再创建页面控制器；同一文案的简体中文和英文占位符保持一致。
 前端现有检查：按变更选择文案、行为或生命周期合同。
 

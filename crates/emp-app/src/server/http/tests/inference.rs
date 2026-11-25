@@ -119,7 +119,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
             "",
         );
         socket.write_all(FIRST).unwrap();
-        released.recv_timeout(wire_timeout()).unwrap();
+        released.recv_timeout(wire_timeout().duration()).unwrap();
         socket.write_all(LAST).unwrap();
     });
     fixture(&upstream.base_url()).run_wire(async |fixture, address| {
@@ -151,7 +151,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
                 state_for_drain
                     .lifecycle
                     .updates()
-                    .drain_for_test(test_timeout(Duration::from_secs(15)))
+                    .drain_for_test(test_timeout(Duration::from_secs(15)).duration())
             });
             wait_for(&Deadline::after(wire_timeout()), || updates.enter().is_none());
 
@@ -172,7 +172,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
             .await
             .unwrap();
             io.write_all(&wire).await.unwrap();
-            let head = timeout(wire_timeout(), crate::server::raw_tcp::head(&mut io))
+            let head = timeout(wire_timeout().duration(), crate::server::raw_tcp::head(&mut io))
                 .await
                 .unwrap()
                 .unwrap();
@@ -214,7 +214,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
             assert!(
                 {
                     let mut received = Vec::new();
-                    let outcome = timeout(wire_timeout(), callback.io.read_to_end(&mut received)).await;
+                    let outcome = timeout(wire_timeout().duration(), callback.io.read_to_end(&mut received)).await;
                     assert!(
                         matches!(outcome, Ok(Ok(_))),
                         "Aero callback drain: waiting for downstream EOF after releasing the upstream, received {} bytes: {outcome:?}",
@@ -373,9 +373,12 @@ fn stalled_buffered_inference(quit: bool) {
             assert_eq!(json_body(&reply), json!({"status":"stopping"}));
             let signal = fixture.server.state.lifecycle.signal();
             assert_eq!(
-                timeout(crate::server::raw_tcp::wire_timeout(), signal.wait())
-                    .await
-                    .unwrap(),
+                timeout(
+                    crate::server::raw_tcp::wire_timeout().duration(),
+                    signal.wait()
+                )
+                .await
+                .unwrap(),
                 crate::server::ShutdownReason::ResponseWritten,
             );
             assert!(fixture.server.state.lifecycle.admission.active_requests() > 0);
@@ -762,7 +765,7 @@ async fn assert_settled(
         let _drained = state
             .lifecycle
             .admission
-            .quiesce(0, wire_timeout())
+            .quiesce(0, wire_timeout().duration())
             .expect("inference connection settled");
         let records = flushed_journal(&root, &state);
         let mut finished = records

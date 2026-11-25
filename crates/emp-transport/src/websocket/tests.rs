@@ -547,10 +547,10 @@ async fn idle_nonblocking_websocket_waits_for_the_socket_to_be_readable() {
     let receiver =
         tokio::task::spawn_blocking(move || WebSocketConnection::new(&mut counted).receive_text());
     reading.await.unwrap();
-    tokio::time::sleep(test_timeout(Duration::from_secs(1))).await;
+    tokio::time::sleep(test_timeout(Duration::from_secs(1)).duration()).await;
     let idle_reads = attempts.load(Ordering::Relaxed);
     client.write_all(b"\x81\x82\x00\x00\x00\x00{}").unwrap();
-    let text = timeout(test_timeout(Duration::from_secs(2)), receiver)
+    let text = timeout(test_timeout(Duration::from_secs(2)).duration(), receiver)
         .await
         .unwrap()
         .unwrap()

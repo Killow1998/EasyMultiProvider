@@ -411,7 +411,7 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     let assert_public_pool_full = || {
         let mut ordinary = TcpStream::connect(address).unwrap();
         ordinary
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(2))))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(2)).duration()))
             .unwrap();
         let _ = write!(
             ordinary,

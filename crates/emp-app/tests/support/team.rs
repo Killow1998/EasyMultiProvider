@@ -103,7 +103,7 @@ impl TeamServer {
             }
         }));
         received
-            .recv_timeout(test_timeout(Duration::from_secs(30)))
+            .recv_timeout(test_timeout(Duration::from_secs(30)).duration())
             .expect("real Team server ready");
         let health = http(self.port, "GET", "/healthz", &[], b"");
         assert_eq!(health.status, 200, "{}", health.text());
@@ -260,7 +260,7 @@ impl TeamRelay {
                         observed.lock().expect("wire reports").push(report.clone());
                         let _ = accepted.send(report);
                         if let Some(gate) = gate {
-                            let _ = gate.recv_timeout(io_timeout());
+                            let _ = gate.recv_timeout(io_timeout().duration());
                         }
                         if lose_reply {
                             return;
@@ -316,7 +316,7 @@ impl TeamRelay {
 
     pub fn next_report(&self) -> Report {
         self.received
-            .recv_timeout(test_timeout(Duration::from_secs(30)))
+            .recv_timeout(test_timeout(Duration::from_secs(30)).duration())
             .expect("report reached real Team server")
     }
 

@@ -56,7 +56,7 @@ fn contender_leaves_the_owners_journal_parts_unchanged() {
     });
     journal.event("info", "hold_owner", &serde_json::Value::Null);
     writing
-        .recv_timeout(test_timeout(Duration::from_secs(5)))
+        .recv_timeout(test_timeout(Duration::from_secs(5)).duration())
         .unwrap();
 
     let parts = || {

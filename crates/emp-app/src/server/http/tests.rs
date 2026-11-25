@@ -1608,7 +1608,7 @@ fn identity_rejections_stop_before_fake_upstream_and_body() {
             let slow = ["Content-Type: application/json", length];
             let wire = request(port, "POST", "/api/language", &slow, b"{");
             timeout(
-                test_timeout(Duration::from_secs(2)),
+                test_timeout(Duration::from_secs(2)).duration(),
                 assert_entry_error(address, &wire, 401),
             )
             .await

@@ -170,14 +170,14 @@ async fn receive<T>(
     receiver: impl Future<Output = Result<T, oneshot::error::RecvError>>,
     event: &str,
 ) -> T {
-    timeout(wire_timeout(), receiver)
+    timeout(wire_timeout().duration(), receiver)
         .await
         .unwrap_or_else(|_| panic!("waiting for {event}"))
         .unwrap_or_else(|_| panic!("sender dropped before {event}"))
 }
 
 async fn submit(address: SocketAddr, wire: &[u8]) -> TcpStream {
-    timeout(wire_timeout(), async {
+    timeout(wire_timeout().duration(), async {
         let mut client = TcpStream::connect(address).await.unwrap();
         client.write_all(wire).await.unwrap();
         client
@@ -222,11 +222,12 @@ async fn exercise(
     if phase == Sending {
         work.finish_business();
         work.writing().await;
-        timeout(wire_timeout(), control.admission.wait_for_business_idle())
-            .await
-            .unwrap_or_else(|_| {
-                panic!("{case}: producer still counted while final write was paused")
-            });
+        timeout(
+            wire_timeout().duration(),
+            control.admission.wait_for_business_idle(),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{case}: producer still counted while final write was paused"));
     }
 
     let mut quit_requests = Vec::new();
@@ -235,9 +236,12 @@ async fn exercise(
         let first_session = session.clone();
         let quit = tokio::spawn(async move { quit_response(address, &first_session).await });
         if phase == Finishes {
-            timeout(wire_timeout(), control.admission.wait_for_websocket_drain())
-                .await
-                .expect("quit closed admission for its precheck");
+            timeout(
+                wire_timeout().duration(),
+                control.admission.wait_for_websocket_drain(),
+            )
+            .await
+            .expect("quit closed admission for its precheck");
             work.finish_business();
         }
         let reply = quit.await.expect(&case);
@@ -285,7 +289,7 @@ async fn exercise(
     let response_stopped = via_quit && phase != BusyAtDeadline;
     if response_stopped {
         assert_eq!(
-            timeout(wire_timeout(), control.signal().wait())
+            timeout(wire_timeout().duration(), control.signal().wait())
                 .await
                 .expect(&case),
             ShutdownReason::ResponseWritten,
@@ -296,7 +300,7 @@ async fn exercise(
         directory, server, ..
     } = fixture;
     let shutdown = tokio::task::spawn_blocking(move || server.shutdown());
-    let reason = timeout(wire_timeout(), control.signal().wait())
+    let reason = timeout(wire_timeout().duration(), control.signal().wait())
         .await
         .expect(&case);
     assert_eq!(
@@ -321,9 +325,12 @@ async fn exercise(
         work.writing().await;
     }
     if phase == FinishesAfterDeadline {
-        timeout(wire_timeout(), control.admission.wait_for_business_idle())
-            .await
-            .unwrap_or_else(|_| panic!("{case}: business still counted while write was paused"));
+        timeout(
+            wire_timeout().duration(),
+            control.admission.wait_for_business_idle(),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{case}: business still counted while write was paused"));
     }
     if phase == BusyAtDeadline {
         work.writing().await;
@@ -341,7 +348,7 @@ async fn exercise(
             work.finish_business();
         }
     }
-    let outcome = timeout(wire_timeout(), shutdown)
+    let outcome = timeout(wire_timeout().duration(), shutdown)
         .await
         .unwrap_or_else(|_| panic!("{case}: waiting for server shutdown"))
         .unwrap();
@@ -371,7 +378,9 @@ async fn quit_response(address: SocketAddr, session: &str) -> Vec<u8> {
         address,
         &json_request(address.port(), "/api/quit", &[session], b"{}"),
         false,
-        &Deadline::after(crate::services::shutdown::QUIT_PRECHECK_WAIT + wire_timeout()),
+        &Deadline::after(
+            wire_timeout().with_product_wait(crate::services::shutdown::QUIT_PRECHECK_WAIT),
+        ),
     )
     .await
 }
@@ -468,7 +477,7 @@ fn drain_websocket_session() {
                         "{}",
                         client.head
                     );
-                    timeout(wire_timeout(), async {
+                    timeout(wire_timeout().duration(), async {
                         client
                             .io
                             .write_all(b"\x89\x80\x00\x00\x00\x00")
@@ -686,19 +695,19 @@ fn drain_buffered_handoff(fixture: Fixture, wire: impl FnOnce(&Fixture) -> Vec<u
 
         let shutdown = tokio::task::spawn_blocking(move || fixture.server.shutdown());
         assert_eq!(
-            timeout(wire_timeout(), control.signal().wait())
+            timeout(wire_timeout().duration(), control.signal().wait())
                 .await
                 .unwrap(),
             ShutdownReason::Requested,
         );
         clock.expire();
         let mut reply = Vec::new();
-        let closed = timeout(wire_timeout(), client.read_to_end(&mut reply)).await;
+        let closed = timeout(wire_timeout().duration(), client.read_to_end(&mut reply)).await;
         let _ = resume.send(());
 
         assert_eq!(closed.unwrap().unwrap(), 0, "connection closed at cutoff");
         assert!(
-            timeout(wire_timeout(), shutdown)
+            timeout(wire_timeout().duration(), shutdown)
                 .await
                 .unwrap()
                 .unwrap()
@@ -851,7 +860,7 @@ fn drain_aero_sse_eof_before_last_flush() {
 }
 
 async fn assert_stream_prefix(client: &mut BufReader<TcpStream>, prefix: &[u8]) {
-    timeout(wire_timeout(), async {
+    timeout(wire_timeout().duration(), async {
         let mut received = Vec::new();
         while received.len() < prefix.len() {
             let mut length = String::new();
@@ -875,7 +884,7 @@ async fn assert_stream_prefix(client: &mut BufReader<TcpStream>, prefix: &[u8]) 
 #[cfg(unix)]
 async fn assert_stream_end(client: &mut BufReader<TcpStream>) {
     let mut rest = Vec::new();
-    timeout(wire_timeout(), client.read_to_end(&mut rest))
+    timeout(wire_timeout().duration(), client.read_to_end(&mut rest))
         .await
         .expect("HTTP stream ends")
         .unwrap();
@@ -1231,20 +1240,23 @@ fn drain_external_protocol_learning(fail_write: bool) {
             control.stop(ShutdownReason::Requested);
             send_terminal.send(()).unwrap();
             let mut client = SseClient::from_raw(client);
-            timeout(wire_timeout(), async {
+            timeout(wire_timeout().duration(), async {
                 while client.next().await.expect("terminal SSE event")["type"]
                     != "response.completed"
                 {}
             })
             .await
             .expect("terminal frame reaches the client while configuration is locked");
-            timeout(wire_timeout(), control.admission.wait_for_business_idle())
-                .await
-                .expect("business handed off while configuration is locked");
+            timeout(
+                wire_timeout().duration(),
+                control.admission.wait_for_business_idle(),
+            )
+            .await
+            .expect("business handed off while configuration is locked");
             unlock.send(()).unwrap();
             saver_gate.await.unwrap();
             assert!(
-                timeout(wire_timeout(), client.next())
+                timeout(wire_timeout().duration(), client.next())
                     .await
                     .expect("HTTP stream ends after the save")
                     .is_none()
@@ -1414,7 +1426,7 @@ fn drain_native_and_aero_publish_error_at_flush_while_producer_is_held() {
                 )
             };
             let mut client = SseClient::from_raw(RawClient::request(address, &wire).await);
-            timeout(wire_timeout(), async {
+            timeout(wire_timeout().duration(), async {
                 while client.next().await.expect("failure frame")["type"] != "response.failed" {}
             })
             .await
@@ -1432,7 +1444,7 @@ fn drain_native_and_aero_publish_error_at_flush_while_producer_is_held() {
             });
             drop(resume);
             close_upstream.send(()).unwrap();
-            timeout(wire_timeout(), async {
+            timeout(wire_timeout().duration(), async {
                 while client.next().await.is_some() {}
             })
             .await
@@ -1542,7 +1554,7 @@ fn drain_aero_revokes_delegation_at_eof_handoff() {
         assert!(!control.admission.has_business_work());
 
         let mut reply = Vec::new();
-        let result = timeout(wire_timeout(), async {
+        let result = timeout(wire_timeout().duration(), async {
             let mut client = TcpStream::connect(address).await?;
             client.write_all(&callback).await?;
             client.read_to_end(&mut reply).await

@@ -249,7 +249,7 @@ impl Upstream {
     pub fn assert_idle(&self) {
         match self
             .requests
-            .recv_timeout(test_timeout(Duration::from_millis(100)))
+            .recv_timeout(test_timeout(Duration::from_millis(100)).duration())
         {
             Err(RecvTimeoutError::Timeout) => {}
             Ok(request) => panic!("unexpected upstream request: {request:?}"),

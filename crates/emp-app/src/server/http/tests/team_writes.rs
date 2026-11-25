@@ -142,7 +142,7 @@ struct UpstreamRequest {
 
 impl UpstreamRequest {
     async fn accept(listener: &AsyncListener, path: &str) -> Self {
-        timeout(test_timeout(Duration::from_secs(5)), async {
+        timeout(test_timeout(Duration::from_secs(5)).duration(), async {
             let (stream, _) = listener.accept().await.unwrap();
             let mut stream = BufReader::new(stream);
             let mut head = String::new();
@@ -765,7 +765,7 @@ fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
                     state
                         .lifecycle
                         .updates()
-                        .drain_for_test(test_timeout(Duration::from_secs(5)))
+                        .drain_for_test(test_timeout(Duration::from_secs(5)).duration())
                 );
                 assert!(
                     state

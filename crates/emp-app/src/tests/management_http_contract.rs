@@ -513,7 +513,8 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
         })
         .collect();
     let deadline = Deadline::after(
-        crate::services::runtime::CODEX_CATALOG_APPLY_DELAY + test_timeout(Duration::from_secs(3)),
+        test_timeout(Duration::from_secs(3))
+            .with_product_wait(crate::services::runtime::CODEX_CATALOG_APPLY_DELAY),
     );
     set_sse_deadline(&mut events, &deadline);
     let _ = request_before(&server, "/v1/models", &[], &deadline);

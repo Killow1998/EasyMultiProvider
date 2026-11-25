@@ -73,7 +73,8 @@ fn child_fixture() {
     expect_command(&mut input, "stop");
     let address = server.local_addr();
     let mut websocket =
-        TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2))).unwrap();
+        TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2)).duration())
+            .unwrap();
     write!(websocket, "GET /v1/responses HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nX-EMP-Session: {}\r\n\r\n", server.session_token()).unwrap();
     let mut reader =
         BufReader::new(Deadline::after(test_timeout(Duration::from_secs(5))).io(websocket));
@@ -151,7 +152,8 @@ fn listener_survives_real_descriptor_exhaustion() {
     assert_eq!(next_marker(), "EXHAUSTED");
     // A new connection makes accept() report real EMFILE in the child.
     let queued =
-        TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2))).unwrap();
+        TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2)).duration())
+            .unwrap();
     #[expect(
         clippy::disallowed_methods,
         reason = "维持文件描述符耗尽窗口，观察真实 EMFILE 下的 accept 退避"
@@ -161,7 +163,8 @@ fn listener_survives_real_descriptor_exhaustion() {
     assert_eq!(next_marker(), "RELEASED");
     drop(queued);
     let mut health =
-        TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2))).unwrap();
+        TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2)).duration())
+            .unwrap();
     write!(
         health,
         "GET /healthz HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"

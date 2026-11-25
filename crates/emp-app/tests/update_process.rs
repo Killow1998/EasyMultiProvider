@@ -4,7 +4,7 @@
 mod support;
 
 use emp_state::VaultStore;
-use emp_test_support::{Deadline, accept_blocking, test_timeout};
+use emp_test_support::{Deadline, TestBudget, accept_blocking, test_timeout};
 use emp_updater::manager::NETWORK_RETRY_BACKOFF;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -106,7 +106,12 @@ fn try_request_before(
     deadline.accept(response, path)
 }
 
-fn update_accepted(port: u16, session: &str, path: &str, backoff: Duration) -> Deadline {
+fn update_accepted(
+    port: u16,
+    session: &str,
+    path: &str,
+    completion_budget: TestBudget,
+) -> Deadline {
     let response = support::http::http_before(
         port,
         "POST",
@@ -118,8 +123,6 @@ fn update_accepted(port: u16, session: &str, path: &str, backoff: Duration) -> D
         b"{}",
         &Deadline::after(test_timeout(Duration::from_secs(10))),
     );
-    let margin = if backoff.is_zero() { 10 } else { 3 };
-    let completion_budget = backoff + test_timeout(Duration::from_secs(margin));
     let deadline = Deadline::after(completion_budget);
     assert_eq!(response.status, 202, "{path}: {}", response.text());
     deadline
@@ -142,7 +145,12 @@ fn accepted_update_does_not_wait_for_the_connection_to_close() {
             stream.write_all(framing).unwrap();
             finish.recv().unwrap();
         });
-        let deadline = update_accepted(port, "fixture", "/api/updates/check", Duration::ZERO);
+        let deadline = update_accepted(
+            port,
+            "fixture",
+            "/api/updates/check",
+            test_timeout(Duration::from_secs(10)),
+        );
         assert!(!deadline.is_expired());
         received.send(()).unwrap();
         server.join().unwrap();
@@ -270,12 +278,22 @@ enum FakeReleaseMode {
 }
 
 impl FakeReleaseMode {
-    fn retry_backoff(self) -> Duration {
+    fn with_retry_backoff(self, budget: TestBudget) -> TestBudget {
         match self {
-            Self::ReleaseError | Self::PackageError => NETWORK_RETRY_BACKOFF.iter().sum(),
-            Self::TemporaryPackageError => NETWORK_RETRY_BACKOFF[0],
-            Self::Valid | Self::InvalidJson => Duration::ZERO,
+            Self::ReleaseError | Self::PackageError => {
+                budget.with_product_wait(NETWORK_RETRY_BACKOFF.iter().sum())
+            }
+            Self::TemporaryPackageError => budget.with_product_wait(NETWORK_RETRY_BACKOFF[0]),
+            Self::Valid | Self::InvalidJson => budget,
         }
+    }
+
+    fn completion_budget(self) -> TestBudget {
+        let margin = match self {
+            Self::Valid | Self::InvalidJson => 10,
+            _ => 3,
+        };
+        self.with_retry_backoff(test_timeout(Duration::from_secs(margin)))
     }
 }
 
@@ -311,7 +329,7 @@ fn release_server_with_mode(
             FakeReleaseMode::TemporaryPackageError => 19,
             FakeReleaseMode::Valid | FakeReleaseMode::InvalidJson => 20,
         };
-        let fixture_budget = mode.retry_backoff() + test_timeout(Duration::from_secs(margin));
+        let fixture_budget = mode.with_retry_backoff(test_timeout(Duration::from_secs(margin)));
         let deadline = Deadline::after(fixture_budget);
         let mut handled = 0;
         let expected_requests = match mode {
@@ -815,7 +833,8 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         assert_update_accepted_wire(&install.join().unwrap());
     }
 
-    let gate_budget = NETWORK_RETRY_BACKOFF[0] + test_timeout(Duration::from_secs(9));
+    let gate_budget =
+        test_timeout(Duration::from_secs(9)).with_product_wait(NETWORK_RETRY_BACKOFF[0]);
     let gate_deadline = Deadline::after(gate_budget);
     let mut observed_closed_gate = false;
     let mut delete_during_update = None;
@@ -1090,7 +1109,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
             emp.port,
             &emp.session,
             "/api/updates/check",
-            mode.retry_backoff(),
+            mode.completion_budget(),
         );
         wait_for_error(emp.port, &emp.session, expected, &deadline);
         server.join().expect("fake release error server completed");
@@ -1109,7 +1128,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         emp.port,
         &emp.session,
         "/api/updates/check",
-        NETWORK_RETRY_BACKOFF.iter().sum(),
+        test_timeout(Duration::from_secs(3)).with_product_wait(NETWORK_RETRY_BACKOFF.iter().sum()),
     );
     wait_for_error(emp.port, &emp.session, "update_failed", &deadline);
     stop_emp(&mut emp);
@@ -1144,7 +1163,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         emp.port,
         &emp.session,
         "/api/updates/check",
-        NETWORK_RETRY_BACKOFF.iter().sum(),
+        test_timeout(Duration::from_secs(3)).with_product_wait(NETWORK_RETRY_BACKOFF.iter().sum()),
     );
     wait_for_error(emp.port, &emp.session, "update_failed", &deadline);
     partial_server.join().unwrap();
@@ -1183,7 +1202,7 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
             emp.port,
             &emp.session,
             "/api/updates/install",
-            mode.retry_backoff(),
+            mode.completion_budget(),
         );
         wait_for_error(emp.port, &emp.session, expected, &deadline);
         server.join().expect("fake package error server completed");
@@ -1208,7 +1227,7 @@ fn malicious_symlink_package_is_rejected_before_replacement() {
         emp.port,
         &emp.session,
         "/api/updates/install",
-        Duration::ZERO,
+        test_timeout(Duration::from_secs(10)),
     );
     wait_for_error(emp.port, &emp.session, "invalid_package", &deadline);
     assert_eq!(
@@ -1231,7 +1250,7 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
         emp.port,
         &emp.session,
         "/api/updates/install",
-        Duration::ZERO,
+        test_timeout(Duration::from_secs(10)),
     );
     wait_for_error(emp.port, &emp.session, "worker_failed", &deadline);
     let delete = request(

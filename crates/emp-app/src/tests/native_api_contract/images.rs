@@ -562,7 +562,7 @@ async fn image_cancellation_probe_and_observer_share_the_scaled_deadline() {
     let budget = test_timeout(Duration::from_secs(5));
     let cancellation = upstream.observe_cancellation(Deadline::after(budget));
     let observed = tokio::task::spawn_blocking(move || cancellation.wait());
-    tokio::time::sleep(budget.mul_f64(0.7)).await;
+    tokio::time::sleep(budget.duration().mul_f64(0.7)).await;
     drop(socket);
     assert!(observed.await.unwrap().unwrap());
 }

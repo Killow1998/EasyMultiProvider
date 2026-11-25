@@ -161,7 +161,7 @@ impl HttpsProxy {
 
     pub fn next_connect(&self) -> String {
         self.connects
-            .recv_timeout(test_timeout(Duration::from_secs(5)))
+            .recv_timeout(test_timeout(Duration::from_secs(5)).duration())
             .expect("Google request used the loopback proxy")
     }
 }

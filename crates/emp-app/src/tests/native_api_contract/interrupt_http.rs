@@ -4,6 +4,7 @@ use super::*;
 use emp_test_support::websocket::ClientWebSocket;
 use emp_test_support::websocket::WebSocketPoll;
 use emp_test_support::{Deadline, test_timeout};
+use std::time::Instant;
 
 fn event(client: &mut ClientWebSocket, kind: &str) -> Value {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
@@ -46,8 +47,8 @@ fn interrupt_and_observe(
     client: &mut ClientWebSocket,
     interrupt: &Value,
     upstream: &Observation<bool>,
+    upstream_deadline: Deadline,
 ) -> (Result<Value, String>, std::io::Result<bool>) {
-    let upstream_deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
     let downstream_deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     let cancellation = upstream.begin(upstream_deadline, "HTTP upstream cancellation");
     client.send_json(interrupt).unwrap();
@@ -144,7 +145,12 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             "invalid_request"
         );
         let interrupt = json!({"type":"response.interrupt","response_id":"resp_steer","mode":"discard_partial_items"});
-        let (receipt, closed) = interrupt_and_observe(&mut client, &interrupt, &upstream);
+        let (receipt, closed) = interrupt_and_observe(
+            &mut client,
+            &interrupt,
+            &upstream,
+            Deadline::after(test_timeout(Duration::from_secs(2))),
+        );
         let incomplete = receipt.unwrap_or_else(|error| {
             panic!("interrupt receipt: {error}; upstream cancellation: {closed:?}")
         });
@@ -207,21 +213,6 @@ fn interrupt_can_collect_an_on_time_upstream_close_after_a_later_receipt() {
     let http_client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (http_upstream, _) = listener.accept().unwrap();
     let (eof_observed, before_receipt) = mpsc::channel();
-    let observation = Observation::spawn(move |probe| {
-        let Some(request) = probe.next_request() else {
-            return;
-        };
-        assert_eq!(
-            request
-                .deadline()
-                .io(&http_upstream)
-                .peek(&mut [0])
-                .unwrap(),
-            0
-        );
-        request.complete(true);
-        eof_observed.send(()).unwrap();
-    });
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -251,13 +242,29 @@ fn interrupt_can_collect_an_on_time_upstream_close_after_a_later_receipt() {
     let mut client = ClientWebSocket::connect(
         &format!("ws://{address}/v1/responses"),
         &BTreeMap::new(),
-        test_timeout(Duration::from_secs(5)),
+        test_timeout(Duration::from_secs(5)).duration(),
     )
     .unwrap();
+    let upstream_budget = test_timeout(Duration::from_secs(2));
+    let io_started = Instant::now();
+    let observation_started = io_started - upstream_budget.duration();
+    let upstream_deadline = Deadline::starting_at(observation_started, upstream_budget);
+    let io_deadline = Deadline::starting_at(io_started, upstream_budget);
+    let observation = Observation::spawn(move |probe| {
+        let Some(request) = probe.next_request() else {
+            return;
+        };
+        assert_eq!(io_deadline.io(&http_upstream).peek(&mut [0]).unwrap(), 0);
+        let observed_at = observation_started + io_started.elapsed();
+        request.complete_at(observed_at, true);
+        eof_observed.send(()).unwrap();
+    });
+    assert!(upstream_deadline.is_expired());
     let (receipt, closed) = interrupt_and_observe(
         &mut client,
         &json!({"type":"response.interrupt"}),
         &observation,
+        upstream_deadline,
     );
     assert_eq!(receipt.unwrap()["type"], "response.incomplete");
     assert!(closed.unwrap());

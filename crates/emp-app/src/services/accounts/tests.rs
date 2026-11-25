@@ -126,7 +126,7 @@ for line in sys.stdin:
 "#
         .replace(
             "QUOTA_FIXTURE_TIMEOUT",
-            &test_timeout(Duration::from_secs(10)).as_secs_f64().to_string(),
+            &test_timeout(Duration::from_secs(10)).duration().as_secs_f64().to_string(),
         ),
     );
 
@@ -204,10 +204,10 @@ for line in sys.stdin:
         delete_done.send(response).expect("send DELETE response");
     });
     delete_sent_rx
-        .recv_timeout(test_timeout(Duration::from_secs(1)))
+        .recv_timeout(test_timeout(Duration::from_secs(1)).duration())
         .expect("DELETE request reached the server");
     let early_delete = delete_done_rx
-        .recv_timeout(test_timeout(Duration::from_secs(3)))
+        .recv_timeout(test_timeout(Duration::from_secs(3)).duration())
         .ok();
     let delete_completed_early = early_delete.is_some();
 
@@ -218,7 +218,7 @@ for line in sys.stdin:
     let delete_response = match early_delete {
         Some(response) => response,
         None => delete_done_rx
-            .recv_timeout(test_timeout(Duration::from_secs(5)))
+            .recv_timeout(test_timeout(Duration::from_secs(5)).duration())
             .expect("DELETE completes after quota refresh"),
     };
     delete.join().expect("join DELETE endpoint worker");
@@ -630,13 +630,13 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
         });
         assert!(
             done_rx
-                .recv_timeout(test_timeout(Duration::from_millis(300)))
+                .recv_timeout(test_timeout(Duration::from_millis(300)).duration())
                 .is_err(),
             "import replaced credentials while a refresh held the account lock"
         );
         drop(guard);
         done_rx
-            .recv_timeout(test_timeout(Duration::from_secs(10)))
+            .recv_timeout(test_timeout(Duration::from_secs(10)).duration())
             .expect("import finishes once the lock is free");
     });
 
@@ -764,7 +764,7 @@ fn credential_replacement_also_locks_accounts_added_while_it_waited() {
         import_account_state(None, &server.state, &body("b")).expect("import b");
         drop(guard_a);
         let (accounts, held) = locked_rx
-            .recv_timeout(test_timeout(Duration::from_secs(10)))
+            .recv_timeout(test_timeout(Duration::from_secs(10)).duration())
             .expect("replacement finishes");
         assert_eq!(accounts, 2);
         assert_eq!(held, [true, true], "every snapshot account is locked");

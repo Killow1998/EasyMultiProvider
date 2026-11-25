@@ -103,7 +103,10 @@ fn slow_model_journal_leaves_other_connections_responsive_and_cancellable() {
                     .unwrap();
                 (Some(client), None)
             };
-            timeout(wire_timeout(), writing).await.unwrap().unwrap();
+            timeout(wire_timeout().duration(), writing)
+                .await
+                .unwrap()
+                .unwrap();
             let health = request(port, "GET", "/healthz", &[], b"");
             assert_wire(address, &health, false, 200).await;
 
@@ -128,7 +131,7 @@ fn slow_model_journal_leaves_other_connections_responsive_and_cancellable() {
             drop(socket);
         }
         state.request_shutdown();
-        timeout(wire_timeout(), server)
+        timeout(wire_timeout().duration(), server)
             .await
             .unwrap()
             .unwrap()
@@ -359,7 +362,7 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
                 let guard = state
                     .lifecycle
                     .admission
-                    .quiesce(0, test_timeout(Duration::from_secs(5)))
+                    .quiesce(0, test_timeout(Duration::from_secs(5)).duration())
                     .unwrap();
                 ready.send(()).unwrap();
                 wait.blocking_recv().unwrap();
@@ -378,9 +381,12 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
             drained.await.unwrap();
             let mut denied = AsyncStream::connect(address).await.unwrap();
             let _ = denied.write_all(&wire).await;
-            let result = timeout(test_timeout(Duration::from_secs(5)), denied.read_u8())
-                .await
-                .unwrap();
+            let result = timeout(
+                test_timeout(Duration::from_secs(5)).duration(),
+                denied.read_u8(),
+            )
+            .await
+            .unwrap();
             assert!(result.is_err(), "drain must not send an HTTP response");
             assert_eq!(
                 fixture.server.state.lifecycle.admission.active_websockets(),
@@ -423,7 +429,7 @@ fn responses_upgrade_cannot_start_after_restore_reopens_admission() {
         let mut client = RawClient::request(address, &wire).await;
         assert_upgrade(&client);
         assert_eq!(
-            timeout(test_timeout(Duration::from_secs(5)), handoff)
+            timeout(test_timeout(Duration::from_secs(5)).duration(), handoff)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -432,7 +438,7 @@ fn responses_upgrade_cannot_start_after_restore_reopens_admission() {
         );
         let restore = begin_restore(fixture, address, &session);
         timeout(
-            test_timeout(Duration::from_secs(5)),
+            test_timeout(Duration::from_secs(5)).duration(),
             admission.wait_for_websocket_drain(),
         )
         .await
@@ -524,7 +530,10 @@ fn slow_device_revalidation_leaves_other_websockets_responsive() {
             .write_all(&websocket_frame(0x81, MASK, b"{}"))
             .await
             .unwrap();
-        timeout(wire_timeout(), rechecking).await.unwrap().unwrap();
+        timeout(wire_timeout().duration(), rechecking)
+            .await
+            .unwrap()
+            .unwrap();
         other
             .write_all(&websocket_frame(0x89, MASK, b"responsive"))
             .await
@@ -722,13 +731,15 @@ fn realtime_rejections_retain_update_access_until_response_write() {
                 .write_all(&request(fixture.port(), "POST", "/v1/live", &headers, &[]))
                 .await
                 .unwrap();
-            timeout(wire_timeout(), reached.notified()).await.unwrap();
+            timeout(wire_timeout().duration(), reached.notified())
+                .await
+                .unwrap();
             assert!(
                 !updates.drain_for_test(Duration::ZERO),
                 "update handoff may not pass before the {status} has been written"
             );
             write.notify_one();
-            let reply = timeout(wire_timeout(), head(&mut client))
+            let reply = timeout(wire_timeout().duration(), head(&mut client))
                 .await
                 .unwrap()
                 .unwrap();
@@ -743,10 +754,13 @@ pub(super) async fn accept_upstream(
     listener: &AsyncListener,
     extensions: &str,
 ) -> (AsyncStream, String) {
-    let (mut io, _) = timeout(test_timeout(Duration::from_secs(5)), listener.accept())
-        .await
-        .unwrap()
-        .unwrap();
+    let (mut io, _) = timeout(
+        test_timeout(Duration::from_secs(5)).duration(),
+        listener.accept(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let headers = String::from_utf8(head(&mut io).await.unwrap()).unwrap();
     let key = parse_request(&headers)
         .unwrap()
@@ -952,13 +966,13 @@ fn native_http_fallback_drain_cancels_open_and_allows_restore() {
             (0x88, close_payload(1001, "EMP connection is draining")),
         );
         assert_eq!(
-            timeout(wire_timeout(), upstream.read(&mut [0]))
+            timeout(wire_timeout().duration(), upstream.read(&mut [0]))
                 .await
                 .expect("drain must cancel the request waiting for HTTP response headers")
                 .unwrap(),
             0,
         );
-        let reply = timeout(wire_timeout(), restore)
+        let reply = timeout(wire_timeout().duration(), restore)
             .await
             .expect("restore must complete without waiting for the upstream")
             .unwrap();
@@ -1068,7 +1082,7 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
                         read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
                         (0x88, close_payload(1001, "EMP connection is draining")),
                     );
-                    assert_status(&timeout(wire_timeout(), restore).await.unwrap().unwrap(), 200);
+                    assert_status(&timeout(wire_timeout().duration(), restore).await.unwrap().unwrap(), 200);
                 } else {
                     client.io.shutdown().await.unwrap();
                     assert_eq!(client.rest(&Deadline::after(wire_timeout())).await, b"\x88\x00");

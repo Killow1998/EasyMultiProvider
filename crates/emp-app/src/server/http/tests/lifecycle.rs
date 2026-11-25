@@ -30,7 +30,7 @@ fn healthz_uses_the_last_available_descriptor() {
     let fixture = Fixture::new();
     let client = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
     client
-        .set_read_timeout(Some(crate::server::raw_tcp::wire_timeout()))
+        .set_read_timeout(Some(crate::server::raw_tcp::wire_timeout().duration()))
         .unwrap();
     let mut fillers = Vec::new();
     loop {
@@ -267,7 +267,7 @@ fn wrong_methods_keep_status_before_and_during_update_drain() {
                 state
                     .lifecycle
                     .updates()
-                    .drain_for_test(test_timeout(Duration::from_secs(5)))
+                    .drain_for_test(test_timeout(Duration::from_secs(5)).duration())
             })
             .await
             .unwrap()
@@ -644,7 +644,7 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
                 .await;
             let mut rejected = [0];
             let rejected = timeout(
-                test_timeout(Duration::from_secs(3)),
+                test_timeout(Duration::from_secs(3)).duration(),
                 denied.read(&mut rejected),
             )
             .await

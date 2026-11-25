@@ -2,7 +2,7 @@
 //! built binary with temporary CODEX_HOME/config roots, plus an in-process
 //! loopback upstream that records every request it receives.
 
-use emp_test_support::test_timeout;
+use emp_test_support::{TestBudget, test_timeout};
 use std::path::Path;
 use std::time::Duration;
 
@@ -49,7 +49,7 @@ pub const NATIVE_TOKEN: &str = "fixture-native-token";
 pub const PROVIDER_KEY: &str = "fixture-provider-key";
 pub const ORIGINAL_CODEX_CONFIG: &str = "# user settings\n[features]\nweb_search = true\n";
 
-fn io_timeout() -> Duration {
+fn io_timeout() -> TestBudget {
     test_timeout(Duration::from_secs(15))
 }
 

@@ -88,7 +88,11 @@ impl<T> ProbeRequest<T> {
     }
 
     pub fn complete(self, value: T) {
-        let _ = self.send.send((Instant::now(), value));
+        self.complete_at(Instant::now(), value);
+    }
+
+    pub fn complete_at(self, completed_at: Instant, value: T) {
+        let _ = self.send.send((completed_at, value));
     }
 }
 
@@ -134,13 +138,13 @@ mod tests {
         let observation = Observation::with_worker(|probe| probe);
         let timeout = crate::test_timeout(Duration::from_millis(250));
         let late = Instant::now();
-        let early = late - timeout;
-        let tightened = Deadline(early + timeout / 2);
+        let early = late - timeout.duration();
+        let tightened = Deadline(early + timeout.duration() / 2);
         let original = Deadline::after(timeout);
         for (completed_at, expected) in [(early, Ok(7)), (late, Err(io::ErrorKind::TimedOut))] {
             let result = observation.begin(original, "first sideband command");
             let request = observation.worker().next_request().unwrap();
-            request.send.send((completed_at, 7)).unwrap();
+            request.complete_at(completed_at, 7);
             assert_eq!(
                 result.wait_for(tightened).map_err(|error| error.kind()),
                 expected

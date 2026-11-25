@@ -161,7 +161,7 @@ fn not_modified_without_cached_metadata_is_rejected() {
         retry::serve_responses(
             listener,
             [(
-                Duration::ZERO,
+                test_timeout(retry::REQUEST_MARGIN),
                 b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_vec(),
             )],
         )
@@ -198,26 +198,27 @@ fn stable_history_spans_pages_survives_304_and_tracks_the_installed_version() {
         let body = body.to_string();
         format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"history\"\r\nConnection: close\r\n\r\n{body}",body.len()).into_bytes()
     };
+    let request_budget = test_timeout(retry::REQUEST_MARGIN);
     let replies = [
-        (Duration::ZERO, response(json!(first))),
+        (request_budget, response(json!(first))),
         (
-            Duration::ZERO,
+            request_budget,
             b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
         ),
         (
-            NETWORK_RETRY_BACKOFF[0],
+            request_budget,
             b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_vec(),
         ),
         (
-            Duration::ZERO,
+            request_budget,
             response(json!(vec![
                 json!({"tag_name":"v0.14.0-beta1","draft":false,"prerelease":true});
                 100
             ])),
         ),
-        (Duration::ZERO, response(next)),
+        (request_budget, response(next)),
         (
-            Duration::ZERO,
+            request_budget,
             b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_vec(),
         ),
     ];

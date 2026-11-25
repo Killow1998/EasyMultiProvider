@@ -331,7 +331,7 @@ mod tests {
         let request = b"GET /api/accounts/events HTTP/1.1\r\nHost: localhost\r\n\r\n";
         let head = GuardedHead::read(
             &mut request.as_slice(),
-            Instant::now() + test_timeout(REQUEST_READ_TIMEOUT),
+            Instant::now() + test_timeout(REQUEST_READ_TIMEOUT).duration(),
         )
         .await
         .ok()

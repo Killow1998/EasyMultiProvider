@@ -3,7 +3,9 @@
 mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
 use base64::engine::general_purpose::STANDARD;
-use emp_test_support::{Deadline, DeadlineIo, Observation, Probe, accept_blocking, test_timeout};
+use emp_test_support::{
+    Deadline, DeadlineIo, Observation, Probe, TestBudget, accept_blocking, test_timeout,
+};
 
 use crate::cli::Cli;
 use crate::cli::parse_cli;
@@ -126,7 +128,7 @@ fn credential_root(directory: &TempDir) -> PathBuf {
     root
 }
 
-fn response_timeout() -> Duration {
+fn response_timeout() -> TestBudget {
     test_timeout(Duration::from_secs(20))
 }
 
@@ -714,7 +716,7 @@ impl OneShotUpstream {
 
     pub(crate) fn observed(&self) -> (String, BTreeMap<String, String>, Value) {
         self.observed
-            .recv_timeout(test_timeout(Duration::from_secs(5)))
+            .recv_timeout(test_timeout(Duration::from_secs(5)).duration())
             .expect("upstream observation")
     }
 }

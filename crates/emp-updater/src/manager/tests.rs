@@ -28,7 +28,7 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
         &valid,
         "0.12.0",
         root.path(),
-        test_timeout(Duration::from_secs(1)),
+        test_timeout(Duration::from_secs(1)).duration(),
         None,
         |_| {},
     )
@@ -40,7 +40,7 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
             &nonzero,
             "0.12.0",
             root.path(),
-            test_timeout(Duration::from_secs(1)),
+            test_timeout(Duration::from_secs(1)).duration(),
             None,
             |_| {},
         )
@@ -52,7 +52,7 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
             &valid,
             "0.12.1",
             root.path(),
-            test_timeout(Duration::from_secs(1)),
+            test_timeout(Duration::from_secs(1)).duration(),
             None,
             |_| {},
         )
@@ -70,7 +70,7 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
             &root.path().join("missing"),
             "0.12.0",
             root.path(),
-            test_timeout(Duration::from_secs(1)),
+            test_timeout(Duration::from_secs(1)).duration(),
             None,
             |_| {},
         )
@@ -84,7 +84,7 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
             &denied,
             "0.12.0",
             root.path(),
-            test_timeout(Duration::from_secs(1)),
+            test_timeout(Duration::from_secs(1)).duration(),
             None,
             |_| {},
         )
@@ -113,12 +113,12 @@ fn candidate_version_probe_times_out_and_reaps_the_child() {
         &binary,
         "0.12.0",
         root.path(),
-        test_timeout(Duration::from_millis(100)),
+        test_timeout(Duration::from_millis(100)).duration(),
         Some(&manager),
         |child| spawned_pid = Some(child.id()),
     )
     .unwrap_err();
-    assert!(started.elapsed() < test_timeout(Duration::from_secs(2)));
+    assert!(started.elapsed() < test_timeout(Duration::from_secs(2)).duration());
     assert_eq!(error, crate::UpdateError("update_failed"));
     manager.failed(error);
     let receipt = manager.snapshot().failure.unwrap();
@@ -148,7 +148,7 @@ fn candidate_version_probe_restores_error_mode_after_bad_image() {
             &binary,
             "0.12.0",
             root.path(),
-            test_timeout(Duration::from_secs(1)),
+            test_timeout(Duration::from_secs(1)).duration(),
             None,
             |_| {},
         )
@@ -288,9 +288,12 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = thread::spawn(move || {
-        let attempts = std::iter::once(Duration::ZERO).chain(NETWORK_RETRY_BACKOFF);
-        retry::serve_responses(listener, attempts.map(|backoff| {
-            (backoff, b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec())
+        let request_budget = test_timeout(retry::REQUEST_MARGIN);
+        let retries = (0..NETWORK_RETRY_BACKOFF.len())
+            .map(|attempt| request_budget.with_product_wait(NETWORK_RETRY_BACKOFF[attempt]));
+        let attempts = std::iter::once(request_budget).chain(retries);
+        retry::serve_responses(listener, attempts.map(|budget| {
+            (budget, b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec())
         }))
     });
     let endpoints = UpdateEndpoints::for_source(&base, format!("{base}/latest"));
@@ -364,7 +367,7 @@ fn failed_candidate_launch_preserves_the_original_system_error_code() {
         &root.path().join("absent"),
         "0.12.6",
         root.path(),
-        test_timeout(Duration::from_secs(1)),
+        test_timeout(Duration::from_secs(1)).duration(),
         Some(&manager),
         |_| {},
     )
@@ -480,7 +483,8 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
     )
     .unwrap();
     manager.start("check").unwrap();
-    let completion_budget = NETWORK_RETRY_BACKOFF[0] + test_timeout(Duration::from_secs(4));
+    let completion_budget =
+        test_timeout(Duration::from_secs(4)).with_product_wait(NETWORK_RETRY_BACKOFF[0]);
     let deadline = Deadline::after(completion_budget);
     loop {
         if events
@@ -547,8 +551,9 @@ fn release_check_retains_notes_without_starting_installation() {
         body,
     ]
     .concat();
-    let server =
-        thread::spawn(move || retry::serve_responses(listener, [(Duration::ZERO, response)]));
+    let server = thread::spawn(move || {
+        retry::serve_responses(listener, [(test_timeout(retry::REQUEST_MARGIN), response)])
+    });
     let manager = UpdateManager::with_endpoints(
         std::env::current_exe().unwrap(),
         Vec::new(),

@@ -142,7 +142,7 @@ fn streaming_flushes_before_upstream_eof() {
         stream.flush().expect("flush first SSE event");
         first_sent.send(()).expect("announce first SSE event");
         released
-            .recv_timeout(test_timeout(Duration::from_secs(3)))
+            .recv_timeout(test_timeout(Duration::from_secs(3)).duration())
             .expect("release terminal SSE event");
         stream.write_all(&last).expect("write terminal SSE event");
     });
@@ -154,7 +154,7 @@ fn streaming_flushes_before_upstream_eof() {
     .expect("request JSON");
     let downstream = open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
     first_ready
-        .recv_timeout(test_timeout(Duration::from_secs(2)))
+        .recv_timeout(test_timeout(Duration::from_secs(2)).duration())
         .expect("upstream first event");
     let mut input = Deadline::after(test_timeout(Duration::from_secs(2))).io(&downstream);
     let mut response = Vec::new();
@@ -339,10 +339,10 @@ fn auto_protocol_falls_back_only_after_explicit_endpoint_rejection() {
     assert_eq!(
         [
             paths
-                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .recv_timeout(test_timeout(Duration::from_secs(2)).duration())
                 .unwrap(),
             paths
-                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .recv_timeout(test_timeout(Duration::from_secs(2)).duration())
                 .unwrap(),
         ],
         ["/v1/chat/completions", "/v1/responses"]
@@ -392,10 +392,10 @@ fn auto_protocol_falls_back_only_after_explicit_endpoint_rejection() {
     assert_eq!(
         [
             paths
-                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .recv_timeout(test_timeout(Duration::from_secs(2)).duration())
                 .unwrap(),
             paths
-                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .recv_timeout(test_timeout(Duration::from_secs(2)).duration())
                 .unwrap(),
         ],
         ["/v1/chat/completions", "/v1/responses"]
@@ -442,10 +442,10 @@ fn external_pre_output_retry_is_single_and_route_local() {
     assert_eq!(
         [
             paths
-                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .recv_timeout(test_timeout(Duration::from_secs(2)).duration())
                 .unwrap(),
             paths
-                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .recv_timeout(test_timeout(Duration::from_secs(2)).duration())
                 .unwrap(),
         ],
         ["/v1/chat/completions", "/v1/chat/completions"]
@@ -486,10 +486,10 @@ fn external_pre_output_retry_is_single_and_route_local() {
     assert_eq!(
         [
             paths
-                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .recv_timeout(test_timeout(Duration::from_secs(2)).duration())
                 .unwrap(),
             paths
-                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .recv_timeout(test_timeout(Duration::from_secs(2)).duration())
                 .unwrap(),
         ],
         ["/v1/chat/completions", "/v1/chat/completions"]

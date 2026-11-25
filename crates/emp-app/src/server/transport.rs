@@ -117,19 +117,16 @@ fn read_before(
     buffer: &mut [u8],
     deadline: Instant,
 ) -> std::io::Result<usize> {
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(std::io::ErrorKind::TimedOut.into());
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
+    stream.set_read_timeout(Some(remaining.min(REQUEST_READ_TIMEOUT)))?;
+    match stream.read(buffer) {
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(io::ErrorKind::TimedOut.into())
         }
-        stream.set_read_timeout(Some(remaining.min(REQUEST_READ_TIMEOUT)))?;
-        match stream.read(buffer) {
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                return Err(std::io::ErrorKind::TimedOut.into());
-            }
-            result => return result,
-        }
+        result => result,
     }
 }
 
@@ -156,7 +153,11 @@ pub(crate) fn read_request_head_with(
     let mut buffer = [0_u8; 1024];
     let mut request = Vec::new();
     loop {
-        let count = read(&mut buffer).ok()?;
+        let count = match read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
         if count == 0 {
             break;
         }
@@ -171,4 +172,31 @@ pub(crate) fn read_request_head_with(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reading_the_request_head_resumes_after_an_interrupted_read() {
+        let first = b"POST /fixture HTTP/1.1\r\nContent-Length: 4\r\n";
+        let mut reads = [
+            Ok(first.as_slice()),
+            Err(io::ErrorKind::Interrupted),
+            Ok(b"\r\nbody".as_slice()),
+        ]
+        .into_iter();
+        let request = read_request_head_with(|buffer| {
+            let bytes = reads.next().unwrap()?;
+            buffer[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
+        })
+        .unwrap();
+        assert_eq!(
+            request.head.as_bytes(),
+            [first.as_slice(), b"\r\n"].concat()
+        );
+        assert_eq!(request.body_prefix, b"body");
+    }
 }

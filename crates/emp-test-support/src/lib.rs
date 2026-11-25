@@ -3,6 +3,7 @@ use std::{
     fmt::Display,
     io::{self, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
+    ops::Add,
     path::PathBuf,
     sync::OnceLock,
     time::{Duration, Instant},
@@ -30,15 +31,40 @@ pub fn fixture_dir() -> std::io::Result<tempfile::TempDir> {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct TestBudget(Duration);
+
+impl TestBudget {
+    pub fn with_product_wait(self, wait: Duration) -> Self {
+        Self(self.0 + wait)
+    }
+
+    pub fn duration(self) -> Duration {
+        self.0
+    }
+}
+
+impl Add for TestBudget {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self(self.0 + other.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Deadline(Instant);
 
 impl Deadline {
-    pub fn after(timeout: Duration) -> Self {
-        Self(Instant::now() + timeout)
+    pub fn after(budget: TestBudget) -> Self {
+        Self::starting_at(Instant::now(), budget)
     }
 
-    pub fn capped(&self, timeout: Duration) -> Self {
-        Self(self.0.min(Self::after(timeout).0))
+    pub fn starting_at(started_at: Instant, budget: TestBudget) -> Self {
+        Self(started_at + budget.duration())
+    }
+
+    pub fn capped(&self, budget: TestBudget) -> Self {
+        Self(self.0.min(Self::after(budget).0))
     }
 
     pub fn remaining(&self) -> Duration {
@@ -145,7 +171,7 @@ fn socket_timeout(error: io::Error) -> io::Error {
     }
 }
 
-pub fn test_timeout(duration: Duration) -> Duration {
+pub fn test_timeout(duration: Duration) -> TestBudget {
     static SCALE: OnceLock<f64> = OnceLock::new();
     let scale = SCALE.get_or_init(|| match std::env::var("EMP_TEST_TIME_SCALE") {
         Ok(value) => value
@@ -156,7 +182,7 @@ pub fn test_timeout(duration: Duration) -> Duration {
         Err(std::env::VarError::NotPresent) => 1.0,
         Err(error) => panic!("EMP_TEST_TIME_SCALE: {error}"),
     });
-    duration.mul_f64(*scale)
+    TestBudget(duration.mul_f64(*scale))
 }
 
 #[cfg(unix)]

@@ -493,7 +493,10 @@ async fn request_header_can_straddle_the_idle_shutdown_poll() {
 
     client.write_all(b"POST /split HTTP/1.1\r\nCont").unwrap();
     let consumed = ready.await.unwrap();
-    tokio::time::sleep_until(consumed + test_timeout(IDLE_POLL + Duration::from_millis(10))).await;
+    tokio::time::sleep_until(
+        consumed + test_timeout(IDLE_POLL + Duration::from_millis(10)).duration(),
+    )
+    .await;
     client.write_all(b"ent-Length: 2\r\n\r\nOK").unwrap();
     let (head, body) = request.await.unwrap().expect("complete split HTTP request");
     assert_eq!(head, b"POST /split HTTP/1.1\r\nContent-Length: 2\r\n\r\n");

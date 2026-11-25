@@ -24,7 +24,7 @@ fn full_queue_attaches_loss_to_next_admitted_event_and_flush() {
     let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let mut journal = Journal::new(root.join("logs"));
-    let timeout = test_timeout(Duration::from_secs(5));
+    let timeout = test_timeout(Duration::from_secs(5)).duration();
     let (writing, resume) = hold_event(&journal.event_gates.before_write, "first");
     journal.event("info", "first", &Value::Null);
     assert!(!journal.directory.exists());

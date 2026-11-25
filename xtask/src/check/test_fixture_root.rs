@@ -1,3 +1,7 @@
+//! 检查常规写法是否误用默认临时目录。同一文件内展开 `use` 别名至不动点，
+//! 识别带初始化式的 `let` 和简单赋值 `x = …`。有意规避、局部遮蔽分析、
+//! 跨函数或跨文件的数据流和宏生成的名字超出适用范围。
+
 use super::{Path, Result, comments, imports::Imports, read};
 use std::collections::BTreeSet;
 use syn::{
@@ -77,6 +81,14 @@ struct FixtureRoots {
 }
 
 impl FixtureRoots {
+    fn record_builder(&mut self, name: &syn::Ident, value: Option<&Expr>) {
+        if value.is_some_and(|value| self.is_builder(value)) {
+            self.builder_bindings.insert(name.to_string());
+        } else {
+            self.builder_bindings.remove(&name.to_string());
+        }
+    }
+
     fn is_builder(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Call(call) => {
@@ -151,16 +163,19 @@ impl<'ast> Visit<'ast> for FixtureRoots {
             pat => pat,
         };
         if let Pat::Ident(pat) = pat {
-            let name = pat.ident.to_string();
-            if local
-                .init
-                .as_ref()
-                .is_some_and(|init| self.is_builder(&init.expr))
-            {
-                self.builder_bindings.insert(name);
-            } else {
-                self.builder_bindings.remove(&name);
-            }
+            self.record_builder(
+                &pat.ident,
+                local.init.as_ref().map(|init| init.expr.as_ref()),
+            );
+        }
+    }
+
+    fn visit_expr_assign(&mut self, assignment: &'ast syn::ExprAssign) {
+        visit::visit_expr_assign(self, assignment);
+        if let Expr::Path(path) = assignment.left.as_ref()
+            && let Some(name) = path.path.get_ident()
+        {
+            self.record_builder(name, Some(&assignment.right));
         }
     }
 
@@ -289,21 +304,43 @@ fn fixture() {
 
     #[test]
     fn rejects_implicit_builder_root_through_local_binding() {
-        let source =
-            "fn fixture() { let builder = tempfile::Builder::new(); builder.make(create); }";
+        let source = r#"
+fn fixture() {
+    let initialized = tempfile::Builder::new();
+    initialized.make(create);
+    let assigned;
+    assigned = tempfile::Builder::default();
+    assigned.make(create);
+}
+"#;
         assert_eq!(
             violations("crates/example/tests/wire.rs", source).unwrap(),
-            [(1, FIXTURE_ROOT_GUIDANCE)]
+            [(4, FIXTURE_ROOT_GUIDANCE), (7, FIXTURE_ROOT_GUIDANCE)]
         );
     }
 
     #[test]
     fn rejects_implicit_builder_root_through_import_alias() {
-        let source =
-            "use tempfile::{Builder as Fixture}; fn fixture() { Fixture::new().make(create); }";
+        let source = r#"
+use tempfile as temp;
+use temp::Builder as Fixture;
+fn fixture() {
+    Fixture::new().make(create);
+    temp::Builder::new().make(create);
+    {
+        use other::temp;
+        Fixture::new().make(create);
+        temp::Builder::new().make(create);
+    }
+}
+"#;
         assert_eq!(
             violations("crates/example/tests/wire.rs", source).unwrap(),
-            [(1, FIXTURE_ROOT_GUIDANCE)]
+            [
+                (5, FIXTURE_ROOT_GUIDANCE),
+                (6, FIXTURE_ROOT_GUIDANCE),
+                (9, FIXTURE_ROOT_GUIDANCE)
+            ]
         );
     }
 

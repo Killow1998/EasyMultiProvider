@@ -135,10 +135,13 @@ async fn wait_for_balance(
     listener: &AsyncListener,
     tls: &Arc<ServerConfig>,
 ) -> StreamOwned<ServerConnection, emp_test_support::DeadlineIo<std::net::TcpStream>> {
-    let (peer, _) = timeout(test_timeout(Duration::from_secs(5)), listener.accept())
-        .await
-        .unwrap()
-        .unwrap();
+    let (peer, _) = timeout(
+        test_timeout(Duration::from_secs(5)).duration(),
+        listener.accept(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let peer = peer.into_std().unwrap();
     let tls = Arc::clone(tls);
     tokio::task::spawn_blocking(move || {
@@ -639,7 +642,11 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
                 .wait_for_work(|| stopped.load(Ordering::Acquire))
         })
     };
-    let found = timeout(test_timeout(Duration::from_secs(5)), &mut pending).await;
+    let found = timeout(
+        test_timeout(Duration::from_secs(5)).duration(),
+        &mut pending,
+    )
+    .await;
     if found.is_err() {
         stopped.store(true, Ordering::Release);
         state.catalog_refresh.stop();

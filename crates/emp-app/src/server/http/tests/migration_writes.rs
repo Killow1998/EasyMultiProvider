@@ -283,7 +283,7 @@ fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
         assert_eq!(json_body(&reply), json!({"status":"stopping"}));
         assert_eq!(
             timeout(
-                crate::server::raw_tcp::wire_timeout(),
+                crate::server::raw_tcp::wire_timeout().duration(),
                 state.lifecycle.signal().wait()
             )
             .await
@@ -578,7 +578,7 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
         team_writes::respond(upstream, "status", None, 200, &downgraded).await;
         let mut reply = Vec::new();
         timeout(
-            test_timeout(Duration::from_secs(5)),
+            test_timeout(Duration::from_secs(5)).duration(),
             client.read_to_end(&mut reply),
         )
         .await
@@ -606,7 +606,7 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
                     state
                         .lifecycle
                         .updates()
-                        .drain_for_test(test_timeout(Duration::from_secs(5)))
+                        .drain_for_test(test_timeout(Duration::from_secs(5)).duration())
                 );
             })
             .await
@@ -680,7 +680,7 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
                     state
                         .lifecycle
                         .updates()
-                        .drain_for_test(test_timeout(Duration::from_secs(5)))
+                        .drain_for_test(test_timeout(Duration::from_secs(5)).duration())
                 );
                 assert!(
                     state

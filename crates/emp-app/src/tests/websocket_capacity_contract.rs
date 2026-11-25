@@ -234,7 +234,7 @@ fn websocket_admission_closes_overflow_and_reuses_a_released_slot() {
 
     drop(first);
     let admission = &server.state.lifecycle.admission;
-    let release = test_timeout(Duration::from_secs(2));
+    let release = test_timeout(Duration::from_secs(2)).duration();
     assert!(admission.wait_for_websocket_release(1, release));
     assert_eq!(admission.active_websockets(), 1);
     let mut replacement = websocket(&server);
@@ -313,7 +313,7 @@ fn responses_half_close_replies_and_releases_its_websocket_permit() {
         assert!(client.head.starts_with("HTTP/1.1 101"));
         client.io.write_all(b"\x89\x81\x01\x02\x03\x04q").await.unwrap();
         let mut pong = [0; 3];
-        tokio::time::timeout(wire_timeout(), client.io.read_exact(&mut pong)).await.unwrap().unwrap();
+        tokio::time::timeout(wire_timeout().duration(), client.io.read_exact(&mut pong)).await.unwrap().unwrap();
         assert_eq!(&pong, b"\x8a\x01p");
         assert_eq!(server.state.lifecycle.admission.active_websockets(), 1);
         client.io.shutdown().await.unwrap();

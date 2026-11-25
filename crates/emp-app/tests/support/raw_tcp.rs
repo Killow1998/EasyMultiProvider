@@ -1,4 +1,4 @@
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, TestBudget, test_timeout};
 use std::{io, net::SocketAddr};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -6,7 +6,7 @@ use tokio::{
     time::{Duration, timeout},
 };
 
-pub fn wire_timeout() -> Duration {
+pub fn wire_timeout() -> TestBudget {
     test_timeout(Duration::from_secs(5))
 }
 

@@ -308,7 +308,7 @@ mod body_capacity_tests {
         let head = format!(
             "POST /api/config HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n"
         );
-        let deadline = Instant::now() + test_timeout(REQUEST_READ_TIMEOUT);
+        let deadline = Instant::now() + test_timeout(REQUEST_READ_TIMEOUT).duration();
         GuardedHead::read(&mut head.as_bytes(), deadline)
             .await
             .ok()
