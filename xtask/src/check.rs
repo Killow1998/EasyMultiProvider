@@ -391,6 +391,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_markdown_links_outside_the_repository() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let paths = ["README.md".to_owned(), "docs/a/b.md".to_owned()];
+        fs::create_dir_all(root.join("docs/a")).unwrap();
+        fs::write(root.join("docs/c.md"), "").unwrap();
+        fs::write(root.join(&paths[0]), "[encoded](%2E%2E/)\n[plain](../)\n").unwrap();
+        fs::write(root.join(&paths[1]), "[inside](../c.md)\n").unwrap();
+        let mut errors = Vec::new();
+
+        doc_links::check(root, &paths, &mut errors).unwrap();
+
+        assert_eq!(
+            errors,
+            [
+                "[doc-links] README.md:1: %2E%2E/ 不存在",
+                "[doc-links] README.md:2: ../ 不存在",
+            ]
+        );
+    }
+
+    #[test]
     fn checks_markdown_footnote_links() {
         let directory = emp_test_support::fixture_dir().unwrap();
         let root = directory.path();

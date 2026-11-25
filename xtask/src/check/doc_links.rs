@@ -3,6 +3,9 @@ use pulldown_cmark::{Event, LinkType, Options, Parser, Tag};
 use regex::Regex;
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("{}: {error}", root.display()))?;
     let scheme = Regex::new(r"^[a-zA-Z][a-zA-Z0-9+.-]*:").unwrap();
     for path in paths {
         let file = root.join(path);
@@ -35,11 +38,13 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
             if target.is_empty() || Path::new(target).has_root() || scheme.is_match(target) {
                 continue;
             }
-            let exists = decode_relative_path(target).is_some_and(|decoded| {
-                let resolved = parent.join(decoded);
-                resolved.is_file() || resolved.is_dir()
-            });
-            if !exists {
+            let valid = decode_relative_path(target)
+                .and_then(|decoded| parent.join(decoded).canonicalize().ok())
+                .is_some_and(|resolved| {
+                    resolved.starts_with(&canonical_root)
+                        && (resolved.is_file() || resolved.is_dir())
+                });
+            if !valid {
                 let line = contents[..range.start]
                     .bytes()
                     .filter(|&byte| byte == b'\n')
