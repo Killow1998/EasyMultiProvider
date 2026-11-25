@@ -236,9 +236,8 @@ impl ServerHandle {
                 "raised":budget.raised,"os_error":budget.os_error,
             }),
         );
-        let result = Self::start_recorded(context, Arc::clone(&diagnostics));
-        if let Err(error) = &result {
-            diagnostics.journal.event(
+        let record_failure = |error: &AppError| {
+            diagnostics.journal.event_and_flush_blocking(
                 "warning",
                 "startup_failure",
                 &serde_json::json!({
@@ -256,15 +255,22 @@ impl ServerHandle {
                     },
                 }),
             );
-            diagnostics.journal.flush_blocking();
+        };
+        let enable_catalog_refresh_worker = context.enable_catalog_refresh_worker;
+        let (mut handle, listener) =
+            Self::start_recorded(context, Arc::clone(&diagnostics)).inspect_err(record_failure)?;
+        if let Err(error) = handle.start_workers(listener, enable_catalog_refresh_worker) {
+            record_failure(&error);
+            let _ = handle.shutdown();
+            return Err(error);
         }
-        result
+        Ok(handle)
     }
 
     fn start_recorded(
         context: StartupContext<'_>,
         diagnostics: Arc<Diagnostics>,
-    ) -> Result<Self, AppError> {
+    ) -> Result<(Self, HttpListener), AppError> {
         let StartupContext {
             host,
             port,
@@ -275,7 +281,7 @@ impl ServerHandle {
             markers,
             http_client_override,
             admission,
-            enable_catalog_refresh_worker,
+            enable_catalog_refresh_worker: _,
             external_key,
             official_models,
         } = context;
@@ -373,43 +379,44 @@ impl ServerHandle {
                 "source": state.backend.transport.support_network.source_at_startup,
             }),
         );
-        let mut handle = Self {
+        let handle = Self {
             local_addr,
             state,
             listener: None,
             workers: Vec::new(),
             _service_owner: service_owner,
         };
-        let started = (|| {
-            handle.listener = Some(listener.start(handle.state.clone())?);
-            if enable_catalog_refresh_worker {
-                handle.spawn_worker("emp-catalog-refresh", |state| {
-                    crate::services::account_catalog::run_refresh_worker(&state);
-                })?;
-                crate::services::account_catalog::request_refresh(&handle.state, false);
-            }
-            handle.spawn_worker("emp-team-usage", |state| {
-                crate::services::team::TeamState::run(&state);
+        Ok((handle, listener))
+    }
+
+    fn start_workers(
+        &mut self,
+        listener: HttpListener,
+        enable_catalog_refresh_worker: bool,
+    ) -> Result<(), AppError> {
+        self.listener = Some(listener.start(self.state.clone())?);
+        if enable_catalog_refresh_worker {
+            self.spawn_worker("emp-catalog-refresh", |state| {
+                crate::services::account_catalog::run_refresh_worker(&state);
             })?;
-            handle.spawn_worker("emp-quota-sampler", |state| {
-                crate::services::quota::run_sampler(&state);
-            })?;
-            handle.spawn_worker("emp-runtime-watch", |state| {
-                crate::services::runtime::watch_runtime(&state);
-            })?;
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            handle.spawn_worker("emp-heap-reclaim", super::memory::run)?;
-            Ok::<(), AppError>(())
-        })();
-        if let Err(error) = started {
-            let _ = handle.shutdown();
-            return Err(error);
+            crate::services::account_catalog::request_refresh(&self.state, false);
         }
-        handle.state.backend.diagnostics.journal.event(
+        self.spawn_worker("emp-team-usage", |state| {
+            crate::services::team::TeamState::run(&state);
+        })?;
+        self.spawn_worker("emp-quota-sampler", |state| {
+            crate::services::quota::run_sampler(&state);
+        })?;
+        self.spawn_worker("emp-runtime-watch", |state| {
+            crate::services::runtime::watch_runtime(&state);
+        })?;
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        self.spawn_worker("emp-heap-reclaim", super::memory::run)?;
+        self.state.backend.diagnostics.journal.event(
             "info",
             "service_listening",
-            &serde_json::json!({"port": local_addr.port()}),
+            &serde_json::json!({"port": self.local_addr.port()}),
         );
-        Ok(handle)
+        Ok(())
     }
 }

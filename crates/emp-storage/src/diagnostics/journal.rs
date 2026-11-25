@@ -144,12 +144,14 @@ enum Action {
     Flush {
         record: Option<Record>,
         rejected: usize,
+        close: bool,
         receipt: Sender<usize>,
     },
 }
 
 #[derive(Default)]
 struct QueueState {
+    closed: bool,
     pending_events: usize,
     rejected: usize,
     accepted: usize,
@@ -322,6 +324,9 @@ impl Journal {
         let event = Event::new(level, name, fields);
         self.event_gates.before_enqueue.run(&event.name);
         let mut queue = self.queue.lock().unwrap();
+        if queue.closed {
+            return;
+        }
         if queue.pending_events == QUEUE_CAPACITY {
             queue.rejected += 1;
             return;
@@ -355,11 +360,23 @@ impl Journal {
         self.confirm(Some(Event::new(level, name, fields)));
     }
 
+    pub fn close_with_event_blocking(&self, level: &str, name: &str, fields: &Value) {
+        self.confirm_with(Some(Event::new(level, name, fields)), true);
+    }
+
     fn confirm(&self, event: Option<Event>) -> usize {
+        self.confirm_with(event, false)
+    }
+
+    fn confirm_with(&self, event: Option<Event>, close: bool) -> usize {
         let _flush = self.flush_lock.lock().unwrap();
         let (done, receipt) = mpsc::channel();
         let sent = {
             let mut queue = self.queue.lock().unwrap();
+            if queue.closed {
+                return 0;
+            }
+            queue.closed = close;
             let rejected = queue.rejected;
             let records = usize::from(event.is_some());
             let record = event.map(|event| Record {
@@ -371,6 +388,7 @@ impl Journal {
                 Action::Flush {
                     record,
                     rejected,
+                    close,
                     receipt: done,
                 },
                 records,
@@ -468,8 +486,9 @@ impl Writer {
                 Action::Flush {
                     record,
                     rejected,
+                    close,
                     receipt,
-                } => (record, Some((rejected, receipt))),
+                } => (record, Some((rejected, close, receipt))),
             };
             if dropped != 0 {
                 self.write_event(
@@ -487,8 +506,14 @@ impl Writer {
                 queue.settled += 1;
                 queue.lost_by_writer += usize::from(lost);
             }
-            if let Some((rejected, receipt)) = confirmation {
+            if let Some((rejected, close, receipt)) = confirmation {
+                if close {
+                    self.file = None;
+                }
                 let _ = receipt.send(report_losses(queue, Some(rejected)));
+                if close {
+                    return;
+                }
             }
         }
         report_losses(queue, None);
@@ -499,7 +524,7 @@ impl Writer {
             .join(format!("{}-p{part:03}.jsonl", self.basename))
     }
     fn open_part(&self, part: u32) -> std::io::Result<File> {
-        let _parts_lock = self.lock_parts()?;
+        no_symlinks(&self.directory)?;
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -507,34 +532,10 @@ impl Writer {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         }
-        let file = options.open(self.path(part))?;
-        #[cfg(unix)]
-        file.lock()?;
-        Ok(file)
-    }
-
-    fn lock_parts(&self) -> std::io::Result<File> {
-        no_symlinks(&self.directory)?;
-        let mut lock_path = self.directory.as_os_str().to_os_string();
-        lock_path.push(".lock");
-        let lock_path = PathBuf::from(lock_path);
-        no_symlinks(&lock_path)?;
-        let mut options = OpenOptions::new();
-        options.write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        }
-        let file = options.open(lock_path)?;
-        file.lock()?;
-        Ok(file)
+        options.open(self.path(part))
     }
 
     fn prune(&mut self) {
-        let Ok(_parts_lock) = self.lock_parts() else {
-            return;
-        };
         let parts = parts(&self.directory);
         self.managed = parts.iter().map(|part| part.3).sum();
         let newest = parts.last().map(|part| part.2.as_path());
@@ -544,7 +545,7 @@ impl Writer {
             }
             if *path != self.path(self.part)
                 && Some(path.as_path()) != newest
-                && remove_closed_part(path)
+                && std::fs::remove_file(path).is_ok()
             {
                 self.managed -= size;
             }
@@ -593,32 +594,6 @@ impl Writer {
         }
         true
     }
-}
-
-fn remove_closed_part(path: &Path) -> bool {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_DELETE, FILE_SHARE_READ};
-        options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);
-    }
-    let Ok(file) = options.open(path) else {
-        return false;
-    };
-    #[cfg(unix)]
-    if file.try_lock().is_err() {
-        return false;
-    }
-    let removed = std::fs::remove_file(path).is_ok();
-    drop(file);
-    removed
 }
 
 fn parts(directory: &Path) -> Vec<(std::time::SystemTime, String, PathBuf, u64)> {

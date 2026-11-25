@@ -440,9 +440,9 @@ mod tests {
         fn poll_write(
             self: Pin<&mut Self>,
             _: &mut Context<'_>,
-            _: &[u8],
+            bytes: &[u8],
         ) -> Poll<io::Result<usize>> {
-            Poll::Ready(Ok(0))
+            Poll::Ready(Ok(bytes.len()))
         }
 
         fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -474,5 +474,15 @@ mod tests {
             stream.io.calls, calls,
             "expired flush must not poll the underlying writer"
         );
+    }
+
+    #[tokio::test]
+    async fn account_event_flush_deadline_precedes_a_ready_write() {
+        pause();
+        let mut stream = account_event_stream(FlushIo(false)).await;
+        assert!(poll_once(pin!(stream.flush())).await.is_pending());
+        advance(Duration::from_secs(5)).await;
+        stream.io.inner.0 = true;
+        assert_expired_without_io(&mut stream).await;
     }
 }

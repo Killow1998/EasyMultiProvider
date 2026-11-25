@@ -164,9 +164,12 @@ fn final_journal_flush_waits_for_the_exit_restore_receipt() {
 }
 
 #[test]
-fn final_journal_flush_does_not_hold_the_service_lock() {
+fn recovery_is_rejected_until_final_journal_confirmation() {
     let (directory, server) = fixture();
     let state = Arc::clone(&server.state);
+    let config = &state.backend.configuration.config_path;
+    let run_recovery =
+        || crate::startup_recovery::run(config, &AppError::CredentialKeyMissing, false, false);
     let shutdown = Observation::spawn(move |probe| {
         probe.observe(|_| server.shutdown());
     });
@@ -174,18 +177,31 @@ fn final_journal_flush_does_not_hold_the_service_lock() {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     let result = shutdown.begin(deadline, "finish shutdown");
     writing.recv_timeout(deadline.remaining()).unwrap();
-    let _new_owner = emp_state::IntegrationFileLock::acquire(
-        &directory
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("state/service.lock"),
-        Duration::ZERO,
-        Duration::ZERO,
-    )
-    .expect("service ownership is available before final journal acknowledgement");
+    crate::server::RECOVERY_ACCEPT_FAILURE.set(Some(std::io::ErrorKind::PermissionDenied));
+    assert!(matches!(run_recovery(), Err(AppError::ServiceOwned)));
+    state
+        .backend
+        .diagnostics
+        .journal
+        .event("info", "late_exit_event", &serde_json::Value::Null);
     resume.send(()).unwrap();
     result.wait().unwrap().unwrap();
+    assert!(
+        crate::tests::live_journal(directory.path())
+            .iter()
+            .any(|record| record["event"] == "shutdown_complete")
+    );
+    assert!(
+        !crate::tests::flushed_journal(directory.path(), &state)
+            .iter()
+            .any(|record| record["event"] == "late_exit_event")
+    );
+    let recovery = run_recovery();
+    crate::server::RECOVERY_ACCEPT_FAILURE.set(None);
+    assert!(matches!(
+        recovery,
+        Err(AppError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied
+    ));
 }
 
 #[test]

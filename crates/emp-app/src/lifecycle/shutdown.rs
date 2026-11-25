@@ -74,12 +74,11 @@ impl ServerHandle {
         );
         let result = self.shutdown_inner(preserve_integration);
         close_exit_callbacks();
-        drop(self._service_owner);
         self.state
             .backend
             .diagnostics
             .journal
-            .event_and_flush_blocking(
+            .close_with_event_blocking(
                 if result.is_ok() { "info" } else { "error" },
                 "shutdown_complete",
                 &serde_json::json!({
@@ -92,6 +91,7 @@ impl ServerHandle {
                     },
                 }),
             );
+        drop(self._service_owner);
         result
     }
 
