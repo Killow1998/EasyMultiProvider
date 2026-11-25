@@ -58,6 +58,7 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 emp-files = { path = "../emp-files" }
+emp-modules = { path = "../emp-modules", features = ["test-support"] }
 emp-storage = { path = "../emp-storage", features = ["test-support"] }
 emp-test-support = { path = "../emp-test-support", features = ["websocket"] }
 emp-state = { path = "../emp-state", features = ["test-support"] }
@@ -71,6 +72,9 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustls = "0.23"
 tokio = { version = "1.53.1", features = ["test-util"] }
 zstd = "=0.13.3"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["event", "fs", "process"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }

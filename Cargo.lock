@@ -890,6 +890,7 @@ dependencies = [
  "regex",
  "ring",
  "rusqlite",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",
@@ -1040,6 +1041,7 @@ name = "emp-modules"
 version = "0.1.0"
 dependencies = [
  "emp-domain",
+ "emp-modules",
  "emp-test-support",
  "lsp-server",
  "serde",

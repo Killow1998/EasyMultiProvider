@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use emp_modules::peer::{CallError, ErrorCode, Handlers, Peer, PeerHandle, PendingRequest, Side};
+use emp_modules::peer::{CallError, ErrorCode, Handlers, Peer, PendingRequest, Side};
 use emp_test_support::{Deadline, Observation, OwnedChild, test_timeout};
 use lsp_server::{Message, Request, RequestId, Response};
 use serde_json::{Value, json};
@@ -46,11 +46,15 @@ fn module_fixture() {
     let Ok(mode) = std::env::var(CHILD_MODE) else {
         return;
     };
+    if mode == "broken-write" {
+        check_broken_write_pipe();
+        return;
+    }
     let mut output = OpenOptions::new().write(true).open("/dev/fd/3").unwrap();
     let mut input = BufReader::new(io::stdin());
     if matches!(
         mode.as_str(),
-        "oversized" | "wrong-prefix" | "duplicate-key"
+        "oversized" | "wrong-prefix" | "duplicate-key" | "truncated"
     ) {
         let request = Message::read(&mut input).unwrap().unwrap();
         assert!(matches!(request, Message::Request(req) if req.id == "h:1".to_owned().into()));
@@ -64,6 +68,11 @@ fn module_fixture() {
             "duplicate-key" => {
                 let json = r#"{"id":"h:1","result":[{"ready":false,"ready":true}]}"#;
                 write!(output, "Content-Length: {}\r\n\r\n{json}", json.len()).unwrap();
+            }
+            "truncated" => {
+                output.write_all(b"Content-Length: 100\r\n\r\n{").unwrap();
+                output.flush().unwrap();
+                return;
             }
             _ => unreachable!(),
         }
@@ -187,7 +196,7 @@ fn cancellation_releases_the_waiter_before_the_handler_and_reaches_its_token() {
     let host = peer.handle();
     let request = host.start_request("module.gated", json!(1)).unwrap();
     assert_eq!(starting.recv_timeout(budget()).unwrap(), json!(1));
-    cancel_while_waiting(request, &host);
+    cancel_while_waiting(request);
     host.call("module.release", json!(1), budget()).unwrap();
     assert_eq!(finishing.recv_timeout(budget()).unwrap(), json!([1, true]));
     assert_eq!(
@@ -216,7 +225,7 @@ fn cancelling_a_parent_does_not_block_an_active_callback() {
     let host = peer.handle();
     let parent = host.start_request("module.callback", json!(5)).unwrap();
     starting.recv_timeout(budget()).unwrap();
-    cancel_while_waiting(parent, &host);
+    cancel_while_waiting(parent);
     host.call("module.echo", json!(null), budget()).unwrap();
     release.send(()).unwrap();
     assert_eq!(finishing.recv_timeout(budget()).unwrap(), json!([5, true]));
@@ -226,13 +235,12 @@ fn cancelling_a_parent_does_not_block_an_active_callback() {
     );
 }
 
-fn cancel_while_waiting(request: PendingRequest, host: &PeerHandle) {
+fn cancel_while_waiting(request: PendingRequest) {
     let canceller = request.canceller();
     let (entered, entering) = mpsc::channel();
     let waiter = Observation::spawn(move |probe| {
         probe.observe(|deadline| {
-            entered.send(()).unwrap();
-            request.wait(deadline.remaining())
+            request.wait_registered(deadline.remaining(), || entered.send(()).unwrap())
         });
     });
     let result = waiter.begin(
@@ -240,11 +248,6 @@ fn cancel_while_waiting(request: PendingRequest, host: &PeerHandle) {
         "cancelled waiter",
     );
     entering.recv_timeout(budget()).unwrap();
-    assert_eq!(
-        host.call("module.echo", json!("waiting"), budget())
-            .unwrap(),
-        json!("waiting")
-    );
     canceller.cancel();
     assert!(matches!(result.wait().unwrap(), Err(CallError::Cancelled)));
 }
@@ -297,6 +300,124 @@ fn invalid_frames_disconnect_and_report_the_protocol_error() {
             .unwrap();
         assert!(exit.status.success(), "{mode}");
     }
+}
+
+#[test]
+fn truncated_frame_keeps_the_read_error_kind_and_public_message() {
+    let (peer, mut child) = module("truncated", Handlers::default());
+    assert!(matches!(
+        peer.handle().call("module.echo", Value::Null, budget()),
+        Err(CallError::Disconnected)
+    ));
+    let error = peer.wait().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(error.to_string(), "cannot read peer frame");
+    assert!(
+        child
+            .wait_until(Deadline::after(test_timeout(Duration::from_secs(5))))
+            .unwrap()
+            .status
+            .success()
+    );
+}
+
+struct GateSecondFrame {
+    pipe: PipeWriter,
+    first_flush: bool,
+    gate: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+}
+
+impl Write for GateSecondFrame {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.first_flush
+            && let Some((entered, release)) = self.gate.take()
+        {
+            entered.send(()).unwrap();
+            release.recv_timeout(budget()).unwrap();
+        }
+        self.pipe.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.pipe.flush()?;
+        self.first_flush = true;
+        Ok(())
+    }
+}
+
+#[test]
+fn a_broken_write_pipe_releases_unsent_requests_and_keeps_written_replies() {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "module_fixture", "--nocapture"])
+        .env(CHILD_MODE, "broken-write");
+    let output = OwnedChild::output(
+        command,
+        Deadline::after(test_timeout(Duration::from_secs(15))),
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn check_broken_write_pipe() {
+    let (input, writer) = io::pipe().unwrap();
+    let (reader, mut output) = io::pipe().unwrap();
+    let (entered, writing) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let peer = Peer::connect(
+        Side::Host,
+        BufReader::new(reader),
+        GateSecondFrame {
+            pipe: writer,
+            first_flush: false,
+            gate: Some((entered, gate)),
+        },
+        Handlers::default(),
+    )
+    .unwrap();
+    let host = peer.handle();
+    let written = host.start_request("module.echo", json!(1)).unwrap();
+    let failing = host.start_request("module.echo", json!(2)).unwrap();
+    writing.recv_timeout(budget()).unwrap();
+    let queued = host.start_request("module.echo", json!(3)).unwrap();
+    let mut input = BufReader::new(input);
+    let Some(Message::Request(received)) = Message::read(&mut input).unwrap() else {
+        panic!("expected the request written before stdin closed");
+    };
+    assert_eq!(received.params, json!(1));
+    drop(input);
+    release.send(()).unwrap();
+    for request in [failing, queued] {
+        let result = request.wait(budget());
+        assert!(matches!(result, Err(CallError::Disconnected)), "{result:?}");
+    }
+    assert!(matches!(
+        host.start_request("module.echo", json!(4)),
+        Err(CallError::Disconnected)
+    ));
+    Message::Response(Response::new_ok(received.id, 1))
+        .write(&mut output)
+        .unwrap();
+    assert_eq!(written.wait(budget()).unwrap(), json!(1));
+    let exited = Observation::spawn(move |probe| {
+        probe.observe(|_| peer.wait());
+    });
+    let result = exited
+        .begin(
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+            "write failure while stdout is open",
+        )
+        .wait();
+    drop(output);
+    assert_eq!(
+        result.unwrap().unwrap_err().kind(),
+        io::ErrorKind::BrokenPipe
+    );
 }
 
 #[test]

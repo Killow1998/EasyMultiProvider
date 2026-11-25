@@ -1,5 +1,17 @@
-use std::{io, process::Command};
+use std::{
+    io,
+    process::{Child, Command, ExitStatus},
+    sync::Mutex,
+};
 
+#[cfg(unix)]
+pub(crate) mod pipes;
+
+#[cfg(unix)]
+use rustix::{
+    io::Errno,
+    process::{Pid, Signal, WaitId, WaitIdOptions, kill_process, kill_process_group, waitid},
+};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 #[cfg(windows)]
@@ -15,9 +27,9 @@ use windows_sys::Win32::{
 };
 
 pub(crate) struct ProcessTree {
-    stopped: bool,
+    stopped: Mutex<bool>,
     #[cfg(unix)]
-    group: libc::pid_t,
+    leader: Pid,
     #[cfg(windows)]
     job: OwnedHandle,
 }
@@ -54,41 +66,82 @@ impl ProcessTree {
             job
         };
         Ok(Self {
-            stopped: false,
+            stopped: Mutex::new(false),
             #[cfg(unix)]
-            group: pid as libc::pid_t,
+            leader: Pid::from_raw(pid as i32).unwrap(),
             #[cfg(windows)]
             job,
         })
     }
 
-    pub(crate) fn terminate_gracefully(&mut self) {
+    pub(crate) fn request_graceful_stop(&self) {
         #[cfg(unix)]
         {
-            // SAFETY: process_group(0) gives the child a group with its PID.
-            unsafe { libc::killpg(self.group, libc::SIGTERM) };
+            let _ = kill_process_group(self.leader, Signal::TERM);
             #[expect(
                 clippy::disallowed_methods,
                 reason = "向进程组发送 SIGTERM 后保留既有宽限期，再发送 SIGKILL"
             )]
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        self.request_stop();
+    }
+
+    pub(crate) fn request_stop(&self) {
+        #[cfg(unix)]
+        {
+            let stopped = self.stopped.lock().unwrap();
+            if !*stopped {
+                let _ = kill_process(self.leader, Signal::KILL);
+            }
+        }
+        #[cfg(windows)]
         self.terminate();
     }
 
-    pub(crate) fn is_stopped(&self) -> bool {
-        self.stopped
+    pub(crate) fn has_exited(&self, #[cfg(windows)] child: &mut Child) -> io::Result<bool> {
+        #[cfg(unix)]
+        return self.observe_exit(WaitIdOptions::NOHANG);
+        #[cfg(windows)]
+        return child.try_wait().map(|status| status.is_some());
     }
 
-    pub(crate) fn terminate(&mut self) {
-        if self.stopped {
+    #[cfg(unix)]
+    fn observe_exit(&self, options: WaitIdOptions) -> io::Result<bool> {
+        let options = options | WaitIdOptions::EXITED | WaitIdOptions::NOWAIT;
+        loop {
+            match waitid(WaitId::Pid(self.leader), options) {
+                Ok(status) => return Ok(status.is_some()),
+                Err(Errno::INTR) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    pub(crate) fn wait(&self, child: &mut Child) -> io::Result<ExitStatus> {
+        #[cfg(unix)]
+        self.observe_exit(WaitIdOptions::empty())?;
+        #[cfg(windows)]
+        let status = child.wait();
+        self.terminate();
+        #[cfg(unix)]
+        let status = child.wait();
+        status
+    }
+
+    pub(crate) fn is_stopped(&self) -> bool {
+        *self.stopped.lock().unwrap()
+    }
+
+    fn terminate(&self) {
+        let mut stopped = self.stopped.lock().unwrap();
+        if *stopped {
             return;
         }
-        self.stopped = true;
+        *stopped = true;
         #[cfg(unix)]
-        // SAFETY: process_group(0) gives the child a group with its PID.
-        unsafe {
-            libc::killpg(self.group, libc::SIGKILL);
+        {
+            let _ = kill_process_group(self.leader, Signal::KILL);
         }
         #[cfg(windows)]
         // SAFETY: self owns the live job handle through termination.

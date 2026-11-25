@@ -125,9 +125,12 @@ fn run_with_timeout_policy(
         let mut cancellation_reason = None;
         let deadline = Instant::now() + timeout;
         loop {
-            match child.child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) => {}
+            match child.tree.has_exited(
+                #[cfg(windows)]
+                &mut child.child,
+            ) {
+                Ok(true) => break,
+                Ok(false) => {}
                 Err(_) => {
                     cancelled.cancel();
                     break;
@@ -188,9 +191,10 @@ struct ControlChild {
 
 impl ControlChild {
     fn stop(&mut self) -> std::io::Result<ExitStatus> {
-        self.tree.terminate_gracefully();
+        self.tree.request_graceful_stop();
+        #[cfg(windows)]
         let _ = self.child.kill();
-        self.child.wait()
+        self.tree.wait(&mut self.child)
     }
 }
 

@@ -3,17 +3,20 @@ use emp_modules::{
     manifest::{ApiRequirement, HOST_API_V3, ManifestError, ModuleManifest},
     peer::{CallError, Handlers, Peer, Side},
 };
-use emp_test_support::{fixture_dir, test_timeout};
+use emp_test_support::{Deadline, fixture_dir, test_timeout};
 use serde_json::{Value, json};
 use std::{
     fs::OpenOptions,
     io::{self, BufRead, BufReader, Read, Write},
+    net::Ipv4Addr,
     process::{Command, Stdio},
     sync::mpsc,
     time::Duration,
 };
+use tokio::{net::TcpListener, sync::oneshot, time::timeout};
 
 const CHILD_MODE: &str = "EMP_TEST_API3_HANDSHAKE";
+const SIDEBAND: &str = "EMP_TEST_API3_SIDEBAND";
 const MANIFEST: &str = r#"{"id":"fixture-module","module_version":"1.0.0","host_api":{"major":3,"min_minor":0},"contributions":[]}"#;
 const FINAL_RESPONSE_BYTES: usize = 256 * 1024;
 
@@ -35,18 +38,69 @@ fn fixture(mode: &str) -> Command {
     command
 }
 
+fn sideband() -> std::net::TcpStream {
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
+    deadline
+        .connect(std::env::var(SIDEBAND).unwrap().parse().unwrap())
+        .unwrap()
+}
+
 #[test]
 fn module_fixture() {
     let Ok(mode) = std::env::var(CHILD_MODE) else {
         return;
     };
+    if mode == "escaped" {
+        rustix::process::setsid().unwrap();
+        let socket = sideband();
+        let mut ready = OpenOptions::new().write(true).open("/dev/fd/4").unwrap();
+        ready.write_all(b"x").unwrap();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
+        let _ = deadline.io(socket).read(&mut [0]);
+        return;
+    }
     let mut output = OpenOptions::new().write(true).open("/dev/fd/3").unwrap();
+    if mode.starts_with("escape-") {
+        let mut descendant = Command::new("sh")
+            .args(["-c", r#"exec "$@" 4>&1 1>&2"#, "sh"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::module_process_contract::module_fixture",
+                "--nocapture",
+            ])
+            .env(CHILD_MODE, "escaped")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = [0];
+        descendant
+            .stdout
+            .take()
+            .unwrap()
+            .read_exact(&mut ready)
+            .unwrap();
+        assert_eq!(ready, [b'x']);
+        let mut input = BufReader::new(io::stdin());
+        let initialize = read_request(&mut input, "module.initialize");
+        if mode != "escape-timeout" {
+            write_response(&mut output, &initialize, MANIFEST);
+        }
+        if mode == "escape-final" {
+            let request = read_request(&mut input, "module.exit");
+            write_response(&mut output, &request, "42");
+            std::process::exit(0);
+        }
+        descendant.wait().unwrap();
+        return;
+    }
     if matches!(mode.as_str(), "exit" | "exit-tree" | "duplicate-manifest") {
         let mut input = BufReader::new(io::stdin());
         let initialize = read_request(&mut input, "module.initialize");
         if mode == "duplicate-manifest" {
             let duplicate = MANIFEST.replace(r#""major":3"#, r#""major":2,"major":3"#);
             write_response(&mut output, &initialize, &duplicate);
+            let _confirmation = sideband();
             return;
         }
         write_response(&mut output, &initialize, MANIFEST);
@@ -112,7 +166,8 @@ fn read_request(input: &mut impl BufRead, method: &str) -> Value {
 
 fn write_response(output: &mut impl Write, id: &Value, result: &str) {
     let body = format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{result}}}"#);
-    write!(output, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    let frame = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+    output.write_all(frame.as_bytes()).unwrap();
     output.flush().unwrap();
 }
 
@@ -189,7 +244,7 @@ impl Drop for Descendant {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn module_exit_terminates_the_pipe_holding_descendant_and_joins_io() {
+async fn module_exit_terminates_the_descendant_in_its_process_group() {
     let state_dir = fixture_dir().unwrap();
     let (process, _) = ModuleProcess::start(
         fixture("exit-tree"),
@@ -232,17 +287,264 @@ async fn module_exit_terminates_the_pipe_holding_descendant_and_joins_io() {
 #[tokio::test]
 async fn duplicate_keys_in_the_handshake_manifest_disconnect() {
     let state_dir = fixture_dir().unwrap();
-    let outcome = ModuleProcess::start(
-        fixture("duplicate-manifest"),
+    let (command, listener) = fixture_with_sideband("duplicate-manifest").await;
+    let (confirmed, confirmation) = mpsc::channel();
+    let (read, read_result) = mpsc::channel();
+    let start = ModuleProcess::start_with_connector(
+        command,
         state_dir.path(),
         Handlers::default(),
         budget(),
-    )
-    .await;
+        |side, reader, writer, handlers| {
+            Peer::connect_observed(
+                side,
+                reader,
+                writer,
+                handlers,
+                move |error| {
+                    read.send(error).unwrap();
+                    confirmation.recv_timeout(budget()).unwrap();
+                },
+                || {},
+            )
+        },
+    );
+    let (outcome, ()) = tokio::join!(start, async {
+        let _report = accept_sideband(&listener).await;
+        confirmed.send(()).unwrap();
+    });
+    assert_eq!(
+        read_result.recv_timeout(budget()).unwrap(),
+        Some(io::ErrorKind::InvalidData)
+    );
     assert!(matches!(
         outcome,
         Err(StartError::Handshake(CallError::Disconnected))
     ));
+}
+
+async fn fixture_with_sideband(mode: &str) -> (Command, TcpListener) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let mut command = fixture(mode);
+    command.env(SIDEBAND, listener.local_addr().unwrap().to_string());
+    (command, listener)
+}
+
+async fn accept_sideband(listener: &TcpListener) -> tokio::net::TcpStream {
+    timeout(budget(), listener.accept())
+        .await
+        .unwrap()
+        .unwrap()
+        .0
+}
+
+#[tokio::test]
+async fn handshake_timeout_stops_even_when_a_detached_descendant_holds_the_pipes() {
+    let state_dir = fixture_dir().unwrap();
+    let (command, listener) = fixture_with_sideband("escape-timeout").await;
+    let start = ModuleProcess::start(command, state_dir.path(), Handlers::default(), budget());
+    let handshake_and_cleanup =
+        (test_timeout(Duration::from_secs(5)) + test_timeout(Duration::from_secs(5))).duration();
+    let (outcome, descendant) = tokio::join!(
+        timeout(handshake_and_cleanup, start),
+        accept_sideband(&listener)
+    );
+    assert!(matches!(
+        outcome.unwrap(),
+        Err(StartError::Handshake(CallError::TimedOut))
+    ));
+    assert_eq!(
+        descendant.try_read(&mut [0]).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+}
+
+struct NotifyLargeWrite<W> {
+    writer: W,
+    started: Option<oneshot::Sender<()>>,
+}
+
+impl<W: Write> Write for NotifyLargeWrite<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() >= 1024 * 1024
+            && let Some(started) = self.started.take()
+        {
+            let _ = started.send(());
+        }
+        self.writer.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+struct IoExitGate {
+    entered: oneshot::Receiver<()>,
+    release: mpsc::Sender<()>,
+    released: oneshot::Receiver<()>,
+}
+
+fn io_exit_gate() -> (IoExitGate, impl FnOnce() + Send + 'static) {
+    let (enter, entered) = oneshot::channel();
+    let (release, held) = mpsc::channel();
+    let (leave, released) = oneshot::channel();
+    (
+        IoExitGate {
+            entered,
+            release,
+            released,
+        },
+        move || {
+            enter.send(()).unwrap();
+            held.recv_timeout(budget()).unwrap();
+            leave.send(()).unwrap();
+        },
+    )
+}
+
+#[tokio::test]
+async fn stop_waits_for_each_io_thread_after_interrupting_detached_pipes() {
+    let state_dir = fixture_dir().unwrap();
+    for hold_reader in [true, false] {
+        let (command, listener) = fixture_with_sideband("escape-stop").await;
+        let (writing, writer_started) = oneshot::channel();
+        let (mut read_gate, reader_exit) = io_exit_gate();
+        let (mut write_gate, writer_exit) = io_exit_gate();
+        let (process, _) = ModuleProcess::start_with_connector(
+            command,
+            state_dir.path(),
+            Handlers::default(),
+            budget(),
+            |side, reader, writer, handlers| {
+                Peer::connect_observed(
+                    side,
+                    reader,
+                    NotifyLargeWrite {
+                        writer,
+                        started: Some(writing),
+                    },
+                    handlers,
+                    move |_| reader_exit(),
+                    writer_exit,
+                )
+            },
+        )
+        .await
+        .unwrap();
+        let descendant = accept_sideband(&listener).await;
+        let pending = process
+            .connection()
+            .start_request("module.blocked", json!("x".repeat(2 * 1024 * 1024)))
+            .unwrap();
+        timeout(budget(), writer_started).await.unwrap().unwrap();
+        let mut stopping = std::pin::pin!(process.stop());
+        tokio::select! {
+            result = &mut stopping => panic!("stop returned while I/O was held: {result:?}"),
+            ready = timeout(budget(), async {
+                (&mut read_gate.entered).await.unwrap();
+                (&mut write_gate.entered).await.unwrap();
+            }) => ready.unwrap(),
+        }
+        let (held, released) = if hold_reader {
+            (read_gate, write_gate)
+        } else {
+            (write_gate, read_gate)
+        };
+        released.release.send(()).unwrap();
+        timeout(budget(), released.released).await.unwrap().unwrap();
+        let observation = test_timeout(Duration::from_millis(200)).duration();
+        assert!(timeout(observation, &mut stopping).await.is_err());
+        held.release.send(()).unwrap();
+        timeout(budget(), &mut stopping).await.unwrap().unwrap();
+        timeout(budget(), held.released).await.unwrap().unwrap();
+        assert!(matches!(
+            pending.wait(budget()),
+            Err(CallError::Disconnected)
+        ));
+        assert_eq!(
+            descendant.try_read(&mut [0]).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+struct GateAfterHandshake<R> {
+    reader: R,
+    gate: Option<mpsc::Receiver<()>>,
+    read_handshake: bool,
+}
+
+impl<R: Read> Read for GateAfterHandshake<R> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        if self.read_handshake
+            && let Some(gate) = self.gate.take()
+        {
+            gate.recv_timeout(budget()).unwrap();
+        }
+        let read = self.reader.read(bytes)?;
+        self.read_handshake |= read != 0;
+        Ok(read)
+    }
+}
+
+#[tokio::test]
+async fn a_final_response_is_drained_after_exit_even_with_a_detached_descendant() {
+    let state_dir = fixture_dir().unwrap();
+    let (command, listener) = fixture_with_sideband("escape-final").await;
+    let (release_reader, held) = mpsc::channel();
+    let (writer_ended, writer_exit) = oneshot::channel();
+    let (process, _) = ModuleProcess::start_with_connector(
+        command,
+        state_dir.path(),
+        Handlers::default(),
+        budget(),
+        |side, reader, writer, handlers| {
+            let reader = BufReader::new(GateAfterHandshake {
+                reader: reader.into_inner(),
+                gate: Some(held),
+                read_handshake: false,
+            });
+            Peer::connect_observed(
+                side,
+                reader,
+                writer,
+                handlers,
+                |_| {},
+                move || {
+                    writer_ended.send(()).unwrap();
+                },
+            )
+        },
+    )
+    .await
+    .unwrap();
+    let descendant = accept_sideband(&listener).await;
+    let connection = process.connection();
+    let final_response = connection
+        .start_request("module.exit", Value::Null)
+        .unwrap();
+    let pending = connection
+        .start_request("module.blocked", json!("x".repeat(2 * 1024 * 1024)))
+        .unwrap();
+    timeout(budget(), writer_exit).await.unwrap().unwrap();
+    release_reader.send(()).unwrap();
+    assert_eq!(final_response.wait(budget()).unwrap(), json!(42));
+    assert!(matches!(
+        pending.wait(budget()),
+        Err(CallError::Disconnected)
+    ));
+    assert!(
+        timeout(budget(), process.stop())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    assert_eq!(
+        descendant.try_read(&mut [0]).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
 }
 
 #[tokio::test]
