@@ -149,6 +149,56 @@ fn an_older_candidate_cannot_overwrite_a_newer_observation() {
 }
 
 #[test]
+fn a_delayed_candidate_cannot_replace_a_newer_provider_observation_for_another_model() {
+    let mut config = auto_config();
+    config["models"].as_array_mut().unwrap().push(json!({
+        "id": "demo/other", "provider": "demo", "upstream_id": "other-model",
+        "deployment_identity": "deployment-a"
+    }));
+    let model = resolve_route_without_catalog(&config, "demo/model").unwrap();
+    let other = resolve_route_without_catalog(&config, "demo/other").unwrap();
+
+    let earlier = LearnedProtocol::from_route(
+        &model,
+        Protocol::ChatCompletions,
+        "2026-09-22T10:00:00+00:00".to_owned(),
+    )
+    .unwrap();
+    let model_time = "2026-09-22T10:01:00+00:00";
+    let other_time = "2026-09-22T10:02:00+00:00";
+    let learn_model =
+        LearnedProtocol::from_route(&model, Protocol::Responses, model_time.to_owned()).unwrap();
+    let learn_other =
+        LearnedProtocol::from_route(&other, Protocol::ChatCompletions, other_time.to_owned())
+            .unwrap();
+
+    for candidate in [learn_model, learn_other] {
+        let ProtocolSave::Updated(updated) =
+            remember_learned_protocol(&config, &candidate, bundled_snapshot).unwrap()
+        else {
+            panic!("the newer observation must save");
+        };
+        config = updated;
+    }
+    assert!(matches!(
+        remember_learned_protocol(&config, &earlier, bundled_snapshot).unwrap(),
+        ProtocolSave::Superseded
+    ));
+    let provider = &config["providers"][0];
+    assert_eq!(provider["resolved_protocol"], "chat_completions");
+    assert_eq!(
+        provider["protocol_observation"]["upstream_model"],
+        "other-model"
+    );
+    assert_eq!(provider["protocol_observation"]["observed_at"], other_time);
+    assert_eq!(config["models"][0]["resolved_protocol"], "responses");
+    assert_eq!(
+        config["models"][0]["protocol_observation"]["observed_at"],
+        model_time
+    );
+}
+
+#[test]
 fn a_newer_provider_observation_does_not_block_an_older_alias_update() {
     let mut config = auto_config();
     let mut alias = config["models"][0].clone();
@@ -165,7 +215,8 @@ fn a_newer_provider_observation_does_not_block_an_older_alias_update() {
         LearnedProtocol::from_route(&model, Protocol::Responses, model_time.to_owned()).unwrap();
     let alias_time = "2026-09-22T06:00:02+00:00";
     let learn_alias =
-        LearnedProtocol::from_route(&alias, Protocol::Responses, alias_time.to_owned()).unwrap();
+        LearnedProtocol::from_route(&alias, Protocol::ChatCompletions, alias_time.to_owned())
+            .unwrap();
 
     for candidate in [original, learn_alias, learn_model] {
         let ProtocolSave::Updated(updated) =
@@ -175,15 +226,14 @@ fn a_newer_provider_observation_does_not_block_an_older_alias_update() {
         };
         config = updated;
     }
-    assert_eq!(
-        config["providers"][0]["protocol_observation"]["observed_at"],
-        alias_time
-    );
-    assert_eq!(config["models"][0]["resolved_protocol"], "responses");
-    assert_eq!(
-        config["models"][0]["protocol_observation"]["observed_at"],
-        model_time
-    );
+    for (entry, protocol, time) in [
+        (&config["providers"][0], "chat_completions", alias_time),
+        (&config["models"][1], "chat_completions", alias_time),
+        (&config["models"][0], "responses", model_time),
+    ] {
+        assert_eq!(entry["resolved_protocol"], protocol);
+        assert_eq!(entry["protocol_observation"]["observed_at"], time);
+    }
     assert_eq!(
         config["models"][1]["protocol_observation"],
         config["providers"][0]["protocol_observation"]

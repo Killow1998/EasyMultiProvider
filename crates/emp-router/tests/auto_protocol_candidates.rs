@@ -2,10 +2,16 @@
 //! provider is configured as `auto` and EMP decides which wire protocol to
 //! try first, including when a previously observed protocol is honored.
 
-use emp_domain::{
-    RouteSource, deployment_identity, endpoint_fingerprint, resolved_route_from_parts,
+use emp_config::{
+    config::{LearnedProtocol, ProtocolSave, remember_learned_protocol},
+    normalize_configuration,
+    official_registry::bundled_snapshot,
 };
-use emp_router::protocol_candidates;
+use emp_domain::{
+    Protocol, RouteSource, deployment_identity, endpoint_fingerprint,
+    resolve_route_without_catalog, resolved_route_from_parts,
+};
+use emp_router::{observed_protocol, protocol_candidates};
 use serde_json::json;
 
 fn route(provider: serde_json::Value, model: serde_json::Value) -> emp_domain::ResolvedRoute {
@@ -111,4 +117,59 @@ fn a_matching_observation_is_tried_first_but_stale_observations_are_ignored() {
         candidates(stale_provider, base_model("stale")),
         ["chat_completions", "responses"]
     );
+}
+
+#[test]
+fn saving_an_observation_preserves_whitespace_in_the_resolved_model_identity() {
+    let config = normalize_configuration(Some(&json!({
+        "providers": [base_provider()],
+        "models": [
+            {"id": "demo/spaced", "provider": "demo", "upstream_id": "demo/ m"},
+            {"id": "demo/plain", "provider": "demo", "upstream_id": "m"}
+        ]
+    })))
+    .unwrap();
+    let spaced = resolve_route_without_catalog(&config, "demo/spaced").unwrap();
+    assert_eq!(spaced.upstream_model, " m");
+    let candidate = LearnedProtocol::from_route(
+        &spaced,
+        Protocol::Responses,
+        "2026-09-22T10:00:00+00:00".to_owned(),
+    )
+    .unwrap();
+    let ProtocolSave::Updated(saved) =
+        remember_learned_protocol(&config, &candidate, bundled_snapshot).unwrap()
+    else {
+        panic!("the observation must save");
+    };
+    let spaced = resolve_route_without_catalog(&saved, "demo/spaced").unwrap();
+    let plain = resolve_route_without_catalog(&saved, "demo/plain").unwrap();
+    assert_eq!(observed_protocol(&spaced), Some(Protocol::Responses));
+    assert_eq!(observed_protocol(&plain), None);
+}
+
+#[test]
+fn a_repeated_provider_prefix_does_not_match_a_legacy_observation_for_another_model() {
+    let mut provider = base_provider();
+    provider["resolved_protocol"] = json!("responses");
+    provider["protocol_observation"] = json!({
+        "source": "observed",
+        "endpoint_fingerprint": endpoint_fingerprint(provider["base_url"].as_str()),
+        "deployment_identity": "default",
+        "upstream_model": "demo/m"
+    });
+    let config = normalize_configuration(Some(&json!({
+        "providers": [provider],
+        "models": [
+            {"id": "demo/original", "provider": "demo", "upstream_id": "demo/m"},
+            {"id": "demo/repeated", "provider": "demo", "upstream_id": "demo/demo/m"}
+        ]
+    })))
+    .unwrap();
+    let original = resolve_route_without_catalog(&config, "demo/original").unwrap();
+    let repeated = resolve_route_without_catalog(&config, "demo/repeated").unwrap();
+    assert_eq!(original.upstream_model, "m");
+    assert_eq!(repeated.upstream_model, "demo/m");
+    assert_eq!(observed_protocol(&original), None);
+    assert_eq!(observed_protocol(&repeated), None);
 }

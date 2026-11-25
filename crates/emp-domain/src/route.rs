@@ -145,6 +145,25 @@ pub struct ProtocolObservationKey {
     upstream_model: String,
 }
 
+fn encode_upstream_model(provider: &Map<String, Value>, upstream_model: &str) -> String {
+    let has_provider_prefix = provider
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| upstream_model.strip_prefix(id))
+        .is_some_and(|suffix| suffix.starts_with('/'));
+    if upstream_model.len() <= 256
+        && upstream_model.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b':' | b'-' | b'@')
+        })
+        && !has_provider_prefix
+        && !upstream_model.starts_with("@sha256:")
+    {
+        upstream_model.to_owned()
+    } else {
+        format!("@sha256:{:x}", Sha256::digest(upstream_model.as_bytes()))
+    }
+}
+
 impl ProtocolObservationKey {
     pub fn from_route(route: &ResolvedRoute) -> Self {
         Self::new(
@@ -179,16 +198,10 @@ impl ProtocolObservationKey {
         } else {
             endpoint_fingerprint(provider.get("base_url").and_then(Value::as_str))
         };
-        let upstream_model = if upstream_model.len() > 256 || upstream_model.starts_with("@sha256:")
-        {
-            format!("@sha256:{:x}", Sha256::digest(upstream_model.as_bytes()))
-        } else {
-            upstream_model.to_owned()
-        };
         Self {
             endpoint_fingerprint,
             deployment_identity: deployment_identity(provider, model),
-            upstream_model,
+            upstream_model: encode_upstream_model(provider, upstream_model),
         }
     }
 

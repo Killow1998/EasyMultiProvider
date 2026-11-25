@@ -118,16 +118,17 @@ pub fn remember_learned_protocol(
     }
 
     let observed_at = parse_observed_at(&candidate.observed_at);
-    let can_update = |entry: &Value| {
-        let observation = &entry["protocol_observation"];
-        !key.matches_observation(observation)
-            || observation["observed_at"]
-                .as_str()
-                .and_then(parse_observed_at)
-                <= observed_at
+    let observation_time = |observation: &Value| {
+        observation["observed_at"]
+            .as_str()
+            .and_then(parse_observed_at)
     };
-    let update_provider = can_update(provider);
-    let model_index = model_index.filter(|&index| can_update(&config["models"][index]));
+    let update_provider = observation_time(&provider["protocol_observation"])
+        .is_none_or(|current| Some(current) < observed_at);
+    let model_index = model_index.filter(|&index| {
+        let observation = &config["models"][index]["protocol_observation"];
+        !key.matches_observation(observation) || observation_time(observation) <= observed_at
+    });
     if !update_provider && model_index.is_none() {
         return Ok(ProtocolSave::Superseded);
     }
