@@ -1,5 +1,5 @@
 use emp_state::{IntegrationFileLock, LockError};
-use emp_test_support::fixture_dir;
+use emp_test_support::{Deadline, fixture_dir, isolated, test_timeout};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -11,6 +11,17 @@ fn canonical_temp_root(directory: &tempfile::TempDir) -> std::path::PathBuf {
 
 #[test]
 fn lock_is_exclusive_times_out_and_is_released_on_drop() {
+    const CASE: &str = "EMP_TEST_INTEGRATION_FILE_LOCK_RELEASE";
+    if std::env::var_os(CASE).is_none() {
+        let mut command = isolated::command("lock_is_exclusive_times_out_and_is_released_on_drop");
+        command.env(CASE, "1");
+        isolated::run(
+            command,
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+        );
+        return;
+    }
+
     let directory = fixture_dir().expect("tempdir");
     let path = canonical_temp_root(&directory).join("state/integration.lock");
     let first = IntegrationFileLock::acquire(&path, Duration::ZERO, Duration::from_millis(1))
@@ -43,6 +54,7 @@ fn lock_is_exclusive_times_out_and_is_released_on_drop() {
             0o700
         );
     }
+    isolated::report(Ok(()));
 }
 
 #[cfg(unix)]

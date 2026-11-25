@@ -1,4 +1,8 @@
-use super::super::{POLL_INTERVAL, poll_pause};
+//! Isolate assertions that depend on process-wide state such as file-lock
+//! release, signals, or the environment, and can be disturbed by concurrent
+//! child process creation in the same test binary.
+
+use super::{POLL_INTERVAL, poll_pause};
 use crate::{Deadline, fixture_root};
 use std::{
     fs::File,
@@ -10,20 +14,24 @@ use tempfile::NamedTempFile;
 
 const RESULT_PREFIX: &str = "EMP-ISOLATED: ";
 
-pub(crate) fn command(test_name: &str) -> Command {
+/// Prepare to run one test by its full libtest name. Set an environment marker
+/// on the command so that the child executes the test body.
+pub fn command(test_name: &str) -> Command {
     let mut command = Command::new(std::env::current_exe().expect("locate test executable"));
     command.args(["--exact", test_name, "--nocapture"]);
     command
 }
 
-pub(crate) fn report(result: Result<(), &str>) {
+/// Report completion or a skip reason from the test body in the child.
+pub fn report(result: Result<(), &str>) {
     match result {
         Ok(()) => println!("\n{RESULT_PREFIX}done"),
         Err(reason) => println!("\n{RESULT_PREFIX}skipped {reason}"),
     }
 }
 
-pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
+/// Run the child within the deadline and check its exit status and report.
+pub fn run(mut command: Command, deadline: Deadline) -> Output {
     let root = fixture_root().expect("resolve test fixture root");
     let (stdout_reader, stdout) = diagnostic_file(&root).expect("prepare isolated test stdout");
     let (stderr_reader, stderr) = diagnostic_file(&root).expect("prepare isolated test stderr");
@@ -123,7 +131,7 @@ fn read_output(file: &File) -> Vec<u8> {
 
 #[test]
 fn reading_diagnostics_preserves_live_child_output() {
-    use super::fixture;
+    use super::tests::fixture;
     use crate::{OwnedChild, test_timeout};
     use std::{io::Seek, time::Duration};
 

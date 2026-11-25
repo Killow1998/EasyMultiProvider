@@ -7,12 +7,14 @@ use super::*;
 use crate::sessions::read::CodexHomeHistoryReader;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use emp_context::HistoryAnchor;
+use emp_test_support::{Deadline, isolated, test_timeout};
 use rusqlite::Connection;
 use rusqlite::params;
 use serde_json::json;
 use serde_json::{Map, Value};
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
+use std::time::Duration;
 
 pub(super) const PARENT_ID: &str = "11111111-1111-4111-8111-111111111111";
 const CHILD_ID: &str = "22222222-2222-4222-8222-222222222222";
@@ -594,6 +596,19 @@ fn native_restore_retains_dynamic_tool_updates_and_reasoning_usage() {
 
 #[test]
 fn repairs_zstd_parent_and_depth_two_paginated_descendants_without_losing_history() {
+    const CASE: &str = "EMP_TEST_REPAIR_ZSTD_LINEAGE";
+    if std::env::var_os(CASE).is_none() {
+        let mut command = isolated::command(
+            "sessions::repair::tests::repairs_zstd_parent_and_depth_two_paginated_descendants_without_losing_history",
+        );
+        command.env(CASE, "1");
+        isolated::run(
+            command,
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+        );
+        return;
+    }
+
     let fixture = fixture(true, true, false);
     let (grandchild_path, grandchild_original) = add_grandchild(&fixture);
     let original_parent_file = fs::read(&fixture.parent_path).unwrap();
@@ -826,6 +841,7 @@ fn repairs_zstd_parent_and_depth_two_paginated_descendants_without_losing_histor
     assert_eq!(fs::read(child_path).unwrap(), child_after_first);
     assert_eq!(fs::read(&grandchild_path).unwrap(), grandchild_after_first);
     drop(second_lock);
+    isolated::report(Ok(()));
 }
 
 #[test]
@@ -889,6 +905,19 @@ fn active_codex_writer_blocks_without_changing_rollout_bytes() {
 
 #[test]
 fn idle_restore_skips_both_directions_of_a_live_fork_and_repairs_independent_history() {
+    const CASE: &str = "EMP_TEST_REPAIR_IDLE_LIVE_FORK";
+    if std::env::var_os(CASE).is_none() {
+        let mut command = isolated::command(
+            "sessions::repair::tests::idle_restore_skips_both_directions_of_a_live_fork_and_repairs_independent_history",
+        );
+        command.env(CASE, "1");
+        isolated::run(
+            command,
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+        );
+        return;
+    }
+
     for live_id in [PARENT_ID, CHILD_ID] {
         let fixture = fixture(false, true, false);
         let independent_id = "44444444-4444-4444-8444-444444444444";
@@ -973,6 +1002,7 @@ fn idle_restore_skips_both_directions_of_a_live_fork_and_repairs_independent_his
             (0, 0, 0)
         );
     }
+    isolated::report(Ok(()));
 }
 
 #[test]
@@ -1403,6 +1433,19 @@ fn streams_and_resumes_rollout_larger_than_128_mib() {
 
 #[test]
 fn selected_child_migration_preserves_parent_and_ignores_its_open_writer() {
+    const CASE: &str = "EMP_TEST_REPAIR_SELECTED_CHILD";
+    if std::env::var_os(CASE).is_none() {
+        let mut command = isolated::command(
+            "sessions::repair::tests::selected_child_migration_preserves_parent_and_ignores_its_open_writer",
+        );
+        command.env(CASE, "1");
+        isolated::run(
+            command,
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+        );
+        return;
+    }
+
     let fixture = fixture(false, true, false);
     let parent_before = fs::read(&fixture.parent_path).unwrap();
     let locks = fixture.home.join(LOCK_DIRECTORY);
@@ -1433,10 +1476,24 @@ fn selected_child_migration_preserves_parent_and_ignores_its_open_writer() {
     assert_eq!(error.reason(), "active_codex_writer");
     assert_eq!(fs::read(&fixture.parent_path).unwrap(), parent_before);
     drop(writer);
+    isolated::report(Ok(()));
 }
 
 #[test]
 fn targeted_migration_rejects_invalid_or_missing_thread_without_touching_rollouts() {
+    const CASE: &str = "EMP_TEST_REPAIR_INVALID_OR_MISSING_THREAD";
+    if std::env::var_os(CASE).is_none() {
+        let mut command = isolated::command(
+            "sessions::repair::tests::targeted_migration_rejects_invalid_or_missing_thread_without_touching_rollouts",
+        );
+        command.env(CASE, "1");
+        isolated::run(
+            command,
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+        );
+        return;
+    }
+
     let fixture = fixture(false, true, false);
     let parent_before = fs::read(&fixture.parent_path).unwrap();
     // A malformed unrelated row must not block the selected conversation.
@@ -1454,4 +1511,5 @@ fn targeted_migration_rejects_invalid_or_missing_thread_without_touching_rollout
         assert!(repair_thread_before_native_resume(&fixture.home, id).is_err());
     }
     assert_eq!(fs::read(&fixture.parent_path).unwrap(), parent_before);
+    isolated::report(Ok(()));
 }

@@ -8,6 +8,7 @@ use std::{
 };
 
 mod capture;
+pub mod isolated;
 #[cfg(windows)]
 mod windows;
 

@@ -1,11 +1,11 @@
 use super::{
     super::{
         OwnedChild,
-        tests::{ADDRESS, fixture, isolated},
+        tests::{ADDRESS, fixture},
     },
     *,
 };
-use crate::test_timeout;
+use crate::{isolated, test_timeout};
 use std::{
     net::{Ipv4Addr, TcpListener},
     process::Stdio,
