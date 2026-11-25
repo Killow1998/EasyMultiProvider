@@ -10,6 +10,7 @@ description = "发现、取得、验证和安装官方制品"
 workspace = true
 
 [dependencies]
+emp-domain = { path = "../emp-domain" }
 emp-files = { path = "../emp-files" }
 flate2 = "1.1"
 getrandom = "0.2.17"

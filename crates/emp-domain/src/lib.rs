@@ -2,11 +2,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fmt;
 
+mod fixed_wait;
 mod route;
 #[cfg(test)]
 mod tests;
 mod validation;
 
+pub use fixed_wait::FixedWait;
 pub use validation::{OpaqueJson, OpaqueJsonError, OpaqueJsonErrorReason, ValidationError};
 
 pub use route::{

@@ -1,3 +1,4 @@
+use emp_domain::FixedWait;
 use std::{
     borrow::Borrow,
     fmt::Display,
@@ -34,8 +35,8 @@ pub fn fixture_dir() -> std::io::Result<tempfile::TempDir> {
 pub struct TestBudget(Duration);
 
 impl TestBudget {
-    pub fn with_product_wait(self, wait: Duration) -> Self {
-        Self(self.0 + wait)
+    pub fn with_product_wait(self, wait: FixedWait) -> Self {
+        Self(self.0 + wait.get())
     }
 
     pub fn duration(self) -> Duration {

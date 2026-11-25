@@ -37,8 +37,8 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
                 .into_iter()
                 .map(|line| format!("{path}:{line}")),
         );
-        for line in violations.product_waits {
-            errors.push(format!("[test-deadlines] {path}:{line}: with_product_wait 只接受产品常量路径及其索引或方法调用；测试余量使用 test_timeout 缩放"));
+        for line in violations.fixed_wait_constructors {
+            errors.push(format!("[test-deadlines] {path}:{line}: 固定等待只能引用产品常量；测试余量使用 test_timeout"));
         }
     }
     for (group, (bare, sockets)) in counts {
@@ -104,7 +104,7 @@ pub(super) fn group(path: &str) -> Option<&str> {
 struct Violations {
     bare: Vec<usize>,
     sockets: Vec<usize>,
-    product_waits: Vec<usize>,
+    fixed_wait_constructors: Vec<usize>,
 }
 
 fn inspect_source(path: &str, contents: &str) -> Result<Violations> {
@@ -160,28 +160,6 @@ impl Deadlines<'_> {
             && (name == "set_read_timeout" || name == "set_write_timeout")
         {
             self.violations.sockets.push(line);
-        }
-    }
-
-    fn inspect_product_wait(&mut self, expr: &Expr) {
-        let line = expr.span().start().line;
-        if self.in_test(line) && !self.product_wait(expr) {
-            self.violations.product_waits.push(line);
-        }
-    }
-
-    fn product_wait(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Path(path) => {
-                let (segments, declaration) = self.imports.resolve_definition(&path.path);
-                segments.last().is_some_and(|name| constant_name(name))
-                    && !declaration.is_some_and(|line| self.in_test(line))
-            }
-            Expr::Index(index) => self.product_wait(&index.expr),
-            Expr::MethodCall(call) => self.product_wait(&call.receiver),
-            Expr::Paren(paren) => self.product_wait(&paren.expr),
-            Expr::Group(group) => self.product_wait(&group.expr),
-            _ => false,
         }
     }
 
@@ -338,6 +316,23 @@ impl<'ast> Visit<'ast> for Deadlines<'_> {
         }
     }
 
+    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+        let line = expression.span().start().line;
+        if self.in_test(line)
+            && self
+                .imports
+                .resolve(&expression.path)
+                .iter()
+                .rev()
+                .take(2)
+                .map(String::as_str)
+                .eq(["new", "FixedWait"])
+        {
+            self.violations.fixed_wait_constructors.push(line);
+        }
+        visit::visit_expr_path(self, expression);
+    }
+
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let Expr::Path(path) = call.func.as_ref()
             && let Some(name) = path.path.segments.last()
@@ -345,13 +340,7 @@ impl<'ast> Visit<'ast> for Deadlines<'_> {
             let path = self.imports.resolve(&path.path);
             let resolved = path.last().expect("expression path");
             self.inspect_socket_timeout(resolved, name.ident.span().start().line);
-            if resolved == "with_product_wait"
-                && let Some(wait) = call.args.iter().nth(1)
-            {
-                self.inspect_product_wait(wait);
-            } else {
-                self.arguments(resolved, &call.args);
-            }
+            self.arguments(resolved, &call.args);
         }
         visit::visit_expr_call(self, call);
     }
@@ -359,11 +348,7 @@ impl<'ast> Visit<'ast> for Deadlines<'_> {
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.to_string();
         self.inspect_socket_timeout(&name, call.method.span().start().line);
-        if name == "with_product_wait"
-            && let Some(wait) = call.args.first()
-        {
-            self.inspect_product_wait(wait);
-        } else if name == "wait_timeout" || name == "wait_timeout_while" {
+        if name == "wait_timeout" || name == "wait_timeout_while" {
             if let Some(expr) = call.args.iter().nth(1) {
                 self.inspect(expr, true);
             }
@@ -554,28 +539,6 @@ fn drain() {
     }
 
     #[test]
-    fn requires_a_product_constant_for_unscaled_waits() {
-        let source = r#"
-use crate::retry as retry;
-use retry::NETWORK_RETRY_BACKOFF as backoff;
-fn fixture(budget: TestBudget, wait: Duration) {
-    budget.with_product_wait(crate::shutdown::QUIT_PRECHECK_WAIT);
-    budget.with_product_wait(backoff[0]);
-    budget.with_product_wait(backoff.iter().sum());
-    budget.with_product_wait(wait);
-    budget.with_product_wait(Duration::from_secs(1));
-    TestBudget::with_product_wait(budget, 1);
-}
-"#;
-        assert_eq!(
-            inspect_source("crates/emp-app/tests/wire.rs", source)
-                .unwrap()
-                .product_waits,
-            [8, 9, 10]
-        );
-    }
-
-    #[test]
     fn resolves_relative_deadline_aliases_at_the_import() {
         let source = r#"
 use std::time as time;
@@ -597,63 +560,31 @@ mod nested {
     }
 
     #[test]
-    fn rejects_product_wait_from_same_file_test_declarations() {
+    fn rejects_fixed_wait_construction_in_test_files_and_scopes() {
         let source = r#"
-const NETWORK_RETRY_BACKOFF: [Duration; 1] = [Duration::from_secs(1)];
+use emp_domain::FixedWait;
+const PRODUCT_WAIT: FixedWait = FixedWait::new(Duration::from_secs(1));
 #[cfg(test)]
 mod tests {
-    use super::NETWORK_RETRY_BACKOFF;
-    use self::REQUEST_MARGIN as WAIT;
-    const REQUEST_MARGIN: Duration = Duration::from_secs(12);
-    mod support {
-        pub(super) static MARGINS: [Duration; 1] = [Duration::from_secs(12)];
-    }
+    use super::FixedWait as Wait;
     fn fixture(budget: TestBudget) {
-        budget.with_product_wait(WAIT);
-        budget.with_product_wait(self::support::MARGINS[0]);
-        budget.with_product_wait(crate::tests::REQUEST_MARGIN);
-        {
-            const REQUEST_MARGIN: Duration = Duration::from_secs(12);
-            budget.with_product_wait(REQUEST_MARGIN);
-        }
-        budget.with_product_wait(NETWORK_RETRY_BACKOFF[0]);
+        budget.with_product_wait(super::PRODUCT_WAIT);
+        budget.with_product_wait(emp_domain::FixedWait::new(Duration::from_secs(1)));
+        let waits = vec![Wait::new(Duration::from_secs(1))];
     }
 }
 "#;
         assert_eq!(
             inspect_source("crates/example/src/lib.rs", source)
                 .unwrap()
-                .product_waits,
-            [12, 13, 14, 17]
+                .fixed_wait_constructors,
+            [9, 10]
         );
-        let source = r#"
-const REQUEST_MARGIN: Duration = Duration::from_secs(12);
-fn fixture(budget: TestBudget) {
-    budget.with_product_wait(REQUEST_MARGIN);
-    budget.with_product_wait(crate::retry::REQUEST_MARGIN);
-}
-"#;
         assert_eq!(
-            inspect_source("crates/example/src/manager/tests/retry.rs", source)
+            inspect_source("crates/example/tests/wire.rs", source)
                 .unwrap()
-                .product_waits,
-            [4]
-        );
-    }
-
-    #[test]
-    fn rejects_bare_product_wait_in_expression_macro() {
-        let source = r#"
-fn fixture(budget: TestBudget, response: Vec<u8>) {
-    let responses = vec![(budget.with_product_wait(Duration::from_secs(1)), response)];
-    let responses = vec![(budget.with_product_wait(NETWORK_RETRY_BACKOFF[0]), response)];
-}
-"#;
-        assert_eq!(
-            inspect_source("crates/emp-updater/src/manager/tests/retry.rs", source)
-                .unwrap()
-                .product_waits,
-            [3]
+                .fixed_wait_constructors,
+            [3, 9, 10]
         );
     }
 

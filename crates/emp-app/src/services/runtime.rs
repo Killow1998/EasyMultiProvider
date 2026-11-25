@@ -3,6 +3,7 @@ use crate::app::ServerState;
 use crate::services::catalog::client_catalog;
 use emp_codex::configuration::runtime::{RuntimeStore, offline_snapshot};
 use emp_codex::runtime_probe::{RuntimeSyncResult, observe};
+use emp_domain::FixedWait;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -281,7 +282,7 @@ pub(crate) fn mark_active_pending(state: &ServerState, detail: &str) {
     }
 }
 
-pub(crate) const CODEX_CATALOG_APPLY_DELAY: Duration = Duration::from_secs(2);
+pub(crate) const CODEX_CATALOG_APPLY_DELAY: FixedWait = FixedWait::new(Duration::from_secs(2));
 const CODEX_CATALOG_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
@@ -340,7 +341,7 @@ pub(crate) fn watch_runtime(state: &ServerState) {
         let gap = last_check.map_or(Duration::ZERO, |at| {
             CODEX_CATALOG_RECHECK_INTERVAL.saturating_sub(at.elapsed())
         });
-        let deadline = Instant::now() + CODEX_CATALOG_APPLY_DELAY.max(gap);
+        let deadline = Instant::now() + CODEX_CATALOG_APPLY_DELAY.get().max(gap);
         loop {
             if state.lifecycle.shutdown.load(Ordering::Acquire) {
                 return;

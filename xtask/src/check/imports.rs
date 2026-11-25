@@ -19,7 +19,6 @@ enum Binding {
         absolute: bool,
         segments: Vec<String>,
     },
-    Constant(usize),
     Module(usize),
 }
 
@@ -56,44 +55,37 @@ impl<'source> Imports<'source> {
     }
 
     pub(super) fn resolve(&self, path: &Path) -> Vec<String> {
-        self.resolve_definition(path).0
-    }
-
-    pub(super) fn resolve_definition(&self, path: &Path) -> (Vec<String>, Option<usize>) {
         let mut segments: Vec<_> = path
             .segments
             .iter()
             .map(|segment| segment.ident.unraw().to_string())
             .collect();
         if path.leading_colon.is_some() {
-            return (segments, None);
+            return segments;
         }
         let mut scope = self.current;
         let mut visited = BTreeSet::new();
-        while let Some((index, declared_in, binding)) = self.binding(&segments, scope) {
-            match binding {
-                Binding::Constant(line) if index + 1 == segments.len() => {
-                    return (segments, Some(*line));
-                }
-                Binding::Import {
-                    absolute,
-                    segments: target,
-                } => {
-                    let name = &segments[index];
-                    if !visited.insert((declared_in, name.clone())) {
-                        break;
-                    }
-                    let terminal = *absolute || (index == 0 && target.first() == Some(name));
-                    segments.splice(..=index, target.iter().cloned());
-                    if terminal {
-                        break;
-                    }
-                    scope = declared_in;
-                }
-                _ => break,
+        while let Some((
+            index,
+            declared_in,
+            Binding::Import {
+                absolute,
+                segments: target,
+            },
+        )) = self.binding(&segments, scope)
+        {
+            let name = &segments[index];
+            if !visited.insert((declared_in, name.clone())) {
+                break;
             }
+            let terminal = *absolute || (index == 0 && target.first() == Some(name));
+            segments.splice(..=index, target.iter().cloned());
+            if terminal {
+                break;
+            }
+            scope = declared_in;
         }
-        (segments, None)
+        segments
     }
 
     fn binding(&self, segments: &[String], scope: usize) -> Option<(usize, usize, &Binding)> {
@@ -166,14 +158,6 @@ impl<'source> Imports<'source> {
                     );
                     continue;
                 }
-                Item::Const(item) => (
-                    &item.ident,
-                    Binding::Constant(item.ident.span().start().line),
-                ),
-                Item::Static(item) => (
-                    &item.ident,
-                    Binding::Constant(item.ident.span().start().line),
-                ),
                 Item::Mod(item) => {
                     let Some((_, items)) = &item.content else {
                         continue;

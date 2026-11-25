@@ -10,6 +10,7 @@ description = "Shared fixtures and deadlines for EMP tests."
 websocket = ["dep:emp-transport", "dep:polling", "dep:serde_json", "dep:socket2", "dep:tokio"]
 
 [dependencies]
+emp-domain = { path = "../emp-domain" }
 emp-transport = { path = "../emp-transport", optional = true }
 polling = { version = "=3.11.0", default-features = false, optional = true }
 serde_json = { workspace = true, optional = true }

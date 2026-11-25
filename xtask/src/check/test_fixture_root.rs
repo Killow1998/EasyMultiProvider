@@ -75,6 +75,18 @@ struct FixtureRoots<'source> {
 }
 
 impl FixtureRoots<'_> {
+    fn with_parameters(&mut self, signature: &syn::Signature, visit: impl FnOnce(&mut Self)) {
+        let mut bindings = BTreeMap::new();
+        for input in &signature.inputs {
+            if let syn::FnArg::Typed(input) = input {
+                PatternBindings(&mut bindings).visit_pat(&input.pat);
+            }
+        }
+        self.builder_bindings.push(bindings);
+        visit(self);
+        self.builder_bindings.pop();
+    }
+
     fn is_builder(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Call(call) => {
@@ -128,6 +140,17 @@ impl FixtureRoots<'_> {
     }
 }
 
+struct PatternBindings<'scope>(&'scope mut BTreeMap<String, bool>);
+
+impl<'ast> Visit<'ast> for PatternBindings<'_> {
+    fn visit_pat_ident(&mut self, pattern: &'ast syn::PatIdent) {
+        self.0.insert(pattern.ident.to_string(), false);
+        visit::visit_pat_ident(self, pattern);
+    }
+
+    fn visit_block(&mut self, _: &'ast syn::Block) {}
+}
+
 impl<'ast> Visit<'ast> for FixtureRoots<'_> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         let outer_bindings = std::mem::take(&mut self.builder_bindings);
@@ -141,6 +164,24 @@ impl<'ast> Visit<'ast> for FixtureRoots<'_> {
             visit::visit_item_mod(self, module);
             self.imports.leave_scope();
         }
+    }
+
+    fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+        self.with_parameters(&function.sig, |visitor| {
+            visit::visit_item_fn(visitor, function);
+        });
+    }
+
+    fn visit_impl_item_fn(&mut self, function: &'ast syn::ImplItemFn) {
+        self.with_parameters(&function.sig, |visitor| {
+            visit::visit_impl_item_fn(visitor, function);
+        });
+    }
+
+    fn visit_trait_item_fn(&mut self, function: &'ast syn::TraitItemFn) {
+        self.with_parameters(&function.sig, |visitor| {
+            visit::visit_trait_item_fn(visitor, function);
+        });
     }
 
     fn visit_block(&mut self, block: &'ast syn::Block) {
@@ -157,15 +198,21 @@ impl<'ast> Visit<'ast> for FixtureRoots<'_> {
             Pat::Type(typed) => typed.pat.as_ref(),
             pat => pat,
         };
-        if let Pat::Ident(pat) = pat {
-            let builder = local
+        let builder = match pat {
+            Pat::Ident(binding) => local
                 .init
                 .as_ref()
-                .is_some_and(|init| self.is_builder(&init.expr));
-            self.builder_bindings
-                .last_mut()
-                .expect("local declaration in a block")
-                .insert(pat.ident.to_string(), builder);
+                .filter(|init| self.is_builder(&init.expr))
+                .map(|_| binding.ident.to_string()),
+            _ => None,
+        };
+        let scope = self
+            .builder_bindings
+            .last_mut()
+            .expect("local declaration in a block");
+        PatternBindings(scope).visit_pat(pat);
+        if let Some(name) = builder {
+            scope.insert(name, true);
         }
     }
 
@@ -325,6 +372,33 @@ fn fixture() {
         assert_eq!(
             violations("crates/example/tests/wire.rs", source).unwrap(),
             [(5, FIXTURE_ROOT_GUIDANCE), (10, FIXTURE_ROOT_GUIDANCE)]
+        );
+    }
+
+    #[test]
+    fn rejects_implicit_builder_root_after_assigning_parameters_and_destructured_bindings() {
+        let source = r#"
+fn fixture(mut parameter: tempfile::Builder, (mut destructured,): (tempfile::Builder,)) {
+    let (mut local, factory) = (tempfile::Builder::default(), Factory::new());
+    {
+        parameter = tempfile::Builder::new();
+        destructured = tempfile::Builder::new();
+        local = tempfile::Builder::new();
+    }
+    parameter.make(create);
+    destructured.make(create);
+    local.make(create);
+    local.make_in(root, create);
+    factory.make(create);
+}
+"#;
+        assert_eq!(
+            violations("crates/example/tests/wire.rs", source).unwrap(),
+            [
+                (9, FIXTURE_ROOT_GUIDANCE),
+                (10, FIXTURE_ROOT_GUIDANCE),
+                (11, FIXTURE_ROOT_GUIDANCE),
+            ]
         );
     }
 

@@ -104,7 +104,7 @@ to implement. File length is a navigation signal, not a measure of module depth.
 
 | Module | Existing responsibility | Decision |
 | --- | --- | --- |
-| `emp-domain` | Route identities, model value rules, capability views, usage bounds and session metadata | Pure shared values; preserve unknown fields |
+| `emp-domain` | Route identities, model value rules, capability views, usage bounds, session metadata and fixed product waits | Pure shared values; preserve unknown fields |
 | `emp-protocol` | Responses, Chat and Anthropic projections and stream state | Retain protocol-specific state machines |
 | `emp-context` | History preparation, tool pairing, context and compaction algorithms | Retain the `HistoryReader` interface and pure algorithms |
 | `emp-transport` | HTTP pools, proxy/TLS policy, admission, framing and WebSocket pump | Retain; profile resource ownership before changing execution model |
@@ -115,7 +115,7 @@ to implement. File length is a navigation signal, not a measure of module depth.
 | `emp-config` | Configuration, accounts, catalog merge, official model registry and portable import/export | Depends on `emp-domain`, `emp-files` and `emp-storage`; retains existing module names |
 | `emp-storage` | Vault, usage, quota history, diagnostic journal, signatures and local management credentials | Owns persisted credentials; uses `emp-files` for file operations |
 | `emp-state` | Compatibility re-exports | Retains existing root, module, `filesystem` and `lock` API paths |
-| `emp-updater` | Official release discovery, download, verification, extraction and recoverable installation | Depends only on `emp-files` among EMP crates; preserve release formats, installation layouts and worker protocol |
+| `emp-updater` | Official release discovery, download, verification, extraction and recoverable installation | Depends on `emp-domain` and `emp-files`; preserve release formats, installation layouts and worker protocol |
 | `emp-app` | Composition, HTTP/UI, request orchestration and mutable services | Primary refactoring target |
 
 `emp-state::filesystem::VaultStore` retains master-key sources and vault encoding.
@@ -129,6 +129,9 @@ directory-reparse test that requires symlink privileges.
 live in [`emp-updater/src/`](../crates/emp-updater/src/); the Windows update-process
 CI step selects `emp-updater`'s `process::tests`. Update behavior is described in
 [`self-update.md`](self-update.md).
+
+`emp-updater` and `emp-test-support` share `emp-domain::FixedWait` for product
+waits that stay constant under test time scaling.
 
 `emp-domain` has no EMP crate dependencies and performs no filesystem, environment,
 network or database access. It owns the model value rules, the 512-byte usage model

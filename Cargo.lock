@@ -1117,6 +1117,7 @@ dependencies = [
 name = "emp-test-support"
 version = "0.15.9"
 dependencies = [
+ "emp-domain",
  "emp-transport",
  "polling",
  "serde_json",
@@ -1156,6 +1157,7 @@ dependencies = [
 name = "emp-updater"
 version = "0.15.9"
 dependencies = [
+ "emp-domain",
  "emp-files",
  "emp-test-support",
  "flate2",
