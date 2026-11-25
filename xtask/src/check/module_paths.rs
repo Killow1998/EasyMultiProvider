@@ -2,50 +2,33 @@ use super::{
     Path, Result, contains_ident, fs,
     test_scope::{Index, SourceKind},
 };
-use proc_macro2::{Span, TokenStream, TokenTree};
+use proc_macro2::{
+    Delimiter, Span, TokenStream,
+    TokenTree::{Group, Ident, Literal, Punct},
+};
 use quote::ToTokens as _;
 use std::{
     collections::BTreeSet,
     path::{Component, PathBuf},
 };
 use syn::{
-    Expr, Lit, LitStr, Macro, MacroDelimiter, Meta, Token,
-    ext::IdentExt,
-    parse::ParseStream,
-    punctuated::Punctuated,
-    spanned::Spanned,
-    visit::{self, Visit},
+    Expr, Lit, LitStr, Macro, MacroDelimiter, Meta, Token, ext::IdentExt, parse::ParseStream,
+    visit::Visit,
 };
 
-fn path_is(path: &syn::Path, name: &str) -> bool {
-    matches!(path.get_ident(), Some(ident) if ident.unraw() == name)
-}
-
-fn conditional_path(meta: &Meta) -> bool {
-    let Meta::List(list) = meta else { return false };
-    path_is(&list.path, "cfg_attr")
-        && matches!(list.delimiter, MacroDelimiter::Paren(_))
-        && list
-            .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-            .is_ok_and(|parts| {
-                parts.iter().skip(1).any(|part| match part {
-                    Meta::NameValue(attr) => path_is(&attr.path, "path"),
-                    _ => conditional_path(part),
-                })
-            })
-}
-
 fn explicit_path(meta: &Meta) -> Option<&LitStr> {
-    let Meta::NameValue(attr) = meta else {
-        return None;
-    };
-    let Expr::Lit(value) = &attr.value else {
-        return None;
-    };
-    let Lit::Str(path) = &value.lit else {
-        return None;
-    };
-    path_is(&attr.path, "path").then_some(path)
+    if let Meta::NameValue(attr) = meta
+        && attr
+            .path
+            .get_ident()
+            .is_some_and(|name| name.unraw() == "path")
+        && let Expr::Lit(value) = &attr.value
+        && let Lit::Str(path) = &value.lit
+    {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 pub(super) fn check<'a>(
@@ -121,9 +104,7 @@ impl CrateSources<'_> {
 
 pub(super) fn check_source(path: &str, source: &str, errors: &mut Vec<String>) -> Result {
     let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
-    let mut rules = SourceRules { path, errors };
-    rules.visit_file(&file);
-    rules.check_macros(file.into_token_stream());
+    SourceRules { path, errors }.check_tokens(file.into_token_stream());
     Ok(())
 }
 
@@ -140,41 +121,73 @@ impl SourceRules<'_> {
             .push(format!("{prefix} {path}:{line}: {message}"));
     }
 
-    fn check_macros(&mut self, tokens: TokenStream) {
+    fn check_tokens(&mut self, tokens: TokenStream) {
         let tokens: Vec<_> = tokens.into_iter().collect();
-        for (index, token) in tokens.iter().enumerate() {
-            if let TokenTree::Group(group) = token {
-                self.check_macros(group.stream());
-            }
-            let [TokenTree::Ident(name), TokenTree::Punct(bang), tail @ ..] = &tokens[index..]
-            else {
-                continue;
-            };
-            if bang.as_char() != '!' {
-                continue;
-            }
-            let (prefix, message) = match tail {
-                [TokenTree::Group(args), ..]
-                    if name.unraw() == "include" && !out_dir_include(args.stream()) =>
+        for index in 0..tokens.len() {
+            match &tokens[index..] {
+                [Group(group), ..] => self.check_tokens(group.stream()),
+                [Ident(name), Group(args), ..]
+                    if name.unraw() == "cfg_attr"
+                        && args.delimiter() == Delimiter::Parenthesis
+                        && contains_path_assignment(args.stream()) =>
                 {
-                    (
-                        "[no-source-include]",
-                        "工作区源码用 mod 声明，不要用 include! 拼接；只有构建脚本生成到 OUT_DIR 的代码可以用 include!",
-                    )
+                    self.report("[conditional-module-path]", name.span(), "禁止通过 cfg_attr 设置模块的 path；请用 #[cfg(...)] 分别声明两个 mod，或把差异放到同一文件内的 cfg 块中");
                 }
-                [TokenTree::Ident(_), TokenTree::Group(body), ..]
-                    if name == "macro_rules" && contains_ident(body.stream(), "mod") =>
+                [Punct(hash), Group(attribute), ..]
+                    if hash.as_char() == '#' && attribute.delimiter() == Delimiter::Bracket =>
                 {
-                    (
+                    let mut parts = attribute.stream().into_iter();
+                    if let (Some(Ident(name)), Some(Punct(eq)), Some(path @ Literal(_))) =
+                        (parts.next(), parts.next(), parts.next())
+                        && name.unraw() == "path"
+                        && eq.as_char() == '='
+                        && let Ok(path) = syn::parse2::<LitStr>(path.into())
+                    {
+                        let value = path.value();
+                        if !value.ends_with(".rs") {
+                            self.report("[module-path-extension]", path.span(), &format!("#[path = {value:?}] 的目标文件必须以 .rs 结尾；请将文件改名为 .rs 并更新 #[path]"));
+                        }
+                    }
+                }
+                [Ident(name), Punct(bang), Group(args), ..]
+                    if name.unraw() == "include"
+                        && bang.as_char() == '!'
+                        && !out_dir_include(args.stream()) =>
+                {
+                    self.report("[no-source-include]", name.span(), "工作区源码用 mod 声明，不要用 include! 拼接；只有构建脚本生成到 OUT_DIR 的代码可以用 include!");
+                }
+                [Ident(name), Punct(bang), Ident(_), Group(body), ..]
+                    if name == "macro_rules"
+                        && bang.as_char() == '!'
+                        && contains_ident(body.stream(), "mod") =>
+                {
+                    self.report(
                         "[no-mod-in-macro]",
+                        name.span(),
                         "模块声明必须直接写出，不能由 macro_rules! 生成",
-                    )
+                    );
                 }
-                _ => continue,
-            };
-            self.report(prefix, name.span(), message);
+                _ => {}
+            }
         }
     }
+}
+
+fn contains_path_assignment(tokens: TokenStream) -> bool {
+    let mut tokens = tokens.into_iter().peekable();
+    while let Some(token) = tokens.next() {
+        match token {
+            Ident(name)
+                if name.unraw() == "path"
+                    && matches!(tokens.peek(), Some(Punct(eq)) if eq.as_char() == '=') =>
+            {
+                return true;
+            }
+            Group(group) if contains_path_assignment(group.stream()) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn out_dir_include(tokens: TokenStream) -> bool {
@@ -194,26 +207,6 @@ fn out_dir_include(tokens: TokenStream) -> bool {
                 })
                 .unwrap_or(false)
     })
-}
-
-impl<'ast> Visit<'ast> for SourceRules<'_> {
-    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
-        if let Some(path) = explicit_path(&attr.meta) {
-            let value = path.value();
-            if !value.ends_with(".rs") {
-                self.report("[module-path-extension]", path.span(), &format!("#[path = {value:?}] 的目标文件必须以 .rs 结尾；请将文件改名为 .rs 并更新 #[path]"));
-            }
-        }
-    }
-
-    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        for attr in &item.attrs {
-            if conditional_path(&attr.meta) {
-                self.report("[conditional-module-path]", attr.span(), "禁止通过 cfg_attr 设置模块的 path；请用 #[cfg(...)] 分别声明两个 mod，或把差异放到同一文件内的 cfg 块中");
-            }
-        }
-        visit::visit_item_mod(self, item);
-    }
 }
 
 struct ModulePaths<'a, 'source> {
@@ -354,12 +347,20 @@ mod tests {
         )
         .unwrap();
         let source = r#"
-#[cfg_attr(unix, allow(dead_code), path = "unix.rs")] mod backend;
-mod fixtures { #[cfg_attr(unix, r#cfg_attr(test, path = "platform_tests.rs"))] mod platform; }
+#[cfg_attr(unix, allow(dead_code), path = "unix.rs")]
+#[cfg_attr(not(unix), path = "other.rs")]
+mod backend;
+mod fixtures {
+    #[cfg_attr(unix,
+        r#cfg_attr(test, path = "platform_tests.rs"))] mod platform;
+}
 #[cfg_attr(unix, path = "fixture.rs")] fn probe() {}
+#[cfg_attr(true, path = "platform.rs")] mod boolean_condition;
 #[cfg(unix)] #[path = "native.rs"] mod native;
 #[cfg_attr(test, allow(dead_code))] mod support;
+#[cfg_attr(feature = "x", doc = "path = y")] mod documented;
 #[path = "helpers.inc"] mod helpers;
+cfg_if! { if #[cfg(unix)] { #[path = "helpers.inc"] mod helpers; } }
 include!("platform.rs");
 include!(concat!(env!("OUT_DIR"), "/x.rs"));
 const TEXT: &str = include_str!("a.txt");
@@ -379,9 +380,14 @@ macro_rules! helper { () => { "mod" } }"#;
         let expected = [
             "[conditional-module-path] platform.rs:2:",
             "[conditional-module-path] platform.rs:3:",
-            "[module-path-extension] platform.rs:7:",
-            "[no-source-include] platform.rs:8:",
-            "[no-mod-in-macro] platform.rs:12:",
+            "[conditional-module-path] platform.rs:6:",
+            "[conditional-module-path] platform.rs:7:",
+            "[conditional-module-path] platform.rs:9:",
+            "[conditional-module-path] platform.rs:10:",
+            "[module-path-extension] platform.rs:14:",
+            "[module-path-extension] platform.rs:15:",
+            "[no-source-include] platform.rs:16:",
+            "[no-mod-in-macro] platform.rs:20:",
             "[module-path-extension] unreferenced.rs:1:",
         ];
         assert_eq!(errors.len(), expected.len(), "{errors:?}");
