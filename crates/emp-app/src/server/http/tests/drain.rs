@@ -412,19 +412,67 @@ fn update_drain_waits_for_request_access_to_drop() {
             "an immediate drain cannot succeed while the request still has access"
         );
 
+        let draining = tokio::spawn(updates.drain_for_test(wire_timeout()));
         let state = state.clone();
-        let release = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             crate::tests::wait_for(&Deadline::after(wire_timeout()), || {
                 state.lifecycle.updates().enter().is_none()
             });
-            drop(access);
-        });
+        })
+        .await
+        .unwrap();
         assert!(
-            updates.drain_for_test(wire_timeout()).await,
+            !draining.is_finished(),
+            "update drain finished while the DELETE request still held its permit"
+        );
+        drop(access);
+        assert!(
+            draining.await.unwrap(),
             "update drain must succeed when the request releases its permit"
         );
-        release.await.unwrap();
     });
+}
+
+#[cfg(unix)]
+#[test]
+fn update_drain_expires_while_queued_without_closing_admission() {
+    let fixture = Fixture::new();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (occupied, ready) = oneshot::channel();
+            let (release, released) = oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                occupied.send(()).unwrap();
+                let _ = released.blocking_recv();
+            });
+            receive(ready, "blocking worker occupied").await;
+
+            let state = &fixture.server.state;
+            let budget = test_timeout(Duration::from_millis(50));
+            let result = timeout(
+                wire_timeout().duration(),
+                state.lifecycle.updates().drain_for_test(budget),
+            )
+            .await;
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            assert!(
+                !result.expect("update drain must return while the worker is still occupied"),
+                "a queued update drain cannot succeed after its deadline"
+            );
+
+            let state = state.clone();
+            let admitted =
+                tokio::task::spawn_blocking(move || state.lifecycle.updates().enter().is_some())
+                    .await
+                    .unwrap();
+            assert!(admitted, "the expired update drain closed admission");
+        });
+    fixture.server.shutdown().unwrap();
 }
 
 #[test]

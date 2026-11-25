@@ -1,11 +1,11 @@
 use crate::services::observation::diagnostics::Diagnostics;
 #[cfg(all(test, unix))]
-use emp_test_support::TestBudget;
+use emp_test_support::{Deadline, TestBudget};
 use emp_updater::manager::{Snapshot, UpdateHooks, UpdateManager};
 use emp_updater::release::UpdateEndpoints;
 use emp_updater::{Result as UpdateResult, UpdateError};
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 pub(crate) struct UpdateState {
@@ -132,16 +132,30 @@ impl UpdateState {
 
 #[cfg(all(test, unix))]
 impl UpdateState {
-    pub(crate) async fn drain_for_test(&self, budget: TestBudget) -> bool {
-        let timeout = budget.duration();
+    pub(crate) fn drain_for_test(&self, budget: TestBudget) -> impl Future<Output = bool> + use<> {
+        let started_at = Instant::now();
+        let deadline = Deadline::starting_at(started_at, budget);
+        let expires_at = started_at + budget.duration();
         assert!(
-            !timeout.is_zero(),
+            !budget.duration().is_zero(),
             "update drain needs a positive test budget"
         );
         let gate = Arc::clone(&self.gate);
-        tokio::task::spawn_blocking(move || drain(&gate, timeout))
-            .await
-            .unwrap()
+        async move {
+            let task = tokio::task::spawn_blocking(move || {
+                if deadline.is_expired() {
+                    return false;
+                }
+                let Ok(state) = gate.state.lock() else {
+                    return false;
+                };
+                !deadline.is_expired() && drain_requests(&gate, state, expires_at)
+            });
+            match tokio::time::timeout_at(expires_at.into(), task).await {
+                Ok(drained) => drained.unwrap() && !deadline.is_expired(),
+                Err(_) => false,
+            }
+        }
     }
 
     /// Use only while the test holds an in-flight request open.
@@ -165,9 +179,13 @@ fn test_endpoints() -> Option<UpdateEndpoints> {
 
 fn drain(gate: &Gate, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
-    let Ok(mut state) = gate.state.lock() else {
+    let Ok(state) = gate.state.lock() else {
         return false;
     };
+    drain_requests(gate, state, deadline)
+}
+
+fn drain_requests(gate: &Gate, mut state: MutexGuard<'_, GateState>, deadline: Instant) -> bool {
     state.draining = true;
     while state.active > 0 {
         let now = Instant::now();
