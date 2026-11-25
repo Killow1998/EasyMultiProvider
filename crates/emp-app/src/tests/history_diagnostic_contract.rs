@@ -78,11 +78,19 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
         ),
     ] {
         body["model"] = json!("demo/model");
-        for path in ["/v1/responses", "/v1/responses/compact"] {
-            let reply = post(
+        let mut streamed = body.clone();
+        streamed["stream"] = json!(true);
+        for (path, stream) in [
+            ("/v1/responses", false),
+            ("/v1/responses/compact", false),
+            ("/v1/responses/compact", true),
+        ] {
+            let send = if stream { post_stream } else { post };
+            let request = if stream { &streamed } else { &body };
+            let reply = send(
                 &server,
                 path,
-                &serde_json::to_vec(&body).unwrap(),
+                &serde_json::to_vec(request).unwrap(),
                 &[&session],
             );
             assert!(reply.starts_with("HTTP/1.1 409"), "{reply}");
@@ -100,11 +108,10 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
                 reason,
             );
         }
-        body["stream"] = json!(true);
         let reply = post_stream(
             &server,
             "/v1/responses",
-            &serde_json::to_vec(&body).unwrap(),
+            &serde_json::to_vec(&streamed).unwrap(),
             &[&session],
         );
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
@@ -125,8 +132,8 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
             reason,
         );
 
-        body["type"] = json!("response.create");
-        socket.send_json(&body).unwrap();
+        streamed["type"] = json!("response.create");
+        socket.send_json(&streamed).unwrap();
         let failed = next_response(&mut socket);
         assert_eq!(failed["type"], "response.failed");
         assert_eq!(failed["response"]["error"]["code"], "invalid_prompt");
@@ -168,6 +175,12 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
 
 #[test]
 fn missing_summary_output_is_distinct_from_history_lookup_and_does_not_retry() {
+    for stream in [false, true] {
+        assert_missing_summary_output(stream);
+    }
+}
+
+fn assert_missing_summary_output(stream: bool) {
     let upstream = OneShotUpstream::start(json!({"id":"fixture", "choices":[{"index":0,
         "message":{"role":"assistant","content":""}, "finish_reason":"stop"}]}));
     let directory = emp_test_support::fixture_dir().unwrap();
@@ -190,17 +203,31 @@ fn missing_summary_output_is_distinct_from_history_lookup_and_does_not_retry() {
     .unwrap();
     let mut input = vec![json!({"role":"user", "content":"x".repeat(500)}); 4];
     input.push(json!({"role":"user", "content":"private-active-request"}));
-    let body = json!({"model":"short/model", "max_output_tokens":64, "input":input});
-    let response = post(
+    let mut body = json!({"model":"short/model", "max_output_tokens":64, "input":input});
+    if stream {
+        body["stream"] = json!(true);
+    }
+    let send = if stream { post_stream } else { post };
+    let response = send(
         &server,
         "/v1/responses",
         &serde_json::to_vec(&body).unwrap(),
         &[&session_header(&server)],
     );
-    assert!(response.starts_with("HTTP/1.1 409"), "{response}");
-    let body: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
-    assert_eq!(body["error"]["reason"], "summary_output_missing");
-    assert_eq!(body["error"]["category"], "destination_compaction");
+    if stream {
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(
+            response
+                .lines()
+                .any(|line| line == "event: response.failed"),
+            "{response}"
+        );
+    } else {
+        assert!(response.starts_with("HTTP/1.1 409"), "{response}");
+        let body: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["error"]["reason"], "summary_output_missing");
+        assert_eq!(body["error"]["category"], "destination_compaction");
+    }
     let (_, _, sent) = upstream.observed();
     assert!(!sent.to_string().contains("private-active-request"));
     let records = finished(directory.path(), 1);

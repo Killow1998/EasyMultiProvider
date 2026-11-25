@@ -453,11 +453,13 @@ fn websocket_rejection_and_success_have_separate_turn_ids_on_the_same_connection
         done[0]["fields"]["request_id"],
         done[1]["fields"]["request_id"]
     );
-    assert_eq!(
-        done[0]["fields"]["connection_id"],
-        done[1]["fields"]["connection_id"]
-    );
-    assert!(done[0]["fields"]["connection_id"].as_str().is_some());
+    let connection_id = done[0]["fields"]["connection_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .expect("first turn has a nonempty connection ID");
+    for turn in &done[1..] {
+        assert_eq!(turn["fields"]["connection_id"], connection_id);
+    }
     assert_eq!(done[0]["fields"]["downstream_terminal"], "error");
     assert_eq!(done[1]["fields"]["downstream_terminal"], "error");
     assert_eq!(
