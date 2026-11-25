@@ -1,9 +1,10 @@
-use crate::support::modules::{BuiltModule, Fault, IDS, ModuleRelease};
+use crate::support::modules::{BuiltModule, Fault, IDS, ModuleEmp, ModuleRelease};
 use crate::support::{
     Emp, NATIVE_TOKEN, Response, Upstream, UpstreamRequest, Workspace, http, write_file,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::fs;
 
 fn built_modules() -> Vec<BuiltModule> {
     IDS.into_iter().map(BuiltModule::current).collect()
@@ -50,6 +51,39 @@ impl Routes {
         }
         config["model_groups"] = json!([{"id":"auto/probe", "name_prefix":"auto",
             "policy":policy, "sources":["first/model","second/model"]}]);
+        workspace.write_config(config);
+        workspace
+    }
+
+    fn k2_workspace(&self, settings: &[&str]) -> Workspace {
+        let workspace = Workspace::new();
+        let mut config = self.config();
+        let clients = workspace.root.join("state/gateway-clients.json");
+        for setting in settings {
+            match *setting {
+                "decision_provider" => config["decision_provider"] = json!("first"),
+                "decision_api" => {
+                    config["providers"][0]["decision_api"] =
+                        json!({"protocol":"openai","model":"first-decision"});
+                }
+                "gateway" => write_file(
+                    &clients,
+                    &json!([{"id":"old-device", "name":"Existing device", "created_at":1.0,
+                        "digest":format!("{:x}", Sha256::digest(b"old-device-key"))}])
+                    .to_string(),
+                ),
+                "aggregate" => {
+                    config["model_groups"] = json!([{"id":"auto/probe",
+                        "sources":["first/model","second/model"], "policy":"priority"}]);
+                }
+                "empty" => {
+                    config["decision_provider"] = json!("");
+                    config["model_groups"] = json!([]);
+                    write_file(&clients, "[]");
+                }
+                _ => unreachable!("unknown K2 fixture setting {setting}"),
+            }
+        }
         workspace.write_config(config);
         workspace
     }
@@ -315,42 +349,21 @@ fn m01_k2_normal_start_requires_install_and_restores_installed_modules_with_or_w
     let release = ModuleRelease::start(&modules);
     let routes = Routes::new();
     for settings in [
-        "none",
-        "decision_provider",
-        "decision_api",
-        "gateway",
-        "aggregate",
+        &[][..],
+        &["decision_provider"],
+        &["decision_api"],
+        &["gateway"],
+        &["aggregate"],
     ] {
-        let workspace = Workspace::new();
-        let mut config = routes.config();
-        match settings {
-            "decision_provider" => config["decision_provider"] = json!("first"),
-            "decision_api" => {
-                config["providers"][0]["decision_api"] =
-                    json!({"protocol":"openai","model":"first-decision"})
-            }
-            "gateway" => write_file(
-                &workspace.root.join("state/gateway-clients.json"),
-                &json!([{"id":"old-device", "name":"Existing device", "created_at":1.0,
-                    "digest":format!("{:x}", Sha256::digest(b"old-device-key"))}])
-                .to_string(),
-            ),
-            "aggregate" => {
-                config["model_groups"] = json!([{"id":"auto/probe",
-                "sources":["first/model","second/model"], "policy":"priority"}])
-            }
-            "none" => {}
-            _ => unreachable!(),
-        }
-        workspace.write_config(config);
+        let workspace = routes.k2_workspace(settings);
         let emp = release.start_emp(&workspace);
         for id in ["decision", "gateway", "aggregate", "team", "aero"] {
             let row = emp.status(id);
-            assert_eq!(row["active"], false, "settings={settings}: {row}");
-            assert_eq!(row["enabled"], false, "settings={settings}: {row}");
+            assert_eq!(row["active"], false, "settings={settings:?}: {row}");
+            assert_eq!(row["enabled"], false, "settings={settings:?}: {row}");
             assert!(
                 row["installed_version"].is_null(),
-                "settings={settings}: {row}"
+                "settings={settings:?}: {row}"
             );
         }
         assert_ok(
@@ -362,7 +375,7 @@ fn m01_k2_normal_start_requires_install_and_restores_installed_modules_with_or_w
             emp.change(&module.id, "install");
             emp.active(module);
         }
-        if settings == "gateway" {
+        if settings == ["gateway"] {
             assert_eq!(
                 report(&emp, "/api/gateway/clients")["clients"][0]["id"],
                 "old-device"
@@ -386,6 +399,104 @@ fn m01_k2_normal_start_requires_install_and_restores_installed_modules_with_or_w
     release
         .finish()
         .expect("module release server worker panicked");
+}
+
+#[test]
+#[ignore = "needs Core with embedded transition payloads; run cargo xtask module-e2e"]
+fn m01_k2_bundled_update_installs_only_configured_modules() {
+    let modules = built_modules();
+    let routes = Routes::new();
+    let installation = Workspace::new();
+    let (target, relative_binary) = if cfg!(target_os = "macos") {
+        (installation.root.join("EMP.app"), "Contents/MacOS/EMP")
+    } else {
+        (installation.root.join("EMP"), "")
+    };
+    let executable = if relative_binary.is_empty() {
+        target.clone()
+    } else {
+        target.join(relative_binary)
+    };
+    fs::create_dir_all(executable.parent().expect("installation directory")).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_EMP"), &executable).expect("copy packaged Core");
+
+    let cases: &[(&[&str], &[&str])] = &[
+        (&[], &[]),
+        (&["empty"], &[]),
+        (&["decision_provider"], &["decision"]),
+        (&["decision_api"], &["decision"]),
+        (&["gateway"], &["gateway"]),
+        (&["aggregate"], &["aggregate"]),
+        (&["decision_api", "aggregate"], &["decision", "aggregate"]),
+        (
+            &["decision_provider", "decision_api", "gateway", "aggregate"],
+            &["decision", "gateway", "aggregate"],
+        ),
+    ];
+    for (index, &(settings, expected)) in cases.iter().enumerate() {
+        let workspace = routes.k2_workspace(settings);
+        let job = installation.root.join(format!(".emp-update-m01-{index}"));
+        let args = workspace.serve_arguments();
+        let version = env!("CARGO_PKG_VERSION");
+        let nonce = format!("m01-{index}");
+        write_file(
+            &job.join("plan.json"),
+            &json!({"target":target,"candidate":job.join("candidate"),"relative_binary":relative_binary,
+                "parents":[],"args":args,"version":version,"nonce":nonce})
+            .to_string(),
+        );
+        let ready = job.join("ready.json");
+        let mut command = workspace.command_for(&executable);
+        command.args(&args).env("EMP_UPDATE_READY", &ready);
+        let emp = ModuleEmp::spawn(&workspace, command);
+
+        let directory = workspace.root.join("state/modules");
+        let registry: Value =
+            serde_json::from_slice(&fs::read(directory.join("modules.json")).unwrap()).unwrap();
+        assert_eq!(
+            registry.as_object().expect("module registry").len(),
+            expected.len(),
+            "settings={settings:?}: {registry}"
+        );
+        let artifacts: Vec<_> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name != "modules.json")
+            .collect();
+        assert_eq!(
+            artifacts.len(),
+            expected.len(),
+            "settings={settings:?}: {artifacts:?}"
+        );
+        for module in &modules {
+            if expected.contains(&module.id.as_str()) {
+                emp.active(module);
+                assert_eq!(registry[&module.id]["artifact"]["digest"], module.digest);
+            } else {
+                assert!(registry.get(&module.id).is_none(), "{registry}");
+                let row = emp.status(&module.id);
+                assert_eq!(row["active"], false, "{row}");
+                assert_eq!(row["enabled"], false, "{row}");
+                assert!(row["installed_version"].is_null(), "{row}");
+            }
+        }
+        if expected.contains(&"gateway") {
+            assert_ok(
+                &routed(&emp, "old-device-key", "first/model", "old-device"),
+                "first",
+            );
+            routes.assert_forwarded("first", "/v1/responses", "upstream-model");
+        }
+        if expected.contains(&"aggregate") {
+            exercise(&emp, "aggregate", &routes);
+        }
+        if settings.contains(&"decision_provider") && settings.contains(&"decision_api") {
+            exercise(&emp, "decision", &routes);
+        }
+        emp.stop();
+        let receipt: Value = serde_json::from_slice(&fs::read(ready).unwrap()).unwrap();
+        assert_eq!(receipt, json!({"version":version,"nonce":nonce}));
+    }
 }
 
 #[test]

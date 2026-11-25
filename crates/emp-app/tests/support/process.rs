@@ -14,7 +14,11 @@ use super::startup::emp_startup_budget;
 use super::{NATIVE_TOKEN, ORIGINAL_CODEX_CONFIG, PROVIDER_KEY, Response, Upstream, http};
 
 pub fn emp_command() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_EMP"));
+    emp_command_for(Path::new(env!("CARGO_BIN_EXE_EMP")))
+}
+
+fn emp_command_for(binary: &Path) -> Command {
+    let mut command = Command::new(binary);
     for key in [
         "HTTP_PROXY",
         "HTTPS_PROXY",
@@ -146,7 +150,11 @@ impl Workspace {
 
     /// Environment for any EMP process acting on this workspace.
     pub fn command(&self) -> Command {
-        let mut command = emp_command();
+        self.command_for(Path::new(env!("CARGO_BIN_EXE_EMP")))
+    }
+
+    pub fn command_for(&self, binary: &Path) -> Command {
+        let mut command = emp_command_for(binary);
         command
             .env("CODEX_HOME", &self.codex_home)
             .env("HOME", self.root.join("home"))

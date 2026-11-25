@@ -47,7 +47,7 @@ fn saved_device_keys_use_credential_recovery_without_rotating_the_master_key() {
     let clients =
         crate::services::gateway_clients::GatewayClients::open(path.clone(), &vault).unwrap();
     use crate::services::modules::{Modules, Startup};
-    let modules = Modules::open(state.join("modules"), Startup::Normal).unwrap();
+    let modules = Modules::open(state.join("modules"), Startup::Normal, &config, false).unwrap();
     let saved =
         serde_json::to_value(clients.issue("Test PC", None, &vault, &modules).unwrap()).unwrap();
     fs::remove_file(state.join("master.key")).unwrap();

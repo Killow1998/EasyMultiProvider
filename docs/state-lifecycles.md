@@ -151,10 +151,10 @@ retains the process handle rather than the initial thread handle.
 
 | ID | Owner | Phases / transition triggers | Representation and boundary |
 |---|---|---|---|
-| M01 | [Preview registry](../crates/emp-app/src/services/migration/preview.rs) | Decode → session-bound preview token → select → consume or expire | I. Preview does not publish credentials. File and LAN import converge here. |
-| M02 | [Migration service](../crates/emp-app/src/services/migration.rs) | Validate selection/conflicts → commit selected records → update integration/catalog → result | I. Committing is a mutation; closing the preview is not permission to replay it. |
-| M03 | [LAN sender](../crates/emp-app/src/services/migration/lan.rs), [wire](../crates/emp-app/src/services/migration/lan/wire.rs) | Waiting → receiver bound / confirmation → approval → sending → sent / failed; deadline → expired; cancel → drop sender | M. `approved` is an internal distinction while public status remains `confirmation`. Bundle ownership is consumed once. Keep this mapping documented. |
-| M04 | [LAN receive operation](../crates/emp-app/src/services/migration/lan/wire.rs) | Present proof and nonce → pending approval → receive bytes → preview; rejection/expiry → error | M. Pending approval is not a failed password. Receiver identity persists across polls. |
+| MIG01 | [Preview registry](../crates/emp-app/src/services/migration/preview.rs) | Decode → session-bound preview token → select → consume or expire | I. Preview does not publish credentials. File and LAN import converge here. |
+| MIG02 | [Migration service](../crates/emp-app/src/services/migration.rs) | Validate selection/conflicts → commit selected records → update integration/catalog → result | I. Committing is a mutation; closing the preview is not permission to replay it. |
+| MIG03 | [LAN sender](../crates/emp-app/src/services/migration/lan.rs), [wire](../crates/emp-app/src/services/migration/lan/wire.rs) | Waiting → receiver bound / confirmation → approval → sending → sent / failed; deadline → expired; cancel → drop sender | M. `approved` is an internal distinction while public status remains `confirmation`. Bundle ownership is consumed once. Keep this mapping documented. |
+| MIG04 | [LAN receive operation](../crates/emp-app/src/services/migration/lan/wire.rs) | Present proof and nonce → pending approval → receive bytes → preview; rejection/expiry → error | M. Pending approval is not a failed password. Receiver identity persists across polls. |
 
 ### Durable credential formats
 

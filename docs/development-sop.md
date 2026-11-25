@@ -86,16 +86,19 @@ rmdir "$fixture_root"
 Unix 可执行夹具用 `emp_test_support::write_executable`。子进程必须写完并关闭文件后，测试才能执行它。由测试进程直接写入时，并行测试的 `fork` 可能继承尚未关闭的写描述符，导致执行失败并返回 `ETXTBSY`。
 
 模组真实进程验收固定入口为 `cargo xtask module-e2e`（Unix）：先设置
-`EMP_AERO_PYTHON` 指向装有 PyInstaller 的 Python。命令依次构建当前 EMP 和
-四个 Rust 模组，在临时 HEAD worktree 中将四个模组的 patch 版本升一并同步
+`EMP_AERO_PYTHON` 指向装有 PyInstaller 的 Python。命令先构建当前四个
+Rust 模组，复用正式打包逻辑生成过渡清单。然后在临时 HEAD worktree 中
+将四个模组的 patch 版本升一并同步
 Cargo.lock，使用独立 target 构建升版模组，移除 worktree，再通过现有
 `package-module aero` 打包 Aero，设置 `EMP_E2E_MODULE_NEXT_DIR` 和
-`EMP_E2E_AERO_PACKAGE`，串行运行 ignored 的 `e2e::modules::`、`e2e::team::`、
+`EMP_E2E_AERO_PACKAGE`。Cargo 为测试构建带过渡载荷的 Core，串行运行 ignored 的
+`e2e::modules::`、`e2e::team::`、
 `e2e::aero::` 场景。当前构建和测试共用 Cargo 的 target 与 dev/test profile，
 所有子进程继承 `CARGO_BUILD_JOBS`，日志保留 Core/模组 PID 和 digest；8 GiB
 主机通过 `../.emp-cargo.sh xtask module-e2e` 调用。
-`cargo xtask module-e2e --skip-aero` 会打印显式跳过 M04；默认缺少打包 Python
-直接失败。失败输出含完整命令，临时升版源码和产物在结束时清理。
+`cargo xtask module-e2e --skip-aero` 包含 [M01 逐模组过渡](official-modules.md#开发验收)，
+会打印显式跳过 M04。默认缺少打包 Python 会直接失败。失败输出含完整命令，
+临时升版源码和产物在结束时清理。
 [Module E2E](../.github/workflows/module-e2e.yml) 在手动触发及模组、宿主、验收入口
 相关 PR 上运行；CI 的 Python 用于 PyInstaller 打包，场景由 Rust 执行。
 M04 检查安装握手、planner/executor 接力与回复流、服务用量、停用和模型目录；

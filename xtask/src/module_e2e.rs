@@ -33,7 +33,15 @@ pub fn run(args: &[String]) -> Result {
         .map_err(|error| format!("{}: {error}", next_root.display()))?;
     let source = candidate.path().join("source");
     let next_target = candidate.path().join("target");
-    build(&root, None, true)?;
+    let current = build_modules(&root, None)?;
+    let transition = temporary.path().join("transition.rs");
+    crate::package::write_transition_manifest(&transition, |module| {
+        current.join(format!(
+            "empmod-{}{}",
+            module.id(),
+            std::env::consts::EXE_SUFFIX
+        ))
+    })?;
     execute(
         Command::new("git")
             .current_dir(&root)
@@ -43,7 +51,7 @@ pub fn run(args: &[String]) -> Result {
     )?;
     let next = (|| {
         bump_versions(&source)?;
-        build(&source, Some(&next_target), false)
+        build_modules(&source, Some(&next_target))
     })();
     let removed = execute(
         Command::new("git")
@@ -55,6 +63,7 @@ pub fn run(args: &[String]) -> Result {
     removed?;
     let mut test = cargo(&root);
     test.args(["test", "--locked", "-p", "emp-app", "--test", "e2e"])
+        .env("EMP_TRANSITION_MANIFEST", &transition)
         .env("EMP_E2E_MODULE_NEXT_DIR", &next)
         .env_remove("EMP_E2E_AERO_PACKAGE");
     if !skip_aero {
@@ -107,7 +116,7 @@ fn execute(command: &mut Command) -> Result {
     }
 }
 
-fn build(root: &Path, target: Option<&Path>, app: bool) -> Result<PathBuf> {
+fn build_modules(root: &Path, target: Option<&Path>) -> Result<PathBuf> {
     let mut command = cargo(root);
     command.args([
         "build",
@@ -115,9 +124,6 @@ fn build(root: &Path, target: Option<&Path>, app: bool) -> Result<PathBuf> {
         "--bins",
         "--message-format=json-render-diagnostics",
     ]);
-    if app {
-        command.args(["-p", "emp-app"]);
-    }
     for id in MODULES {
         command.arg("-p").arg(format!("emp-mod-{id}"));
     }

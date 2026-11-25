@@ -6,7 +6,7 @@
 
 EMP 从官方 GitHub Release 读取对应平台的包。独立模组发布标签使用 `emp-mod-<id>-api2-v<版本>`，例如 `emp-mod-decision-api2-v0.10.0-beta`。没有兼容的独立发布时，安装器从 Core 对应的 Release 取包。EMP 核对下载地址、大小和 SHA-256，以及子进程报告的模组 ID、版本和宿主接口。已安装且兼容的模组可离线启动，并可在 Core 升级时复用。单个模组更新后仍保留此前可启动的版本，以便启动失败时回退。
 
-从 v0.14.3 通过 EMP 的应用内更新升级时，新 Core 从过渡更新包内校验并启用 Decision API、多设备网关和聚合路由。校验或启动失败时，旧更新程序会恢复原安装。手动替换程序后可在模块页安装原有模块。
+从 v0.14.3 通过 EMP 的应用内更新升级时，新 Core 校验包内的三个过渡载荷，只安装并启用留下对应设置的模组。校验或启动失败时，旧更新程序会恢复原安装。也可以在模组页手动安装。
 
 ## Aero 上令下效
 
@@ -114,8 +114,46 @@ python3 -B scripts/shadow_frontend/e2e_official_modules.py \
 
 日常只改一个模组时，运行 `cargo build --locked -p emp-mod-decision`，或用 `cargo xtask package-module decision --output /tmp/emp-decision` 生成该平台的安装资产和校验文件。`decision` 可换成 `gateway`、`aggregate` 或 `team`。完整发行包继续使用 `cargo xtask package`，Aero 使用独立的包。
 
-该验收启动三套隔离的 EMP、一个团队服务和模拟上游，使用真实 Codex 选择器以及三个工作空间账号。需要 Firefox 和 geckodriver。仅验收 HTTP、账本和真实 Codex 时可以加 `--no-browser`。使用 `--manual-https` 验收手填 HTTPS 地址，使用 `--lan` 验收同网发现。两种模式均使用 OpenSSL 生成仅供夹具信任的证书，`--lan` 还需要一块启用广播的私有 IPv4 网卡。使用 `--bundled-core /path/to/v0.14.3/EMP` 和 `--transition-core /path/to/packaged/EMP-linux-x86_64` 验证正式旧版更新程序。把本次打包的模组产物放在新 Core 旁，夹具会验证离线启动与损坏回滚。
+该验收启动三套隔离的 EMP、一个团队服务和模拟上游，使用真实 Codex 选择器以及三个工作空间账号。需要 Firefox 和 geckodriver。仅验收 HTTP、账本和真实 Codex 时可以加 `--no-browser`。使用 `--manual-https` 验收手填 HTTPS 地址，使用 `--lan` 验收同网发现。两种模式均使用 OpenSSL 生成仅供夹具信任的证书，`--lan` 还需要一块启用广播的私有 IPv4 网卡。
+
+`cargo xtask module-e2e --skip-aero` 包含 M01 的逐模组升级场景。它用真实 Core 和模组制品，按旧更新程序交付的更新计划与就绪标记触发升级启动。Python 夹具的 `--bundled-core` 和 `--transition-core` 参数用于验证三个模组一律启用的发行基线。
 
 使用另行构建、版本更高的 Decision 二进制运行 `--decision-update /path/to/empmod-decision`，可以验收独立热更新、损坏包拒绝及更新前后 Core 进程和其他三份模组文件保持一致。
 
 在验收命令后加 `--manual-https --no-browser --hold-demo`，可保留十人演示。命令输出成员、团队管理员、VPS 维护者与未入组页面的本机地址，以及入组表单使用的团队 HTTPS 地址。演示使用三个 Pro、一个 Pro Lite 和六个 Free 的合成账号。完成检阅后按 Ctrl+C 退出演示。
+
+## 模组契约（阶段 5 基线）
+
+- 通用管理入口为 `GET/POST /api/modules`，要求同源管理会话。启用、停用和换版的选择写入 `state/modules/modules.json`，同目录存放按 SHA-256 命名的制品。已启用制品在启动时校验并握手，普通启动失败时尝试上个版本。更新先验证候选再切换，卸载前须停用，卸载移除注册项及闲置制品。参见 [HTTP 管理入口](../crates/emp-app/src/server/http/modules.rs#L78)、[鉴权](../crates/emp-app/src/server/http/management.rs#L139)、[启动](../crates/emp-app/src/services/modules.rs#L124)、[生命周期操作](../crates/emp-app/src/services/modules.rs#L357)及[制品存储](../crates/emp-app/src/services/modules/packages.rs#L99)。
+- 面板脚本 `GET /assets/module-<id>.js` 要求同源且模组已运行，可用 `revision` 指定当前制品。参见 [面板路由](../crates/emp-app/src/server/http/modules.rs#L26)和[制品匹配](../crates/emp-app/src/services/modules.rs#L278)。
+
+### Decision API
+
+- `POST /v1/decisions` 和 `POST /v1/systemone` 走 Core 代理鉴权，可用本机密钥。`POST /api/decisions/models` 和 `GET /api/decisions/connection` 要求同源管理会话。参见 [推理路由](../crates/emp-app/src/server/http/inference.rs#L60)、[代理鉴权](../crates/emp-app/src/server/http/proxy.rs#L125)、[模型发现](../crates/emp-app/src/server/http/catalog.rs#L55)和[连接信息](../crates/emp-app/src/server/http/gateway.rs#L23)。
+- Core 读取 `decision_provider`、`providers[].decision_api` 的 `protocol` 和 `model`，从 Core 凭据库取 provider 密钥。配置和用量共用 Core 文件。参见 [配置规范化](../crates/emp-config/src/config.rs#L674)、[服务字段](../crates/emp-config/src/config/model_provider/provider.rs#L204)和[上游调用](../crates/emp-app/src/api/decisions.rs#L47)。
+- 旧版升级时，上述两处设置任一存在即安装启用，其中 `decision_provider` 须非空。停用关闭新请求入口，已发往上游的请求可完成。更新替换模组制品，卸载保留 Core 配置与用量。参见 [过渡规则](../crates/emp-app/src/services/modules/packages.rs#L113)、[入口检查](../crates/emp-app/src/server/http/proxy.rs#L268)和[上游调用](../crates/emp-app/src/api/decisions.rs#L132)。
+
+### 多设备网关
+
+- `GET /api/gateway`、`GET/POST/DELETE /api/gateway/clients` 和 `GET /api/gateway/usage` 要求同源管理会话。代理入口接受有效的设备 Bearer 密钥，调用归到相应设备。参见 [管理路由](../crates/emp-app/src/server/http/gateway.rs#L21)和[代理身份](../crates/emp-app/src/server/http/proxy.rs#L125)。
+- Core 从 `state/gateway-clients.json` 读取设备 ID、名称和密钥摘要，兼容旧明文列表，写入时使用凭据库加密。共用的本机密钥另存在 `state/gateway-key`。参见 [设备读写](../crates/emp-app/src/services/gateway_clients.rs#L95)和[本机密钥](../crates/emp-app/src/app.rs#L217)。
+- 旧版升级时，设备列表至少有一台才安装启用。停用关闭设备管理与设备密钥鉴权。更新保留设备身份，卸载保留设备文件和本机密钥。参见 [过渡规则](../crates/emp-app/src/services/modules/packages.rs#L113)、[入口检查](../crates/emp-app/src/server/http/proxy.rs#L268)和[生命周期操作](../crates/emp-app/src/services/modules.rs#L357)。
+
+### 聚合路由
+
+- 分组使用 Core 的 `/v1/models` 与 Responses HTTP/WebSocket 入口，继承目录访问及代理鉴权。参见 [目录访问](../crates/emp-app/src/server/http/proxy.rs#L213)、[HTTP 推理](../crates/emp-app/src/server/http/inference.rs#L84)和[WebSocket 鉴权](../crates/emp-app/src/server/http/websocket.rs#L51)。
+- Core 解释 `model_groups` 的来源、名称和选源策略。会话绑定与轮转游标以事务写入 `state/usage.sqlite3`。参见 [分组配置](../crates/emp-config/src/config/aggregates.rs#L20)、[选源](../crates/emp-app/src/services/aggregate_routing.rs#L11)、[账本路径](../crates/emp-app/src/services/usage.rs#L43)和[绑定事务](../crates/emp-storage/src/usage/ledger/affinity.rs#L5)。
+- 旧版升级时，至少有一组才安装启用。停用隐藏分组目录并拒绝分组请求。更新和卸载保留分组设置及既有绑定。参见 [过渡规则](../crates/emp-app/src/services/modules/packages.rs#L113)、[目录过滤](../crates/emp-app/src/services/catalog.rs#L76)、[请求门禁](../crates/emp-app/src/services/aggregate_routing.rs#L17)和[生命周期操作](../crates/emp-app/src/services/modules.rs#L357)。
+
+### 团队空间
+
+- 桌面端 `GET /api/team/status`、`GET /api/team/notices` 和 `POST /api/team/*` 要求同源管理会话。VPS 的 `/workspace/v1/*` 除登录与加入入口外核验团队 Bearer 会话，再按操作检查角色和权限。参见 [桌面路由](../crates/emp-app/src/server/http/team.rs#L22)、[管理鉴权](../crates/emp-app/src/server/http/management.rs#L139)和[VPS 分派](../crates/emp-mod-team/src/server/mod.rs#L270)。
+- Core 解释 `accounts[].workspace_shared`，并用账号和密钥存储路径管理同步凭据。桌面状态包括加密的 `state/team-profile.json`、`state/team-device-id`、`state/team-budget-notices.json` 和用量账本的待上报队列。VPS 使用 `workspace.sqlite3`。参见 [桌面状态](../crates/emp-app/src/services/team.rs#L135)、[共享配置提交](../crates/emp-app/src/services/team/sharing.rs#L36)、[待上报队列](../crates/emp-storage/src/usage/ledger/team.rs#L34)和[VPS 存储](../crates/emp-mod-team/src/server/mod.rs#L231)。
+- 单独安装启用后，Core 运行用量补报与预算轮询。停用关闭入口并停止后台同步，更新与在途后台工作串行。参见 [入口检查](../crates/emp-app/src/server/http/proxy.rs#L268)、[切换锁](../crates/emp-app/src/services/team.rs#L282)和[后台循环](../crates/emp-app/src/services/team.rs#L351)。
+- Team 卸载钩子调用 `purge_local`，清除本机团队登录、共享配置和 Team 持有的同步凭据，保留设备 ID、个人凭据和账本。**退役或切换 Team 实例时不得走 Uninstall**。参见 [卸载钩子](../crates/emp-app/src/server/http/modules.rs#L162)和[本机清理](../crates/emp-app/src/services/team/sharing.rs#L201)。
+
+### Aero 上令下效
+
+- Core 用 `/v1/models` 发布配对，通过 `POST /v1/responses`、`POST /v1/responses/compact` 和 `GET /v1/responses` 的 WebSocket 处理请求，继承代理鉴权。私有 HTTP 转发使用 Core 生成的 Bearer 密钥，回调使用绑定当前调用的委托凭据。参见 [HTTP 转发](../crates/emp-app/src/api/aero.rs#L170)、[WebSocket 转发](../crates/emp-app/src/api/websocket/aero.rs)和[回调鉴权](../crates/emp-app/src/server/http/proxy.rs#L33)。
+- Core 解释 `aero_profiles` 的配对名称、别名和规划／执行模型。模组在配置目录的 `aero/sessions.sqlite3` 保存会话。参见 [配对校验](../crates/emp-app/src/services/modules/aero/catalog.rs#L109)、[启动参数](../crates/emp-app/src/services/modules/aero.rs#L195)和[会话库](../modules/aero/gateway.py#L184)。
+- 单独安装启用后启动 worker，首个配对请求启动私有端点。停用移出配对目录并排空在途请求，繁忙时更新或卸载会返回 `module_busy`。更新和卸载保留配对配置与会话库。参见 [目录过滤](../crates/emp-app/src/services/catalog.rs#L68)、[端点启动](../crates/emp-app/src/services/modules/aero.rs#L218)和[排空与切换](../crates/emp-app/src/services/modules.rs#L431)。

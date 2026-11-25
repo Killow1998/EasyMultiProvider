@@ -185,13 +185,19 @@ impl BackendState {
         .with_lock_path(codex_home.join("easy-multi-provider/integration/lease.lock"));
         let management_events =
             Arc::new(crate::services::management_events::ManagementEvents::default());
-        let modules = crate::services::modules::Modules::open(state_root.join("modules"), updating)
-            .map_err(std::io::Error::other)?;
         let gateway_path = state_root.join("gateway-clients.json");
-        let gateway_clients = match crate::services::gateway_clients::GatewayClients::open(
-            gateway_path.clone(),
-            &vault,
-        ) {
+        let gateway_clients =
+            crate::services::gateway_clients::GatewayClients::open(gateway_path.clone(), &vault);
+        let modules = crate::services::modules::Modules::open(
+            state_root.join("modules"),
+            updating,
+            &config,
+            gateway_clients
+                .as_ref()
+                .is_ok_and(|clients| clients.has_devices()),
+        )
+        .map_err(std::io::Error::other)?;
+        let gateway_clients = match gateway_clients {
             Ok(clients) => clients,
             Err(AppError::Filesystem(emp_state::FilesystemError::InvalidJson)) => {
                 modules.mark_unavailable(emp_modules::Module::Gateway, "invalid_gateway_clients");

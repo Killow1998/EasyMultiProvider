@@ -121,7 +121,12 @@ fn test_module_handler(_: Module) -> Option<TestModuleHandler> {
 }
 
 impl Modules {
-    pub(crate) fn open(root: PathBuf, startup: Startup) -> Result<Self, String> {
+    pub(crate) fn open(
+        root: PathBuf,
+        startup: Startup,
+        config: &Value,
+        has_gateway_devices: bool,
+    ) -> Result<Self, String> {
         let update = startup != Startup::Normal;
         let mut modules = Self {
             packages: Packages::new(root),
@@ -145,7 +150,11 @@ impl Modules {
         let mut saved = match saved {
             saved if bundled_transition => {
                 let mut saved = saved.unwrap_or_default();
-                saved.extend(modules.packages.bundled_transition()?);
+                saved.extend(
+                    modules
+                        .packages
+                        .bundled_transition(config, has_gateway_devices)?,
+                );
                 saved
             }
             Some(saved) => saved,

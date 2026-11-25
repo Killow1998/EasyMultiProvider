@@ -266,19 +266,7 @@ impl ModuleRelease {
                 format!("{base}/releases?per_page=100"),
             )
             .args(workspace.serve_arguments());
-        let cleanup_budget = io_timeout();
-        let emp = Emp::spawn(command);
-        eprintln!(
-            "Core PID={} sha256={:x}",
-            emp.pid(),
-            Sha256::digest(std::fs::read(env!("CARGO_BIN_EXE_EMP")).expect("EMP binary"))
-        );
-        ModuleEmp {
-            emp: Some(emp),
-            root: workspace.root.join("state/modules"),
-            observed: Mutex::new(BTreeSet::new()),
-            cleanup_budget,
-        }
+        ModuleEmp::spawn(workspace, command)
     }
 
     pub fn finish(mut self) -> thread::Result<()> {
@@ -305,6 +293,7 @@ impl Drop for ModuleRelease {
 
 pub struct ModuleEmp {
     emp: Option<Emp>,
+    binary: PathBuf,
     root: PathBuf,
     observed: Mutex<BTreeSet<i32>>,
     cleanup_budget: TestBudget,
@@ -340,6 +329,24 @@ fn processes(deadline: Deadline) -> io::Result<Vec<(i32, String)>> {
 }
 
 impl ModuleEmp {
+    pub fn spawn(workspace: &Workspace, command: Command) -> Self {
+        let binary = PathBuf::from(command.get_program());
+        let cleanup_budget = io_timeout();
+        let emp = Emp::spawn(command);
+        eprintln!(
+            "Core PID={} sha256={:x}",
+            emp.pid(),
+            Sha256::digest(std::fs::read(&binary).expect("EMP binary"))
+        );
+        Self {
+            emp: Some(emp),
+            binary,
+            root: workspace.root.join("state/modules"),
+            observed: Mutex::new(BTreeSet::new()),
+            cleanup_budget,
+        }
+    }
+
     pub fn status(&self, id: &str) -> Value {
         let response = self.get("/api/modules");
         assert_eq!(response.status, 200, "{}", response.text());
@@ -380,10 +387,11 @@ impl ModuleEmp {
         ));
         let snapshot =
             processes(Deadline::after(io_timeout())).expect("enumerate module processes");
+        let core = self.binary.to_string_lossy();
         assert!(
-            snapshot.iter().any(|(pid, args)| {
-                *pid == self.pid() && args.starts_with(env!("CARGO_BIN_EXE_EMP"))
-            }),
+            snapshot
+                .iter()
+                .any(|(pid, args)| *pid == self.pid() && args.starts_with(core.as_ref())),
             "original Core process exited"
         );
         let executable = binary.to_string_lossy();

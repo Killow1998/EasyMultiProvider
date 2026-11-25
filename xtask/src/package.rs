@@ -1,6 +1,7 @@
 use crate::{
     PRODUCT_NAME, Result, VERSION, copy, make_executable, project_root, run_command, windows,
 };
+use emp_modules::Module;
 use emp_updater::worker::{MACOS_BUNDLE_BINARY, MACOS_LEGACY_BINARY};
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -150,16 +151,7 @@ fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
         Some(VERSION),
     )?;
     let manifest = build_root.join("transition.rs");
-    let mut entries = Vec::new();
-    use emp_modules::Module;
-    for module in [Module::Gateway, Module::Aggregate, Module::Decision] {
-        let path = artifacts.join(module.asset());
-        entries.push(format!(
-            "(Module::{module:?}, include_bytes!({path:?}), {:?})",
-            crate::sha256_file(&path)?
-        ));
-    }
-    fs::write(&manifest, format!("&[{}]", entries.join(","))).map_err(|error| error.to_string())?;
+    write_transition_manifest(&manifest, |module| artifacts.join(module.asset()))?;
     let executable = build_binary(root, target, resource.as_deref(), &manifest)?;
     if target.os == Os::Windows {
         windows::validate_executable(&executable, VERSION)?;
@@ -299,6 +291,21 @@ fn build_modules(
             Ok(artifact)
         })
         .collect()
+}
+
+pub(crate) fn write_transition_manifest(
+    manifest: &Path,
+    binary_path: impl Fn(Module) -> PathBuf,
+) -> Result {
+    let mut entries = Vec::new();
+    for module in [Module::Gateway, Module::Aggregate, Module::Decision] {
+        let path = binary_path(module);
+        entries.push(format!(
+            "(Module::{module:?}, include_bytes!({path:?}), {:?})",
+            crate::sha256_file(&path)?
+        ));
+    }
+    fs::write(manifest, format!("&[{}]", entries.join(","))).map_err(|error| error.to_string())
 }
 
 fn build_binary(

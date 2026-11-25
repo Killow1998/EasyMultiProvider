@@ -121,6 +121,10 @@ impl GatewayClients {
         })
     }
 
+    pub(crate) fn has_devices(&self) -> bool {
+        !self.clients.lock().expect("gateway clients").is_empty()
+    }
+
     pub(crate) fn identify(&self, key: &str, modules: &Modules) -> Option<Caller> {
         self.hooks.before_identify();
         let digest = format!("{:x}", Sha256::digest(key.as_bytes()));

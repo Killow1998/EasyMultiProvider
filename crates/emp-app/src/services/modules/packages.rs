@@ -110,20 +110,42 @@ impl Packages {
         }
     }
 
-    pub(super) fn bundled_transition(&self) -> Result<Installs, String> {
+    pub(super) fn bundled_transition(
+        &self,
+        config: &serde_json::Value,
+        has_gateway_devices: bool,
+    ) -> Result<Installs, String> {
         let payload: &[(Module, &[u8], &str)] =
             include!(concat!(env!("OUT_DIR"), "/module-transition.rs"));
-        if payload.len() != 3 {
+        if payload.len() != 3
+            || payload
+                .iter()
+                .any(|&(_, bytes, digest)| format!("{:x}", Sha256::digest(bytes)) != digest)
+        {
             return Err("legacy_module_transition_missing".into());
         }
         emp_state::filesystem::create_private_directory(&self.root)
             .map_err(|_| "module_directory_unavailable")?;
         payload
             .iter()
-            .map(|&(module, bytes, digest)| {
-                if format!("{:x}", Sha256::digest(bytes)) != digest {
-                    return Err("module_checksum_failed".into());
+            .filter(|(module, _, _)| match module {
+                Module::Decision => {
+                    config["decision_provider"]
+                        .as_str()
+                        .is_some_and(|provider| !provider.is_empty())
+                        || config["providers"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|provider| provider.get("decision_api").is_some())
                 }
+                Module::Gateway => has_gateway_devices,
+                Module::Aggregate => config["model_groups"]
+                    .as_array()
+                    .is_some_and(|groups| !groups.is_empty()),
+                Module::Team | Module::Aero => false,
+            })
+            .map(|&(module, bytes, digest)| {
                 let path = self.root.join(Self::filename(module, digest));
                 if self.verified_path(module, digest).is_err() {
                     emp_state::filesystem::atomic_write_private_state(&path, bytes)
