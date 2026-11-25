@@ -220,9 +220,9 @@ fn finish_import(
     receipt: &mut OperationObservation,
 ) -> Result<Value, MigrationError> {
     receipt.check("bundle_committed", Some(true));
-    after_commit(state, CommittedChange::Migration(receipt))
+    let path = after_commit(state, CommittedChange::Migration(receipt))
+        .and_then(|catalog_path| catalog_path.ok_or(()))
         .map_err(|_| MigrationError::Internal)?;
-    let path = crate::services::catalog::generated_catalog_path(state);
     let mut result = serde_json::json!({"status":"ok","accounts":summary.accounts,"providers":summary.providers,"models":summary.models,"catalog_path":path.to_string_lossy()});
     if summary.renamed_accounts > 0 {
         result["renamed_accounts"] = summary.renamed_accounts.into();

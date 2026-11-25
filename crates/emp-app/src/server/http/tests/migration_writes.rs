@@ -404,9 +404,12 @@ fn assert_imported(fixture: &Fixture, ids: &[&str]) {
 #[test]
 fn migration_previews_match_wire_and_bind_expire_and_consume_tokens() {
     with_fixture(Fixture::new, async |fixture| {
+        let catalog_path = crate::services::catalog::generated_catalog_path(&fixture.server.state);
+        let expected_path = catalog_path.to_string_lossy();
         let body = json!({"bundle":STANDARD.encode(bundle("direct")),"password":PASSWORD});
         let direct = post(fixture, "import", body.clone(), 200).await;
         assert_eq!(direct["status"], "ok");
+        assert_eq!(direct["catalog_path"], expected_path.as_ref());
         assert_imported(fixture, &["direct"]);
         let with_token = json!({"token":null,"bundle":body["bundle"],"password":PASSWORD});
         assert_eq!(
@@ -430,10 +433,9 @@ fn migration_previews_match_wire_and_bind_expire_and_consume_tokens() {
         assert!(selected["_shadow_migration_token"] == input["token"]);
         assert_eq!(selected["api_key_set"], true);
         assert_imported(fixture, &["direct"]);
-        assert_eq!(
-            post(fixture, "import", input.clone(), 200).await["status"],
-            "ok"
-        );
+        let imported = post(fixture, "import", input.clone(), 200).await;
+        assert_eq!(imported["status"], "ok");
+        assert_eq!(imported["catalog_path"], expected_path.as_ref());
         assert_imported(fixture, &["direct", "selected"]);
         assert_eq!(
             post(fixture, "import", input, 400).await["error"]["message"],

@@ -6,6 +6,7 @@ use crate::services::{
 use emp_modules::Module;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 pub(crate) enum CommittedChange<'a> {
     Settings {
@@ -21,8 +22,11 @@ pub(crate) enum CommittedChange<'a> {
     NativeLogin,
 }
 
-pub(crate) fn after_commit(state: &ServerState, change: CommittedChange<'_>) -> Result<(), ()> {
-    match change {
+pub(crate) fn after_commit(
+    state: &ServerState,
+    change: CommittedChange<'_>,
+) -> Result<Option<PathBuf>, ()> {
+    let catalog_path = match change {
         CommittedChange::Settings {
             before,
             current,
@@ -41,40 +45,50 @@ pub(crate) fn after_commit(state: &ServerState, change: CommittedChange<'_>) -> 
             }
             receipt.check("runtime_catalog_matches_target", None);
             runtime::mark_active_pending(state, "EMP configuration changed");
+            None
         }
         CommittedChange::ContextPreference(receipt) => {
             let refreshed = receipt.step("publish_catalog", || catalog::refresh_catalog(state));
             catalog::request_refresh(state, false);
             receipt.fact("subscription_refresh", "requested");
-            refreshed?;
+            let (path, _) = refreshed?;
             receipt.check("catalog_published", Some(true));
             receipt.check("runtime_catalog_matches_target", None);
+            Some(path)
         }
-        CommittedChange::AccountSource(id) => catalog::account_source_changed(state, id),
+        CommittedChange::AccountSource(id) => {
+            catalog::account_source_changed(state, id);
+            None
+        }
         CommittedChange::Migration(receipt) => {
-            receipt.step("publish_catalog", || catalog::refresh_catalog(state))?;
+            let (path, _) = receipt.step("publish_catalog", || catalog::refresh_catalog(state))?;
             receipt.check("catalog_published", Some(true));
             receipt.check("runtime_catalog_matches_target", None);
+            Some(path)
         }
         CommittedChange::Team => {
-            catalog::refresh_catalog(state)?;
+            let (path, _) = catalog::refresh_catalog(state)?;
+            Some(path)
         }
-        CommittedChange::Module(module) => {
-            if matches!(module, Module::Aggregate | Module::Team | Module::Aero)
-                && catalog::refresh_catalog(state).is_err()
-            {
+        CommittedChange::Module(Module::Aggregate | Module::Team | Module::Aero) => {
+            if let Ok((path, _)) = catalog::refresh_catalog(state) {
+                Some(path)
+            } else {
                 catalog::request_refresh(state, false);
+                None
             }
         }
+        CommittedChange::Module(_) => None,
         CommittedChange::NativeLogin => {
             runtime::mark_active_pending(state, "Codex login changed; restart Codex Runtime");
             state
                 .backend
                 .management_events
                 .publish(management_events::Change::Integration);
+            None
         }
-    }
-    Ok(())
+    };
+    Ok(catalog_path)
 }
 
 pub(super) fn changed_account_ids(before: &Value, after: &Value) -> BTreeSet<String> {

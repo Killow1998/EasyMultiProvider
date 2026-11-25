@@ -2,6 +2,7 @@ mod arch;
 mod cfg_test;
 mod ci_profiles;
 mod comments;
+mod doc_links;
 mod imports;
 mod module_paths;
 mod modules;
@@ -32,6 +33,7 @@ const RULES: &[&str] = &[
     "comments",
     "conditional-module-path",
     "disguised-sleep",
+    "doc-links",
     "docs-prose",
     "domain-purity",
     "module-path-extension",
@@ -75,6 +77,8 @@ pub fn run(args: &[String]) -> Result {
     let (test_scopes, test_targets) = arch::check(&root, &cached_or_unignored, &mut errors)?;
     modules::check(&root, &mut errors)?;
     let referenced_profiles = check_sources(&root, &paths, &test_scopes, &mut errors)?;
+    let markdown_paths = git_paths(&root, &["ls-files", "--cached", "-z", "--", "*.md"])?;
+    doc_links::check(&root, &markdown_paths, &mut errors)?;
     ci_profiles::check_profiles(PROFILES, &test_targets, &referenced_profiles, &mut errors);
     if errors.is_empty() {
         println!("check: {} passed", RULES.join(", "));
@@ -328,6 +332,31 @@ fn contains_ident(tokens: TokenStream, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checks_relative_markdown_link_targets() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let path = "docs/guide.md".to_owned();
+        fs::create_dir(root.join("docs")).unwrap();
+        fs::write(root.join("implementation.rs"), "").unwrap();
+        fs::write(
+            root.join(&path),
+            "[file](../implementation.rs#section) [directory](.)\n\
+             [missing](../missing.rs)\n\
+             [web](https://example.com/help) [mail](mailto:help@example.com) [section](#local)\n\
+             \n```md\n[example](../example.rs)\n```\n",
+        )
+        .unwrap();
+        let mut errors = Vec::new();
+
+        doc_links::check(root, &[path], &mut errors).unwrap();
+
+        assert_eq!(
+            errors,
+            ["[doc-links] docs/guide.md:2: ../missing.rs 不存在"]
+        );
+    }
 
     #[test]
     fn skips_source_baselines_when_a_source_fails_to_parse() {

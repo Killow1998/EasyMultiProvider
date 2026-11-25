@@ -4397,6 +4397,7 @@ dependencies = [
  "emp-updater",
  "flate2",
  "proc-macro2",
+ "pulldown-cmark",
  "quote",
  "regex",
  "ring",

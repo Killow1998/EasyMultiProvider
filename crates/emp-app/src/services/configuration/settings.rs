@@ -100,7 +100,8 @@ pub(crate) fn update(
                     receipt,
                 },
             )
-            .map_err(|_| ChangeError::Unavailable)
+            .map_err(|_| ChangeError::Unavailable)?;
+            Ok(())
         },
     )
 }

@@ -282,7 +282,7 @@ credentials once, reusing those credentials for identity matching and duplicate
 detection. Missing account caches reuse that operation's native fallback.
 HTTP adapters no longer assemble catalog sources or publish configuration.
 
-[`account_catalog`](../crates/emp-app/src/services/account_catalog.rs) retains
+[`catalog/accounts.rs`](../crates/emp-app/src/services/catalog/accounts.rs) owns
 background refresh scheduling and identity-checked persistence. This is not a
 long-lived response cache: external Codex catalog changes remain visible.
 Further caching requires a complete invalidation rule for configuration,
@@ -369,13 +369,11 @@ waiting for EOF or draining the socket. Unknown fields, `partial_answer`,
 
 ### 6. Cancellation follows transport ownership
 
-Native Responses WebSocket turns use a socket-readiness loop in
-[`websocket/duplex.rs`](../crates/emp-app/src/api/websocket/duplex.rs).
-It reads both directions on the connection's existing thread, including data
-already buffered in TLS or frame decoding. It does not add a producer task,
-periodic polling worker or upstream event queue. Reads drain available bytes in
-nonblocking mode, then restore blocking mode before frame writes. Receive
-timeouts are left unchanged; readiness registrations are removed at turn end.
+Native Responses WebSocket turns in
+[`websocket/native_socket.rs`](../crates/emp-app/src/api/websocket/native_socket.rs)
+await upstream frames, downstream input and server drain in the same async turn.
+The transport retains partial frames across reads, and the turn enforces an
+upstream idle deadline.
 
 Codex's `response.interrupt` is forwarded through the active upstream connection;
 that upstream owns response-ID validation and acknowledgement. An incomplete
@@ -487,7 +485,7 @@ not depend on model discovery or the router root's imported protocol types.
 Call records retain origin and the separate downstream delivery facts in the
 existing usage database. A local write result is not a client acknowledgement.
 
-[`DisconnectMonitor`](../crates/emp-app/src/services/disconnect.rs) starts its
+[`DisconnectMonitor`](../crates/emp-app/src/server/disconnect.rs) starts its
 worker lazily and waits on interruptible socket readiness. Drop wakes and joins
 the worker without detaching it or shutting down the shared downstream socket.
 Queued bytes and the previous read timeout are preserved. A bounded peek remains
