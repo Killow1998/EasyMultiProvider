@@ -34,7 +34,7 @@ async fn start(
         .unwrap()
 }
 
-fn with_registry_server(check: impl AsyncFnOnce(&ServerHandle, &Path)) {
+pub(super) fn with_registry_server(check: impl AsyncFnOnce(&ServerHandle, &Path)) {
     let dir = fixture_dir().unwrap();
     let server = ServerHandle::start_for_test(
         [127, 0, 0, 1].into(),
@@ -84,9 +84,7 @@ async fn check_routes(server: &ServerHandle, state_dir: &Path) {
         {"type":"hook","phase":"check_access"}, {"type":"catalog"},
         {"type":"panel","id":"status","entry":"status.js","revision":"1"},
     ])).await;
-    registry
-        .publish(manifest, 1, old.connection(), port, key_len)
-        .unwrap();
+    registry.publish(manifest, 1, &old, port, key_len).unwrap();
     let declarations = registry.get("fixture-module").unwrap();
     assert!(declarations.hooks.contains(&HookPhase::CheckAccess));
     assert!(declarations.catalog);
@@ -197,7 +195,7 @@ async fn check_routes(server: &ServerHandle, state_dir: &Path) {
     ])).await;
     assert!(
         registry
-            .publish(manifest, 2, invalid.connection(), port, key_len)
+            .publish(manifest, 2, &invalid, port, key_len)
             .is_err()
     );
     invalid.stop().await.unwrap();
@@ -211,9 +209,7 @@ async fn check_routes(server: &ServerHandle, state_dir: &Path) {
         {"type":"http_route","id":"new-put","method":"PUT","path":"/items/%61","auth":"proxy"},
         {"type":"http_route","id":"new-patch","method":"PATCH","path":"/items/%61","auth":"local_proxy"},
     ])).await;
-    registry
-        .publish(manifest, 3, new.connection(), port, key_len)
-        .unwrap();
+    registry.publish(manifest, 3, &new, port, key_len).unwrap();
     assert!(matches!(
         old.connection().call("module.exit", Value::Null, budget()),
         Err(CallError::Disconnected)
@@ -272,9 +268,7 @@ fn module_routes_fit_the_authenticated_request_head_before_publication() {
         };
 
         let (old, manifest) = start(state_dir, "fixture-module", contribution("old", "/")).await;
-        registry
-            .publish(manifest, 1, old.connection(), port, key_len)
-            .unwrap();
+        registry.publish(manifest, 1, &old, port, key_len).unwrap();
         let (invalid, manifest) = start(
             state_dir,
             "fixture-module",
@@ -283,7 +277,7 @@ fn module_routes_fit_the_authenticated_request_head_before_publication() {
         .await;
         assert!(
             registry
-                .publish(manifest, 2, invalid.connection(), port, key_len)
+                .publish(manifest, 2, &invalid, port, key_len)
                 .is_err()
         );
         invalid.stop().await.unwrap();
@@ -296,9 +290,7 @@ fn module_routes_fit_the_authenticated_request_head_before_publication() {
 
         let (new, manifest) =
             start(state_dir, "fixture-module", contribution("exact", &exact)).await;
-        registry
-            .publish(manifest, 3, new.connection(), port, key_len)
-            .unwrap();
+        registry.publish(manifest, 3, &new, port, key_len).unwrap();
         assert_wire(address, &wire(&exact), false, 503).await;
         assert_eq!(
             std::mem::take(&mut *records.lock().unwrap()),
@@ -349,9 +341,7 @@ fn proxy_route_publication_allows_the_shortest_native_bearer() {
 
         let (old, manifest) =
             start(state_dir, "fixture-module", contribution("exact", &exact)).await;
-        registry
-            .publish(manifest, 1, old.connection(), port, key_len)
-            .unwrap();
+        registry.publish(manifest, 1, &old, port, key_len).unwrap();
         std::fs::write(
             state_dir.join("auth.json"),
             br#"{"tokens":{"access_token":"x"}}"#,
@@ -372,7 +362,7 @@ fn proxy_route_publication_allows_the_shortest_native_bearer() {
         .await;
         assert!(
             registry
-                .publish(manifest, 2, invalid.connection(), port, key_len)
+                .publish(manifest, 2, &invalid, port, key_len)
                 .is_err()
         );
         invalid.stop().await.unwrap();
@@ -407,7 +397,7 @@ fn module_routes_dispatch_only_to_the_named_module() {
             )
             .await;
             registry
-                .publish(manifest, 1, process.connection(), port, key_len)
+                .publish(manifest, 1, &process, port, key_len)
                 .unwrap();
             processes.push(process);
         }

@@ -115,6 +115,7 @@ impl CancellationToken {
 struct Connection {
     writer: Option<mpsc::Sender<Outgoing>>,
     closed: mpsc::Sender<io::Result<()>>,
+    on_disconnect: Option<Box<dyn FnOnce() + Send>>,
     next_id: u64,
     pending: HashMap<RequestId, PendingReply>,
     incoming: HashMap<RequestId, CancellationToken>,
@@ -162,6 +163,13 @@ impl Connection {
             pending.reply.complete(Err(CallError::Disconnected));
         }
         self.cancel_incoming();
+        self.signal_closed(result);
+    }
+
+    fn signal_closed(&mut self, result: io::Result<()>) {
+        if let Some(notify) = self.on_disconnect.take() {
+            notify();
+        }
         let _ = self.closed.send(result);
     }
 
@@ -246,6 +254,7 @@ impl Peer {
             connection: Arc::new(Mutex::new(Some(Connection {
                 writer: Some(send),
                 closed: close,
+                on_disconnect: None,
                 next_id: 1,
                 pending: HashMap::new(),
                 incoming: HashMap::new(),
@@ -385,6 +394,18 @@ impl PeerHandle {
         self.disconnect(Ok(()));
     }
 
+    pub fn on_disconnect(&self, notify: impl FnOnce() + Send + 'static) {
+        let mut state = self.connection.lock().unwrap();
+        if let Some(connection) = state
+            .as_mut()
+            .filter(|connection| connection.writer.is_some())
+        {
+            assert!(connection.on_disconnect.replace(Box::new(notify)).is_none());
+        } else {
+            notify();
+        }
+    }
+
     fn disconnect(&self, result: io::Result<()>) {
         let mut state = self.connection.lock().unwrap();
         if let Some(connection) = state.take() {
@@ -420,7 +441,7 @@ impl PeerHandle {
                         }
                         pending.sent
                     });
-                    let _ = connection.closed.send(Err(error));
+                    connection.signal_closed(Err(error));
                 }
                 break;
             }

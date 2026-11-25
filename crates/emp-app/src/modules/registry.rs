@@ -1,3 +1,4 @@
+use super::process::{DataEndpoint, ModuleProcess};
 use crate::http::{
     auth::SESSION_HEADER,
     request::{MODULE_RUNTIME_PREFIX, REQUEST_VERSION, request_head_end},
@@ -20,6 +21,7 @@ pub struct ActiveModule {
     pub id: Arc<str>,
     pub generation: u64,
     pub connection: PeerHandle,
+    pub(crate) data_endpoint: Option<DataEndpoint>,
     pub hooks: BTreeSet<HookPhase>,
     pub catalog: bool,
     pub panels: BTreeMap<String, Panel>,
@@ -50,14 +52,15 @@ impl ModuleRegistry {
         &self,
         manifest: ModuleManifest,
         generation: u64,
-        connection: PeerHandle,
+        process: &ModuleProcess,
         port: u16,
         local_proxy_key_len: usize,
     ) -> Result<(), String> {
         let mut module = ActiveModule {
             id: Arc::from(manifest.id),
             generation,
-            connection,
+            connection: process.connection(),
+            data_endpoint: process.data_endpoint.clone(),
             hooks: BTreeSet::new(),
             catalog: false,
             panels: BTreeMap::new(),

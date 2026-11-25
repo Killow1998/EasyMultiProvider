@@ -316,8 +316,10 @@ async fn drive_connection(
     http_context: Option<HttpRequestContext>,
 ) {
     let mode = control.mode;
-    let half_close =
-        matches!(mode, ServerMode::Recovery) || (http_context.is_some() && !head.account_events);
+    let raw_request = head.raw.request();
+    let module_runtime = module_runtime_target(raw_request.raw_path()).is_some();
+    let half_close = matches!(mode, ServerMode::Recovery)
+        || (http_context.is_some() && !head.account_events && !module_runtime);
     let report_socket = http_context
         .as_ref()
         .and_then(|request| request.report_socket.as_ref());
@@ -421,6 +423,9 @@ async fn drive_connection(
                 stream.delivery.await_flush(flushed, None);
             }
             if local_upgrade {
+                let _ = unbuffered_status.set(response.status().as_u16());
+            }
+            if module_runtime && response.extensions().get::<EntryWire>().is_none() {
                 let _ = unbuffered_status.set(response.status().as_u16());
             }
             let _ = encoded_reply.set(

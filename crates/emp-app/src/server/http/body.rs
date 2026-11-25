@@ -23,6 +23,8 @@ use serde_json::Value;
 use std::{future::poll_fn, pin::Pin, sync::Arc};
 use tokio::time::{Instant, timeout_at};
 
+pub(super) const MANAGEMENT_BODY_LIMIT: usize = 5 * 1024 * 1024;
+
 pub(crate) enum BodyError {
     Invalid(String),
     Timeout,
@@ -30,7 +32,7 @@ pub(crate) enum BodyError {
     Decode(ContentDecodeError),
 }
 
-fn body_size_error(limit: usize, decoded: bool) -> BodyError {
+pub(super) fn body_size_error(limit: usize, decoded: bool) -> BodyError {
     BodyError::Capacity(RequestCapacityError {
         limit,
         decoded,
@@ -82,7 +84,7 @@ impl JsonRead {
 }
 
 impl BodyError {
-    fn incomplete() -> Self {
+    pub(super) fn incomplete() -> Self {
         Self::Invalid("request body is incomplete".to_owned())
     }
 }
@@ -98,6 +100,23 @@ fn prepare_json(request: Request<'_>, limits: &Arc<RequestLimits>) -> Result<Jso
             "Content-Type must be application/json".to_owned(),
         ));
     }
+    let management = request.raw_path().starts_with("/api/");
+    let limit = if management {
+        MANAGEMENT_BODY_LIMIT
+    } else {
+        RequestLimitsConfig::default().maximum
+    };
+    let length = request_length(request, limit)?;
+    let mut prepared = JsonRead {
+        length,
+        limit,
+        budget: (!management).then(|| limits.request(TransportKind::Http)),
+    };
+    prepared.ensure(length)?;
+    Ok(prepared)
+}
+
+pub(super) fn request_length(request: Request<'_>, limit: usize) -> Result<usize, BodyError> {
     request.validate_body_framing()?;
     let raw_length = request.header("Content-Length").unwrap_or("0");
     if raw_length.starts_with('-') {
@@ -111,20 +130,7 @@ fn prepare_json(request: Request<'_>, limits: &Arc<RequestLimits>) -> Result<Jso
     let length = raw_length
         .parse::<u128>()
         .map_err(|_| BodyError::Invalid("invalid Content-Length".to_owned()))?;
-    let management = request.raw_path().starts_with("/api/");
-    let limit = if management {
-        5 * 1024 * 1024
-    } else {
-        RequestLimitsConfig::default().maximum
-    };
-    let length = usize::try_from(length).map_err(|_| body_size_error(limit, false))?;
-    let mut prepared = JsonRead {
-        length,
-        limit,
-        budget: (!management).then(|| limits.request(TransportKind::Http)),
-    };
-    prepared.ensure(length)?;
-    Ok(prepared)
+    usize::try_from(length).map_err(|_| body_size_error(limit, false))
 }
 
 fn decode_json(
@@ -274,17 +280,9 @@ async fn read_body<E: From<BodyError>>(
 ) -> Result<(), E> {
     let deadline = Instant::now() + request_body_timeout(length);
     while bytes.len() < length || !body.is_end_stream() {
-        let until = deadline.min(Instant::now() + REQUEST_READ_TIMEOUT);
-        let frame = timeout_at(until, poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)))
-            .await
-            .map_err(|_| BodyError::Timeout)?;
-        if Instant::now() >= deadline {
-            return Err(BodyError::Timeout.into());
-        }
-        let Some(frame) = frame else {
+        let Some(frame) = read_frame(&mut body, deadline).await? else {
             break;
         };
-        let frame = frame.map_err(|_| BodyError::incomplete())?;
         if let Ok(chunk) = frame.into_data() {
             append(bytes, &chunk)?;
         }
@@ -293,6 +291,20 @@ async fn read_body<E: From<BodyError>>(
         return Err(BodyError::incomplete().into());
     }
     Ok(())
+}
+
+pub(super) async fn read_frame(
+    body: &mut axum::body::Body,
+    deadline: Instant,
+) -> Result<Option<hyper::body::Frame<axum::body::Bytes>>, BodyError> {
+    let until = deadline.min(Instant::now() + REQUEST_READ_TIMEOUT);
+    let frame = timeout_at(until, poll_fn(|cx| Pin::new(&mut *body).poll_frame(cx)))
+        .await
+        .map_err(|_| BodyError::Timeout)?;
+    if Instant::now() >= deadline {
+        return Err(BodyError::Timeout);
+    }
+    frame.transpose().map_err(|_| BodyError::incomplete())
 }
 
 #[cfg(test)]

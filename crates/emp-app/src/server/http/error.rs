@@ -166,14 +166,21 @@ pub(crate) fn response_head(status: u16, content_type: &str) -> axum::http::resp
         .status(StatusCode::from_u16(status).expect("EMP HTTP status"))
         .header("content-type", content_type)
         .header("connection", "close");
+    insert_security_headers(builder.headers_mut().expect("response headers"));
+    builder
+}
+
+pub(super) fn insert_security_headers(headers: &mut axum::http::HeaderMap) {
     for line in std::str::from_utf8(SECURITY_HEADERS)
         .expect("security headers")
         .lines()
     {
         let (name, value) = line.split_once(": ").expect("security header");
-        builder = builder.header(name, value);
+        headers.insert(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).expect("security header name"),
+            axum::http::HeaderValue::from_static(value),
+        );
     }
-    builder
 }
 
 pub(super) fn no_response() -> Response {

@@ -3,6 +3,7 @@ use crate::{
     process_tree::ProcessTree,
 };
 use emp_modules::{
+    handshake::{Initialize, Initialized},
     manifest::{ApiRequirement, HOST_API_V3, ManifestError, ModuleManifest},
     peer::{CallError, Handlers, Peer, Side},
 };
@@ -24,6 +25,7 @@ use std::{
 };
 use tokio::{net::TcpListener, sync::oneshot, time::timeout};
 
+mod data;
 mod hooks;
 mod registry;
 
@@ -96,7 +98,7 @@ fn module_fixture() {
         let mut input = BufReader::new(io::stdin());
         let initialize = read_request(&mut input, "module.initialize");
         if mode != "escape-timeout" {
-            write_response(&mut output, &initialize, MANIFEST);
+            write_initialize(&mut output, &initialize, MANIFEST);
         }
         if mode == "escape-final" {
             let request = read_request(&mut input, "module.exit");
@@ -110,7 +112,7 @@ fn module_fixture() {
         let mut input = BufReader::new(io::stdin());
         let initialize = read_request(&mut input, "module.initialize");
         let manifest = std::env::var("EMP_TEST_API3_REGISTRY_MANIFEST").unwrap();
-        write_response(&mut output, &initialize, &manifest);
+        write_initialize(&mut output, &initialize, &manifest);
         read_request(&mut input, "module.exit");
         return;
     }
@@ -118,16 +120,20 @@ fn module_fixture() {
         hooks::child(output);
         return;
     }
+    if mode == "data" {
+        data::child(output);
+        return;
+    }
     if matches!(mode.as_str(), "exit" | "exit-tree" | "duplicate-manifest") {
         let mut input = BufReader::new(io::stdin());
         let initialize = read_request(&mut input, "module.initialize");
         if mode == "duplicate-manifest" {
             let duplicate = MANIFEST.replace(r#""major":3"#, r#""major":2,"major":3"#);
-            write_response(&mut output, &initialize, &duplicate);
+            write_initialize(&mut output, &initialize, &duplicate);
             let _confirmation = sideband();
             return;
         }
-        write_response(&mut output, &initialize, MANIFEST);
+        write_initialize(&mut output, &initialize, MANIFEST);
         if mode == "exit-tree" {
             let request = read_request(&mut input, "module.descendant");
             let descendant = Command::new("sleep")
@@ -162,7 +168,11 @@ fn module_fixture() {
         if mode == "incompatible" {
             manifest.host_api.min_minor = 1;
         }
-        Ok(serde_json::to_value(manifest).unwrap())
+        Ok(serde_json::to_value(Initialized {
+            manifest,
+            data_port: None,
+        })
+        .unwrap())
     });
     Peer::connect(Side::Module, BufReader::new(io::stdin()), output, handlers)
         .unwrap()
@@ -171,6 +181,10 @@ fn module_fixture() {
 }
 
 fn read_request(input: &mut impl BufRead, method: &str) -> Value {
+    read_control_request(input, method)["id"].clone()
+}
+
+fn read_control_request(input: &mut impl BufRead, method: &str) -> Value {
     let mut header = String::new();
     input.read_line(&mut header).unwrap();
     let length = header
@@ -185,7 +199,11 @@ fn read_request(input: &mut impl BufRead, method: &str) -> Value {
     assert_eq!(header, "\r\n");
     let request: Value = serde_json::from_reader(input.take(length)).unwrap();
     assert_eq!(request["method"], method);
-    request["id"].clone()
+    request
+}
+
+fn write_initialize(output: &mut impl Write, id: &Value, manifest: &str) {
+    write_response(output, id, &format!(r#"{{"manifest":{manifest}}}"#));
 }
 
 fn write_response(output: &mut impl Write, id: &Value, result: &str) {
@@ -214,10 +232,13 @@ async fn connect_passes_the_host_api_and_state_dir_and_accepts_a_valid_manifest(
             .await
             .unwrap();
     let params = report.recv_timeout(budget()).unwrap();
-    assert_eq!(
-        params[1],
-        json!({"host_api": HOST_API_V3, "state_dir": state_dir.path()})
-    );
+    let initialize: Initialize = serde_json::from_value(params[1].clone()).unwrap();
+    assert_eq!(initialize.host_api, HOST_API_V3);
+    assert_eq!(initialize.state_dir, state_dir.path());
+    assert_eq!(initialize.callback_port, None);
+    assert_eq!(initialize.module_bearer.len(), 64);
+    assert_eq!(initialize.core_bearer.len(), 64);
+    assert!(initialize.module_bearer != initialize.core_bearer);
     assert_eq!(manifest.id, "fixture-module");
     process.stop().await.unwrap();
 }

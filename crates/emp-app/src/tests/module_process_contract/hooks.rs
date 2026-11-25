@@ -62,7 +62,9 @@ pub(super) fn child(output: File) {
             }
         });
     }
-    handlers.register("module.initialize", move |_, _, _| Ok(manifest.clone()));
+    handlers.register("module.initialize", move |_, _, _| {
+        Ok(json!({"manifest": manifest}))
+    });
     handlers.register("module.release", move |_, _, _| {
         release.send(()).unwrap();
         Ok(Value::Null)
@@ -136,7 +138,7 @@ impl Fixture {
         .await
         .unwrap();
         self.registry
-            .publish(manifest, generation, process.connection(), 0, 0)
+            .publish(manifest, generation, &process, 0, 0)
             .unwrap();
         process
     }

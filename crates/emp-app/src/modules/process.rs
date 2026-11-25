@@ -1,19 +1,21 @@
-use crate::process_tree::ProcessTree;
+use crate::{process_tree::ProcessTree, util::random_hex};
+use axum::http::HeaderValue;
 use emp_modules::{
-    manifest::{HOST_API_V3, HostApi, ManifestError, ModuleManifest},
+    handshake::{INITIALIZE, Initialize, Initialized},
+    manifest::{HOST_API_V3, ManifestError, ModuleManifest},
     peer::{CallError, Handlers, Peer, PeerHandle, Side},
 };
-use serde::Serialize;
 use std::{
     fmt, io,
     io::BufReader,
+    num::NonZeroU16,
     path::Path,
     process::{Command, ExitStatus, Stdio},
     sync::{Arc, mpsc},
     thread,
     time::Duration,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 #[cfg(unix)]
 use crate::process_tree::pipes::{Reader, Writer, interruptible};
@@ -22,15 +24,23 @@ use std::io::{PipeReader as Reader, PipeWriter as Writer};
 
 pub struct ModuleProcess {
     connection: PeerHandle,
+    pub(crate) data_endpoint: Option<DataEndpoint>,
     tree: Arc<ProcessTree>,
     exit: oneshot::Receiver<io::Result<ExitStatus>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct DataEndpoint {
+    pub(crate) port: NonZeroU16,
+    pub(crate) authorization: HeaderValue,
+    pub(crate) disconnected: watch::Receiver<bool>,
 }
 
 #[derive(Debug)]
 pub enum StartError {
     Io(io::Error),
     Handshake(CallError),
-    InvalidManifest(emp_modules::manifest::ManifestDecodeError),
+    InvalidManifest(serde_json::Error),
     Manifest(Vec<ManifestError>),
 }
 
@@ -72,17 +82,20 @@ impl ModuleProcess {
         connect: impl FnOnce(Side, BufReader<Reader>, Writer, Handlers) -> io::Result<Peer>,
         process_exited: impl FnOnce() + Send + 'static,
     ) -> Result<(Self, ModuleManifest), StartError> {
-        #[derive(Serialize)]
-        struct Initialize<'a> {
-            host_api: HostApi,
-            state_dir: &'a Path,
-        }
-
-        let params = serde_json::to_value(Initialize {
+        let initialize = Initialize {
             host_api: HOST_API_V3,
-            state_dir,
-        })
-        .map_err(|error| StartError::Io(io::Error::new(io::ErrorKind::InvalidInput, error)))?;
+            state_dir: state_dir.to_path_buf(),
+            callback_port: None,
+            module_bearer: random_hex(32)
+                .map_err(|error| StartError::Io(io::Error::other(error)))?,
+            core_bearer: random_hex(32).map_err(|error| StartError::Io(io::Error::other(error)))?,
+        };
+        let mut authorization =
+            HeaderValue::from_str(&format!("Bearer {}", initialize.module_bearer))
+                .expect("hex bearer is a valid header value");
+        authorization.set_sensitive(true);
+        let params = serde_json::to_value(initialize)
+            .map_err(|error| StartError::Io(io::Error::new(io::ErrorKind::InvalidInput, error)))?;
         let (module_stdin, writer) = io::pipe().map_err(StartError::Io)?;
         let (reader, module_stdout) = io::pipe().map_err(StartError::Io)?;
         #[cfg(unix)]
@@ -125,40 +138,58 @@ impl ModuleProcess {
             }
         };
         let connection = peer.handle();
+        let (signal, disconnected) = watch::channel(false);
+        let on_disconnect = signal.clone();
+        connection.on_disconnect(move || {
+            on_disconnect.send_replace(true);
+        });
         let tree = Arc::new(tree);
         let process_tree = tree.clone();
         let (finished, exit) = oneshot::channel();
         monitor
             .send(Box::new(move || {
                 let status = process_tree.wait(&mut child);
+                signal.send_replace(true);
                 #[cfg(unix)]
                 drop(close_pipes);
                 process_exited();
                 let _ = finished.send(peer.join().and(status));
             }))
             .expect("module monitor is waiting for the child");
-        let process = Self {
+        let mut process = Self {
             connection,
+            data_endpoint: None,
             tree,
             exit,
         };
         let connection = process.connection();
         let result = tokio::task::spawn_blocking(move || {
             let value = connection
-                .call("module.initialize", params, timeout)
+                .call(INITIALIZE, params, timeout)
                 .map_err(StartError::Handshake)?;
-            let manifest =
-                ModuleManifest::from_value(value).map_err(StartError::InvalidManifest)?;
-            manifest
+            let initialized: Initialized =
+                serde_json::from_value(value).map_err(StartError::InvalidManifest)?;
+            initialized
+                .manifest
                 .validate(HOST_API_V3)
                 .map_err(StartError::Manifest)?;
-            Ok(manifest)
+            Ok(initialized)
         })
         .await
         .map_err(|error| StartError::Io(io::Error::other(error)))
         .and_then(|result| result);
         match result {
-            Ok(manifest) => Ok((process, manifest)),
+            Ok(Initialized {
+                manifest,
+                data_port,
+            }) => {
+                process.data_endpoint = data_port.map(|port| DataEndpoint {
+                    port,
+                    authorization,
+                    disconnected,
+                });
+                Ok((process, manifest))
+            }
             Err(error) => {
                 let _ = process.stop().await;
                 Err(error)

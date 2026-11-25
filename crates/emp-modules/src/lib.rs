@@ -1,3 +1,4 @@
+pub mod handshake;
 pub mod legacy_v2;
 pub mod manifest;
 pub mod peer;
