@@ -1,11 +1,11 @@
 use crate::support::modules::{BuiltModule, Fault, IDS, ModuleRelease};
 #[cfg(target_os = "linux")]
-use crate::support::modules::{ModuleEmp, eventually};
+use crate::support::modules::{ModuleEmp, poll_until};
 use crate::support::{
     Emp, NATIVE_TOKEN, Response, Upstream, UpstreamRequest, Workspace, http, write_file,
 };
 #[cfg(target_os = "linux")]
-use emp_test_support::{Deadline, Observation};
+use emp_test_support::Deadline;
 #[cfg(target_os = "linux")]
 use emp_updater::worker::UPDATE_READY_WAIT;
 use serde_json::{Value, json};
@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::Path,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -557,20 +558,25 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
         release.configure_command(&mut command);
         let expected_receipt = json!({"version":version,"nonce":nonce});
         let receipt_context = "candidate Core did not acknowledge the update";
-        let observer = Observation::spawn(move |probe| {
-            let Some(request) = probe.next_request() else {
-                return;
-            };
-            let observed_at = eventually(request.deadline(), receipt_context, || {
-                let receipt: Value = serde_json::from_slice(&fs::read(&ready).ok()?).ok()?;
-                (receipt == expected_receipt).then(Instant::now)
+        let emp = thread::scope(|scope| {
+            let (emp, receipt) = ModuleEmp::spawn_with(&workspace, command, || {
+                let started_at = Instant::now();
+                scope.spawn(move || {
+                    let deadline = Deadline::starting_at(started_at, UPDATE_READY_WAIT.into());
+                    let observed_at = poll_until(&deadline, receipt_context, || {
+                        let receipt: Value =
+                            serde_json::from_slice(&fs::read(&ready).ok()?).ok()?;
+                        (receipt == expected_receipt).then(Instant::now)
+                    });
+                    assert!(
+                        observed_at.duration_since(started_at) < UPDATE_READY_WAIT.get(),
+                        "{receipt_context}"
+                    );
+                })
             });
-            request.complete_at(observed_at, ());
+            receipt.join().expect(receipt_context);
+            emp
         });
-        let (emp, receipt) = ModuleEmp::spawn_with(&workspace, command, || {
-            observer.begin(Deadline::after(UPDATE_READY_WAIT.into()), receipt_context)
-        });
-        receipt.wait().expect(receipt_context);
 
         let registry_bytes = fs::read(&registry_path).unwrap();
         let registry: Value = serde_json::from_slice(&registry_bytes).unwrap();
@@ -615,9 +621,8 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
         assert_eq!(registry, expected_registry, "settings={settings:?}");
         let team_status = emp.status("team");
         let team_error = match team_start {
-            TeamStart::Previous => Some("module_update_rolled_back"),
             TeamStart::MissingPrevious => Some("incompatible_module"),
-            TeamStart::Absent | TeamStart::Selected => None,
+            TeamStart::Absent | TeamStart::Selected | TeamStart::Previous => None,
         };
         assert_eq!(
             team_status["enabled"],
@@ -664,7 +669,7 @@ fn m01_k2_bundled_update_restores_configured_or_enabled_modules() {
             assert_eq!(enabled["enabled"], true, "{enabled}");
             assert_eq!(enabled["active"], true, "{enabled}");
             assert_eq!(enabled["active_revision"], team.digest, "{enabled}");
-            assert_eq!(enabled["error"], "module_update_rolled_back", "{enabled}");
+            assert!(enabled["error"].is_null(), "{enabled}");
             assert_eq!(enabled["restart_required"], false, "{enabled}");
             assert_eq!(fs::read(&registry_path).unwrap(), registry_bytes);
         }

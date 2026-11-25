@@ -451,15 +451,20 @@ impl ModuleEmp {
     }
 }
 
-pub fn eventually<T>(deadline: &Deadline, what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
+pub fn eventually<T>(deadline: &Deadline, what: &str, probe: impl FnMut() -> Option<T>) -> T {
+    let value = poll_until(deadline, what, probe);
+    deadline
+        .accept(value, what)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+pub fn poll_until<T>(deadline: &Deadline, what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
     loop {
         deadline
             .accept((), what)
             .unwrap_or_else(|error| panic!("{error}"));
         if let Some(value) = probe() {
-            return deadline
-                .accept(value, what)
-                .unwrap_or_else(|error| panic!("{error}"));
+            return value;
         }
         #[expect(
             clippy::disallowed_methods,

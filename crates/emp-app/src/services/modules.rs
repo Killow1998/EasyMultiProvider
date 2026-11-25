@@ -32,6 +32,7 @@ pub(crate) struct Modules {
 struct Runtime {
     worker: Option<Arc<ActiveWorker>>,
     error: Option<&'static str>,
+    rolled_back_from: Option<String>,
     draining: Option<Arc<AtomicBool>>,
 }
 
@@ -159,7 +160,8 @@ impl Modules {
             let [selected, previous] = install.start_candidates();
             let require_selected = update && (!bundled_transition || selected.is_some());
             let candidates = [selected, previous.filter(|_| !require_selected)];
-            let (worker, error) = match modules.start_installed(module, candidates, None) {
+            let (worker, rolled_back_from) = match modules.start_installed(module, candidates, None)
+            {
                 Ok(started) => started,
                 Err(error) if require_selected => return Err(error.into()),
                 Err(error) => {
@@ -177,7 +179,7 @@ impl Modules {
             }
             *modules.runtime[&module].lock().expect("module runtime") = Runtime {
                 worker: Some(worker),
-                error,
+                rolled_back_from,
                 ..Runtime::default()
             };
         }
@@ -221,7 +223,7 @@ impl Modules {
         module: Module,
         [selected, previous]: [Option<&str>; 2],
         current: Option<&Arc<ActiveWorker>>,
-    ) -> Result<(Arc<ActiveWorker>, Option<&'static str>), &'static str> {
+    ) -> Result<(Arc<ActiveWorker>, Option<String>), &'static str> {
         let start = |digest: &str| match current {
             Some(worker) if worker.artifact.digest == digest => Ok(Arc::clone(worker)),
             _ => self.start(module, digest),
@@ -231,7 +233,7 @@ impl Modules {
             Err(error) => error,
         };
         match previous.and_then(|digest| start(digest).ok()) {
-            Some(worker) => Ok((worker, Some(MODULE_UPDATE_ROLLED_BACK))),
+            Some(worker) => Ok((worker, selected.map(str::to_owned))),
             None => Err(error),
         }
     }
@@ -299,21 +301,21 @@ impl Modules {
                 let mut runtime = self.runtime[&module].lock().expect("module runtime");
                 let running = runtime.active();
                 let artifact = running.as_ref().map(|worker| &worker.artifact);
-                let error = self.registry_error.or(runtime.error);
                 let installed_version = current.and_then(|install| {
                     artifact
                         .map(|artifact| artifact.version.as_str())
                         .or_else(|| install.version())
                 });
-                let preferred = current.and_then(|install| {
-                    let [selected, _] = install.start_candidates();
-                    selected
-                });
-                let restart_required = enabled
-                    && error != Some(MODULE_UPDATE_ROLLED_BACK)
-                    && preferred
-                        .zip(artifact)
-                        .is_some_and(|(digest, artifact)| digest != artifact.digest);
+                let pending = current
+                    .and_then(Install::selected_digest)
+                    .filter(|digest| artifact.is_some_and(|artifact| *digest != artifact.digest));
+                let rolled_back = pending
+                    .is_some_and(|digest| runtime.rolled_back_from.as_deref() == Some(digest));
+                let restart_required = enabled && pending.is_some() && !rolled_back;
+                let error = self
+                    .registry_error
+                    .or(runtime.error)
+                    .or(rolled_back.then_some(MODULE_UPDATE_ROLLED_BACK));
                 json!({
                     "id":module,
                     "ui":ui::entry(module),
@@ -438,17 +440,18 @@ impl Modules {
             .map_err(|_| "module_unavailable")?
             .error
             .filter(|error| *error == "invalid_gateway_clients");
-        let (next, error) =
+        let (next, rolled_back_from) =
             if let Some(install) = updated.get(&module).filter(|install| install.enabled) {
                 if let Some(error) = blocked {
                     return Err(error.into());
                 }
                 let [selected, previous] = install.start_candidates();
                 let candidates = [selected, previous.filter(|_| action == Action::Enable)];
-                let (worker, error) = self.start_installed(module, candidates, current.as_ref())?;
-                (Some(worker), error)
+                let (worker, rolled_back_from) =
+                    self.start_installed(module, candidates, current.as_ref())?;
+                (Some(worker), rolled_back_from)
             } else {
-                (None, blocked)
+                (None, None)
             };
         {
             let mut saved = self.saved.lock().map_err(|_| "module_unavailable")?;
@@ -481,7 +484,8 @@ impl Modules {
                 current.take();
             }
             runtime.worker = next;
-            runtime.error = error;
+            runtime.error = blocked;
+            runtime.rolled_back_from = rolled_back_from;
             *saved = updated;
         }
         drop(current);
@@ -537,5 +541,88 @@ impl Modules {
             .lock()
             .map_err(|_| UpdateError("module_update_failed"))? = updated;
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::{Action, Installs, Module, Modules, Packages, Startup, UpdateManager, json};
+    use emp_updater::release::UpdateEndpoints;
+    use sha2::{Digest, Sha256};
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+
+    fn team_artifact(root: &Path, version: &str) -> String {
+        let hello = json!({
+            "module": "team",
+            "version": version,
+            "module_version": version,
+            "protocol": emp_modules::PROTOCOL,
+            "host_api": emp_modules::HOST_API,
+        });
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' '{hello}'\nwhile read -r request; do\n\
+             printf '%s\\n' '{{\"value\":\"export default {{}}\",\"error\":null}}'\ndone\n"
+        );
+        let digest = format!("{:x}", Sha256::digest(script.as_bytes()));
+        let path = root.join(format!("team-{digest}"));
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        digest
+    }
+
+    #[test]
+    fn team_rollback_status_follows_the_current_selection() {
+        let fixture = emp_test_support::fixture_dir().unwrap();
+        let root = fixture.path();
+        let previous = team_artifact(root, "0.10.1");
+        let saved: Installs = serde_json::from_value(json!({
+            "team": {
+                "enabled": false,
+                "versions": {},
+                "artifact": {"digest": "0".repeat(64), "version": "0.10.2"},
+                "previous": {"digest": previous, "version": "0.10.1"}
+            }
+        }))
+        .unwrap();
+        Packages::new(root.to_owned()).save(&saved).unwrap();
+        let modules = Modules::open(root.to_owned(), Startup::Normal, &json!({}), None).unwrap();
+        let updater = UpdateManager::with_endpoints(
+            root.join("EMP"),
+            Vec::new(),
+            crate::VERSION,
+            UpdateEndpoints::default(),
+            || Ok(()),
+        )
+        .unwrap();
+        modules
+            .change(Module::Team, Action::Enable, None, &updater, || Ok(()))
+            .unwrap();
+        let team_status = || {
+            modules
+                .status()
+                .into_iter()
+                .find(|row| row["id"] == "team")
+                .unwrap()
+        };
+        let rolled_back = team_status();
+        assert_eq!(rolled_back["active_revision"], previous, "{rolled_back}");
+        assert_eq!(
+            rolled_back["error"], "module_update_rolled_back",
+            "{rolled_back}"
+        );
+        assert_eq!(rolled_back["restart_required"], false, "{rolled_back}");
+
+        let next_digest = team_artifact(root, "0.10.3");
+        let next = modules.start(Module::Team, &next_digest).unwrap();
+        let mut updated = modules.saved.lock().unwrap().clone();
+        updated.get_mut(&Module::Team).unwrap().artifact = Some(next.artifact.clone());
+        drop(next);
+        modules.packages.save(&updated).unwrap();
+        *modules.saved.lock().unwrap() = updated;
+
+        let pending = team_status();
+        assert_eq!(pending["active_revision"], previous, "{pending}");
+        assert_eq!(pending["restart_required"], true, "{pending}");
+        assert!(pending["error"].is_null(), "{pending}");
     }
 }
