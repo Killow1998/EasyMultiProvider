@@ -116,7 +116,6 @@ pub(super) fn check(
     dependencies(&metadata, TRANSITIONAL, errors)?;
     let mut test_scopes = test_scope::Index::default();
     let mut test_targets = TestTargets::new();
-    let mut checked_sources = BTreeSet::new();
     for package in workspace_packages(&metadata)? {
         let name = package["name"].as_str().ok_or("[arch] package 缺少 name")?;
         let package_tests = test_targets.entry(name.to_owned()).or_default();
@@ -140,14 +139,7 @@ pub(super) fn check(
             };
             Some((file, kind))
         });
-        module_paths::check(
-            root,
-            directory,
-            files,
-            &mut checked_sources,
-            &mut test_scopes,
-            errors,
-        )?;
+        module_paths::check(root, directory, files, &mut test_scopes, errors)?;
     }
     Ok((test_scopes, test_targets))
 }

@@ -38,7 +38,7 @@ pub(super) fn check(
             .find(|&&(name, _)| name == group)
             .map_or(0, |&(_, count)| count);
         check_baseline(
-            "test-thread-observations",
+            "[test-thread-observations]",
             group,
             &locations,
             allowed,

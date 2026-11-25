@@ -98,10 +98,17 @@ pub(crate) fn run(mut command: Command, deadline: Deadline) -> Output {
 }
 
 fn diagnostic_file(root: &Path) -> io::Result<(File, File)> {
-    let output = NamedTempFile::new_in(root)?;
-    let reader = File::open(output.path())?;
+    let output = NamedTempFile::new_in(root).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("create isolated test output: {error}"),
+        )
+    })?;
+    let reader = File::open(output.path())
+        .map_err(|error| io::Error::new(error.kind(), format!("open reader: {error}")))?;
     let (writer, path) = output.into_parts();
-    path.close()?;
+    path.close()
+        .map_err(|error| io::Error::new(error.kind(), format!("unlink name: {error}")))?;
     Ok((reader, writer))
 }
 

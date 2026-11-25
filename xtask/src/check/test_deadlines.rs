@@ -60,16 +60,16 @@ pub(super) fn check(
         }
     }
     for (group, (bare, sockets)) in counts {
-        for (rule, locations, baseline, label, fix) in [
+        for (prefix, locations, baseline, label, fix) in [
             (
-                "test-deadlines",
+                "[test-deadlines]",
                 bare,
                 ALLOWED,
                 "裸写期限",
                 "使用 test_timeout",
             ),
             (
-                "test-socket-timeouts",
+                "[test-socket-timeouts]",
                 sockets,
                 SOCKET_TIMEOUTS,
                 "直接设置 socket 超时",
@@ -80,14 +80,14 @@ pub(super) fn check(
                 .iter()
                 .find(|&&(name, _)| name == group)
                 .map_or(0, |&(_, count)| count);
-            check_baseline(rule, group, &locations, allowed, label, fix, errors);
+            check_baseline(prefix, group, &locations, allowed, label, fix, errors);
         }
     }
     Ok(())
 }
 
 pub(super) fn check_baseline(
-    rule: &str,
+    prefix: &str,
     group: &str,
     locations: &[String],
     allowed: usize,
@@ -97,10 +97,10 @@ pub(super) fn check_baseline(
 ) {
     let actual = locations.len();
     if actual > allowed {
-        errors.push(format!("[{rule}] {group}: 当前 {actual} 处{label}，基线 {allowed}；{fix}，计数棘轮只降不升\n{}", locations.join("\n")));
+        errors.push(format!("{prefix} {group}: 当前 {actual} 处{label}，基线 {allowed}；{fix}，计数棘轮只降不升\n{}", locations.join("\n")));
     } else if actual < allowed {
         errors.push(format!(
-            "[{rule}] {group}: 当前 {actual} 处{label}，基线 {allowed}；请在同一提交将基线调低至 {actual}"
+            "{prefix} {group}: 当前 {actual} 处{label}，基线 {allowed}；请在同一提交将基线调低至 {actual}"
         ));
     }
 }
@@ -775,7 +775,7 @@ mod tests {
     fn baseline_requires_an_exact_match() {
         let mut errors = Vec::new();
         check_baseline(
-            "test-socket-timeouts",
+            "[test-socket-timeouts]",
             "sample",
             &[],
             1,
@@ -789,7 +789,7 @@ mod tests {
         errors.clear();
         let locations = ["tests/wire.rs:42".to_owned()];
         check_baseline(
-            "test-socket-timeouts",
+            "[test-socket-timeouts]",
             "sample",
             &locations,
             1,
@@ -799,7 +799,7 @@ mod tests {
         );
         assert!(errors.is_empty());
         check_baseline(
-            "test-socket-timeouts",
+            "[test-socket-timeouts]",
             "sample",
             &locations,
             0,

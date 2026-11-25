@@ -24,6 +24,35 @@ use std::process::Command;
 use syn::ext::IdentExt as _;
 use syn::{Expr, Macro, Token, parse::Parser as _, punctuated::Punctuated};
 
+const RULES: &[&str] = &[
+    "arch",
+    "cfg-test",
+    "ci-profiles",
+    "comments",
+    "conditional-module-path",
+    "disguised-sleep",
+    "docs-prose",
+    "domain-purity",
+    "module-path-extension",
+    "module-paths",
+    "module-version",
+    "msvc-only",
+    "no-mod-in-macro",
+    "no-python-on-main",
+    "no-source-include",
+    "production-sockets",
+    "rust-extension-case",
+    "shared-test-module",
+    "single-http-driver",
+    "test-boundary",
+    "test-deadlines",
+    "test-drop",
+    "test-fixture-root",
+    "test-socket-timeouts",
+    "test-thread-observations",
+    "workflow-cargo-test",
+];
+
 pub fn run(args: &[String]) -> Result {
     if !args.is_empty() {
         return Err("usage: cargo xtask check".into());
@@ -45,45 +74,66 @@ pub fn run(args: &[String]) -> Result {
     test_deadlines::check(&root, &paths, &test_scopes, &mut errors)?;
     test_fixture_root::check(&root, &paths, &test_scopes, &mut errors)?;
     test_thread_observations::check(&root, &paths, &test_scopes, &mut errors)?;
-    let mut referenced_profiles = BTreeSet::new();
-    for path in paths {
-        if !root.join(&path).is_file() {
-            continue;
-        }
-        let bytes = fs::read(root.join(&path)).map_err(|error| format!("{path}: {error}"))?;
-        let scopes = test_scopes.get(&path);
-        if let Ok(source) = std::str::from_utf8(&bytes) {
-            single_http_driver(&path, source, &mut errors);
-            production_sockets::check(&path, source, scopes, &mut errors)?;
-            test_drop::check(&path, source, scopes, &mut errors)?;
-            shared_test_module(&path, source, &mut errors)?;
-        }
-        test_boundary(&path, &bytes, scopes.integration, &mut errors);
-        if prose::includes(&path) {
-            prose::check(&path, &read(&root, &path)?, &mut errors);
-        } else if path.starts_with(".github/workflows/")
-            && (path.ends_with(".yml") || path.ends_with(".yaml"))
-        {
-            let contents = read(&root, &path)?;
-            workflows::check(&path, &contents, &mut errors);
-            ci_profiles::check_references(
-                &path,
-                &contents,
-                PROFILES,
-                &mut referenced_profiles,
-                &mut errors,
-            );
-        }
-    }
+    let referenced_profiles = check_files(&root, &paths, &test_scopes, &mut errors)?;
     ci_profiles::check_profiles(PROFILES, &test_targets, &referenced_profiles, &mut errors);
     if errors.is_empty() {
-        println!(
-            "check: arch, module-paths, conditional-module-path, module-path-extension, no-source-include, no-mod-in-macro, module-version, test-boundary, docs-prose, no-python-on-main, workflow-cargo-test, ci-profiles, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
-        );
+        println!("check: {} passed", RULES.join(", "));
         Ok(())
     } else {
         Err(errors.join("\n"))
     }
+}
+
+fn check_files(
+    root: &Path,
+    paths: &[String],
+    test_scopes: &test_scope::Index,
+    errors: &mut Vec<String>,
+) -> Result<BTreeSet<&'static str>> {
+    let mut referenced_profiles = BTreeSet::new();
+    for path in paths {
+        let file = root.join(path);
+        if !file.is_file() {
+            continue;
+        }
+        let bytes = fs::read(file).map_err(|error| format!("{path}: {error}"))?;
+        let source = std::str::from_utf8(&bytes);
+        match path.rsplit_once('.') {
+            Some((_, "rs")) => module_paths::check_source(
+                path,
+                source.map_err(|error| format!("{path}: {error}"))?,
+                errors,
+            )?,
+            Some((_, extension)) if extension.eq_ignore_ascii_case("rs") => errors.push(format!(
+                "[rust-extension-case] {path}: Rust 源文件后缀必须是小写 .rs"
+            )),
+            _ => {}
+        }
+        let scopes = test_scopes.get(path);
+        if let Ok(source) = source {
+            single_http_driver(path, source, errors);
+            production_sockets::check(path, source, scopes, errors)?;
+            test_drop::check(path, source, scopes, errors)?;
+            shared_test_module(path, source, errors)?;
+        }
+        test_boundary(path, &bytes, scopes.integration, errors);
+        if prose::includes(path) {
+            prose::check(path, &read(root, path)?, errors);
+        } else if path.starts_with(".github/workflows/")
+            && (path.ends_with(".yml") || path.ends_with(".yaml"))
+        {
+            let contents = read(root, path)?;
+            workflows::check(path, &contents, errors);
+            ci_profiles::check_references(
+                path,
+                &contents,
+                PROFILES,
+                &mut referenced_profiles,
+                errors,
+            );
+        }
+    }
+    Ok(referenced_profiles)
 }
 
 fn single_http_driver(path: &str, source: &str, errors: &mut Vec<String>) {
@@ -242,6 +292,49 @@ fn contains_ident(tokens: TokenStream, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_uppercase_rust_extensions() {
+        let directory = emp_test_support::fixture_dir().unwrap();
+        let root = directory.path();
+        let paths = ["helpers.RS", "lower/helpers.rs", "notes.rst"].map(str::to_owned);
+        fs::create_dir(root.join("lower")).unwrap();
+        for path in &paths {
+            fs::write(root.join(path), "").unwrap();
+        }
+        let mut errors = Vec::new();
+        check_files(root, &paths, &test_scope::Index::default(), &mut errors).unwrap();
+        assert_eq!(
+            errors,
+            ["[rust-extension-case] helpers.RS: Rust 源文件后缀必须是小写 .rs"]
+        );
+    }
+
+    #[test]
+    fn rule_table_matches_diagnostic_prefixes() {
+        let prefix = regex::Regex::new(r#""\[([a-z][a-z0-9-]*)\](?: |")"#).unwrap();
+        let source = project_root().join("xtask/src");
+        let mut paths = vec![source.join("check.rs"), source.join("check")];
+        let mut rules = BTreeSet::new();
+        while let Some(path) = paths.pop() {
+            if path.is_dir() {
+                paths.extend(
+                    fs::read_dir(path)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path()),
+                );
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let contents = fs::read_to_string(path).unwrap();
+                for capture in prefix.captures_iter(&contents) {
+                    let name = &capture[1];
+                    if !matches!(name, "features" | "lints" | "package") {
+                        rules.insert(name.to_owned());
+                    }
+                }
+            }
+        }
+        assert_eq!(rules.iter().map(String::as_str).collect::<Vec<_>>(), RULES);
+    }
 
     #[test]
     fn rejects_test_attributes_only_in_shared_integration_modules() {
