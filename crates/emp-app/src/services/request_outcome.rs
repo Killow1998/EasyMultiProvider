@@ -470,7 +470,6 @@ impl<'a> RequestOutcome<'a> {
             self.event["account_id"] = json!(identity.account_id);
         }
         crate::services::memory_routing::observe(self.state, &self.event);
-        crate::services::observation::record_completion(self.state, &self.event);
         self.persist_call();
         self.publish(true);
         self.finalized = true;

@@ -3,7 +3,6 @@ pub(crate) mod continuation;
 pub(crate) mod diagnostics;
 pub(crate) mod operation;
 use crate::app::ServerState;
-use crate::util::system_now;
 use emp_domain::ResolvedRoute;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -94,9 +93,4 @@ fn record_cancellation(
         crate::services::activity::ActivityIdentity::from_route(route).as_ref(),
         true,
     );
-}
-
-pub(crate) fn record_completion(state: &ServerState, event: &Value) {
-    state.backend.usage.ledger.record(event, system_now());
-    state.backend.diagnostics.record(event);
 }

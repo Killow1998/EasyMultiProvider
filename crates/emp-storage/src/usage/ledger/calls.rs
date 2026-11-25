@@ -40,13 +40,23 @@ pub(super) fn restore_memory_usage(
         if event["route_model"].is_null() {
             event["route_model"] = event["model_id"].clone();
         }
-        let mut values =
-            ledger.values(&event, record["finished_at"].as_f64().ok_or(UsageError)?)?;
-        values[0] = sql(&event["usage_event_id"]);
-        insert(&transaction, &values, &event)?;
+        let observed = record["finished_at"].as_f64().ok_or(UsageError)?;
+        let usage = UsageEntry {
+            id: event["usage_event_id"].as_str().ok_or(UsageError)?.into(),
+            quote: ledger.usage_quote(&event)?,
+        };
+        insert_usage(&transaction, &event, observed, &usage)?;
     }
     transaction.commit()?;
     Ok(())
+}
+
+pub(super) fn request_id(event: &Value, started: f64, finished: f64) -> Result<&str> {
+    let id = text(event, "request_id", "");
+    if id.is_empty() || id.len() > 256 || !started.is_finite() || !finished.is_finite() {
+        return Err(UsageError);
+    }
+    Ok(id)
 }
 
 fn allowlisted_facts(event: &Value) -> Value {
@@ -246,15 +256,27 @@ impl UsageLedger {
     }
 
     pub fn record_call(&self, event: &Value, started: f64, finished: f64) -> Result<()> {
-        let id = text(event, "request_id", "");
-        if id.is_empty() || id.len() > 256 || !started.is_finite() || !finished.is_finite() {
-            return Err(UsageError);
-        }
+        let id = request_id(event, started, finished)?;
+        let usage = self.prepare_usage(event).ok();
+        let _guard = self.lock.lock().map_err(|_| UsageError)?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        Self::insert_call(&transaction, event, id, started, finished, usage.as_ref())?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub(super) fn insert_call(
+        transaction: &rusqlite::Transaction<'_>,
+        event: &Value,
+        id: &str,
+        started: f64,
+        finished: f64,
+        usage: Option<&UsageEntry>,
+    ) -> Result<()> {
         let mut record = allowlisted_facts(event);
-        if let Ok(values) = self.values(event, finished)
-            && let Some(SqlValue::Text(id)) = values.first()
-        {
-            record["usage_event_id"] = json!(id);
+        if let Some(usage) = usage {
+            record["usage_event_id"] = json!(usage.id);
         }
         let state = crate::usage::call_state(event);
         record["state"] = json!(state);
@@ -262,9 +284,6 @@ impl UsageLedger {
         record["finished_at"] = json!(finished);
         let session = text(&record, "thread_id", text(&record, "session_id", "")).to_owned();
         record["session_id"] = json!(session);
-        let _guard = self.lock.lock().map_err(|_| UsageError)?;
-        let mut connection = self.connect()?;
-        let transaction = connection.transaction()?;
         transaction.execute("INSERT INTO call_records
             (request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts)
             VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id,operation) DO UPDATE SET
@@ -282,18 +301,17 @@ impl UsageLedger {
                 params![id, prior, text(event, "route", "responses")],
             )?;
         }
-        if let (Some(scope), Some(share), Some(event_id)) = (
+        if let (Some(scope), Some(share), Some(usage)) = (
             event["team_usage"]["scope"].as_str(),
             event["team_usage"]["share"].as_str(),
-            record["usage_event_id"].as_str(),
+            usage,
         ) && event["attempts"]
             .as_u64()
             .is_some_and(|attempts| attempts > 0)
             && !emp_domain::MODEL_TEST_OPERATIONS.contains(&text(event, "route", ""))
         {
-            self.record_team_event(&transaction, scope, share, event_id, event, finished)?;
+            Self::insert_team_event(transaction, scope, share, usage, event, finished)?;
         }
-        transaction.commit()?;
         Ok(())
     }
 

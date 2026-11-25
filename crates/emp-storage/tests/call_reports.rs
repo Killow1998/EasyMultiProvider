@@ -81,6 +81,108 @@ fn completed_history_recovery_links_its_rejection_without_double_counting_usage(
 }
 
 #[test]
+fn team_completion_commits_usage_receipt_and_pending_together() {
+    let root = emp_test_support::fixture_dir().unwrap();
+    let path = root.path().join("usage.sqlite3");
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    let model = "team-shared-fixture-model";
+    prices.replace(
+        json!({(model): {
+            "input_cost_per_token":"0.000001", "output_cost_per_token":"0.000002"
+        }}),
+        1.0,
+    );
+    let ledger = UsageLedger::new(path.clone(), prices);
+    let scope = "workspace-member-device";
+    let account = "team-shared-account";
+    let response = "resp_m03_offline";
+    let event = json!({
+        "request_id":"offline-completion", "route":"responses", "transport":"sse",
+        "provider_id":account, "account_id":account, "model_id":format!("{account}/{model}"),
+        "usage_category":"subscription", "usage_owner":"account:shared-identity",
+        "upstream_model":model, "response_model":model,
+        "session_id":response, "usage_response_id":response,
+        "success":true, "status":200, "response_status":"completed", "attempts":1,
+        "input_tokens":7, "output_tokens":3, "team_usage":{"scope":scope,"share":"shared-account"},
+        "continuation_recovery_from":"rejected"
+    });
+    ledger
+        .record_call(
+            &json!({"request_id":"rejected","route":"responses","error_code":"previous_response_not_found"}),
+            90.0,
+            91.0,
+        )
+        .unwrap();
+    let db = rusqlite::Connection::open(path).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER reject_pending BEFORE INSERT ON team_outbox
+         BEGIN SELECT RAISE(ABORT, 'fixture rejected pending'); END;",
+    )
+    .unwrap();
+
+    assert!(
+        ledger
+            .record_completion(&event, 100.0, 98.0, 100.0)
+            .is_err()
+    );
+    let after_failure: (i64, i64, i64, i64, Option<String>) = db
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM usage_events), (SELECT COUNT(*) FROM usage_sessions),
+                    (SELECT COUNT(*) FROM call_records WHERE request_id='offline-completion'),
+                    (SELECT COUNT(*) FROM team_outbox), json_extract(facts,'$.recovery_request_id')
+             FROM call_records WHERE request_id='rejected' AND operation='responses'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(after_failure, (0, 0, 0, 0, None));
+    let report = ledger.query(0.0, 1000.0, "all", 1000.0, None).unwrap();
+    assert_eq!(report["write_error"], true);
+
+    db.execute_batch("DROP TRIGGER reject_pending").unwrap();
+    ledger
+        .record_completion(&event, 100.0, 98.0, 100.0)
+        .unwrap();
+    let (id, owner, input, output, cost): (String, String, i64, i64, i64) = db
+        .query_row(
+            "SELECT u.id,u.owner,u.input_tokens,u.output_tokens,u.cost_nanos
+             FROM usage_events u
+             JOIN call_records c ON u.id=json_extract(c.facts,'$.usage_event_id')
+             JOIN usage_sessions s ON u.id=s.event_id AND s.session_id=c.session_id
+             JOIN call_records prior ON json_extract(prior.facts,'$.recovery_request_id')=c.request_id
+             WHERE c.request_id='offline-completion' AND c.operation='responses'
+               AND c.state='completed' AND c.account_id=?1 AND s.session_id=?2
+               AND prior.request_id='rejected' AND prior.operation='responses'",
+            [account, response],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (owner.as_str(), input, output, cost),
+        ("account:shared-identity", 7, 3, 13_000)
+    );
+    assert_eq!(
+        ledger.team_events(scope).unwrap(),
+        [(
+            id.clone(),
+            json!({
+                "id":id, "share":"shared-account", "model":model, "finished_at":100,
+                "input_tokens":7, "cached_input_tokens":null, "output_tokens":3,
+                "estimated_usd_nanos":cost, "actual_usd_nanos":null,
+            })
+        )]
+    );
+}
+
+#[test]
 fn report_progress_counts_filtered_work_and_stops_when_the_reader_leaves() {
     let root = emp_test_support::fixture_dir().unwrap();
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));

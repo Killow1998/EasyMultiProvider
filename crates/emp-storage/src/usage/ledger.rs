@@ -66,6 +66,12 @@ pub struct UsageLedger {
     initialized: AtomicBool,
     write_error: AtomicBool,
 }
+
+struct UsageEntry {
+    id: String,
+    quote: Value,
+}
+
 const CREATE:&str="CREATE TABLE IF NOT EXISTS usage_events (
     id TEXT PRIMARY KEY, observed_at REAL NOT NULL, category TEXT NOT NULL, owner TEXT NOT NULL, model TEXT NOT NULL,
     service_tier TEXT NOT NULL, operation TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, cached_input_tokens INTEGER,
@@ -111,6 +117,26 @@ fn text<'a>(event: &'a Value, key: &str, default: &'a str) -> &'a str {
 fn sha(value: &Value) -> String {
     format!("{:x}", Sha256::digest(python_json(value, true).as_bytes()))
 }
+
+fn records_usage(event: &Value) -> bool {
+    let operation = event["route"].as_str().unwrap_or("");
+    (matches!(
+        operation,
+        "responses"
+            | "compact"
+            | "image_generation"
+            | "image_edit"
+            | "agent_task_recovery"
+            | "memory_extraction"
+            | "memory_consolidation"
+            | "decisions"
+    ) || emp_domain::MODEL_TEST_OPERATIONS.contains(&operation))
+        && event["usage_category"]
+            .as_str()
+            .is_some_and(|value| CATEGORIES.contains(&value))
+        && event["recovery_mode"] != "native_http_fallback"
+}
+
 impl UsageLedger {
     pub fn new(path: PathBuf, prices: Arc<PriceCatalog>) -> Self {
         Self {
@@ -176,7 +202,7 @@ impl UsageLedger {
         self.initialized.store(true, Ordering::Release);
         Ok(connection)
     }
-    fn values(&self, event: &Value, observed: f64) -> Result<Vec<SqlValue>> {
+    fn prepare_usage(&self, event: &Value) -> Result<UsageEntry> {
         let response = event
             .get("usage_response_id")
             .filter(|value| value.as_str().is_some_and(|s| !s.is_empty()));
@@ -195,87 +221,70 @@ impl UsageLedger {
             getrandom::getrandom(&mut bytes).map_err(|_| UsageError)?;
             bytes.iter().map(|byte| format!("{byte:02x}")).collect()
         };
+        Ok(UsageEntry {
+            id,
+            quote: self.usage_quote(event)?,
+        })
+    }
+    fn usage_quote(&self, event: &Value) -> Result<Value> {
         let mut quote = self.prices.quote(event).map_err(|_| UsageError)?;
         if event["usage_issue"].as_str().is_some_and(|s| !s.is_empty()) {
             quote["cost_nanos"] = Value::Null;
             quote["price_issue"] = event["usage_issue"].clone();
             quote["rates"] = json!({});
         }
-        let mut values = vec![
-            SqlValue::Text(id),
-            SqlValue::Real(observed),
-            SqlValue::Text(category.into()),
-            SqlValue::Text(owner.into()),
-            SqlValue::Text(model.into()),
-            SqlValue::Text(text(event, "service_tier", "default").into()),
-            SqlValue::Text(operation.into()),
-        ];
-        for field in TOKEN_FIELDS {
-            values.push(
-                token_count(event.get(field))
-                    .map_or(SqlValue::Null, |value| SqlValue::Integer(value as i64)),
-            );
-        }
-        for field in [
-            "cost_nanos",
-            "price_issue",
-            "price_key",
-            "price_fetched_at",
-            "price_revision",
-        ] {
-            values.push(sql(&quote[field]));
-        }
-        values.push(SqlValue::Text(python_json(&quote["rates"], true)));
-        let turn = text(event, "usage_turn", "");
-        let route_model = text(event, "route_model", "");
-        let counts = ["input_tokens", "output_tokens", "cached_input_tokens"]
-            .map(|key| token_count(event.get(key)));
-        let match_key =
-            if !turn.is_empty() && !route_model.is_empty() && counts.iter().all(Option::is_some) {
-                sha(&json!([turn, route_model, counts]))
-            } else {
-                String::new()
-            };
-        values.extend([
-            SqlValue::Text(text(event, "origin", "realtime").into()),
-            SqlValue::Text(turn.into()),
-            SqlValue::Text(route_model.into()),
-            SqlValue::Text(match_key),
-        ]);
-        Ok(values)
+        Ok(quote)
     }
     pub fn record(&self, event: &Value, observed: f64) {
-        let operation = event["route"].as_str().unwrap_or("");
-        if !(matches!(
-            operation,
-            "responses"
-                | "compact"
-                | "image_generation"
-                | "image_edit"
-                | "agent_task_recovery"
-                | "memory_extraction"
-                | "memory_consolidation"
-                | "decisions"
-        ) || emp_domain::MODEL_TEST_OPERATIONS.contains(&operation))
-            || !event["usage_category"]
-                .as_str()
-                .is_some_and(|value| CATEGORIES.contains(&value))
-            || event["recovery_mode"] == "native_http_fallback"
-        {
+        if !records_usage(event) {
             return;
         }
         let result = (|| -> Result<()> {
-            let values = self.values(event, observed)?;
+            let usage = self.prepare_usage(event)?;
             let _guard = self.lock.lock().map_err(|_| UsageError)?;
             let mut connection = self.connect()?;
             let transaction = connection.transaction()?;
-            insert(&transaction, &values, event)?;
+            insert_usage(&transaction, event, observed, &usage)?;
             transaction.commit()?;
             Ok(())
         })();
         if result.is_err() {
             self.write_error.store(true, Ordering::Release);
         }
+    }
+    pub fn record_completion(
+        &self,
+        event: &Value,
+        observed: f64,
+        started: f64,
+        finished: f64,
+    ) -> Result<()> {
+        let result = (|| -> Result<()> {
+            let request_id = calls::request_id(event, started, finished)?;
+            let billable = records_usage(event);
+            let usage = self.prepare_usage(event);
+            let usage = if billable { Some(usage?) } else { usage.ok() };
+            let _guard = self.lock.lock().map_err(|_| UsageError)?;
+            let mut connection = self.connect()?;
+            let transaction = connection.transaction()?;
+            if let Some(usage) = usage.as_ref().filter(|_| billable) {
+                insert_usage(&transaction, event, observed, usage)?;
+            }
+            Self::insert_call(
+                &transaction,
+                event,
+                request_id,
+                started,
+                finished,
+                usage.as_ref(),
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.write_error.store(true, Ordering::Release);
+        }
+        result
     }
     pub fn history_checkpoint(&self, path: &str) -> Result<Option<Value>> {
         use rusqlite::OptionalExtension;
@@ -297,15 +306,15 @@ impl UsageLedger {
         path: &str,
         checkpoint: &Value,
     ) -> Result<()> {
-        let values = events
+        let usage = events
             .iter()
-            .map(|(event, stamp)| self.values(event, *stamp))
+            .map(|(event, _)| self.prepare_usage(event))
             .collect::<Result<Vec<_>>>()?;
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let mut connection = self.connect()?;
         let transaction = connection.transaction()?;
-        for (values, (event, _)) in values.iter().zip(events) {
-            insert(&transaction, values, event)?;
+        for (usage, (event, observed)) in usage.iter().zip(events) {
+            insert_usage(&transaction, event, *observed, usage)?;
         }
         transaction.execute(
             "INSERT OR REPLACE INTO usage_files VALUES (?,?)",
@@ -367,22 +376,65 @@ impl UsageLedger {
         Ok(())
     }
 }
-fn insert(connection: &Connection, values: &[SqlValue], event: &Value) -> Result<()> {
-    connection.execute(
+fn insert_usage(
+    transaction: &rusqlite::Transaction<'_>,
+    event: &Value,
+    observed: f64,
+    usage: &UsageEntry,
+) -> Result<()> {
+    let mut values = vec![
+        SqlValue::Text(usage.id.clone()),
+        SqlValue::Real(observed),
+        SqlValue::Text(text(event, "usage_category", "").into()),
+        SqlValue::Text(text(event, "usage_owner", "").into()),
+        SqlValue::Text(text(event, "upstream_model", "").into()),
+        SqlValue::Text(text(event, "service_tier", "default").into()),
+        SqlValue::Text(text(event, "route", "").into()),
+    ];
+    for field in TOKEN_FIELDS {
+        values.push(
+            token_count(event.get(field))
+                .map_or(SqlValue::Null, |value| SqlValue::Integer(value as i64)),
+        );
+    }
+    for field in [
+        "cost_nanos",
+        "price_issue",
+        "price_key",
+        "price_fetched_at",
+        "price_revision",
+    ] {
+        values.push(sql(&usage.quote[field]));
+    }
+    values.push(SqlValue::Text(python_json(&usage.quote["rates"], true)));
+    let turn = text(event, "usage_turn", "");
+    let route_model = text(event, "route_model", "");
+    let counts = ["input_tokens", "output_tokens", "cached_input_tokens"]
+        .map(|key| token_count(event.get(key)));
+    let match_key =
+        if !turn.is_empty() && !route_model.is_empty() && counts.iter().all(Option::is_some) {
+            sha(&json!([turn, route_model, counts]))
+        } else {
+            String::new()
+        };
+    values.extend([
+        SqlValue::Text(text(event, "origin", "realtime").into()),
+        SqlValue::Text(turn.into()),
+        SqlValue::Text(route_model.into()),
+        SqlValue::Text(match_key),
+    ]);
+    transaction.execute(
         &format!(
             "INSERT OR IGNORE INTO usage_events VALUES ({})",
             vec!["?"; values.len()].join(",")
         ),
         params_from_iter(values),
     )?;
-    if let Some(SqlValue::Text(id)) = values.first() {
-        sessions::remember(
-            connection,
-            id,
-            text(event, "thread_id", text(event, "session_id", "")),
-        )?;
-    }
-    Ok(())
+    sessions::remember(
+        transaction,
+        &usage.id,
+        text(event, "thread_id", text(event, "session_id", "")),
+    )
 }
 fn rows(connection: &Connection, query: &str, parameters: &[SqlValue]) -> Result<Vec<Value>> {
     let mut statement = connection.prepare(query)?;

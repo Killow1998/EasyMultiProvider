@@ -6,27 +6,20 @@ fn report_model(model: &str) -> &str {
 }
 
 impl UsageLedger {
-    pub(super) fn record_team_event(
-        &self,
-        connection: &Connection,
+    pub(super) fn insert_team_event(
+        transaction: &rusqlite::Transaction<'_>,
         scope: &str,
         share: &str,
-        id: &str,
+        usage: &UsageEntry,
         event: &Value,
         finished: f64,
     ) -> Result<()> {
-        let quote = event["usage_issue"]
-            .as_str()
-            .filter(|issue| !issue.is_empty())
-            .is_none()
-            .then(|| self.prices.quote(event).ok())
+        let estimate = usage.quote["price_issue"]
+            .is_null()
+            .then(|| usage.quote["cost_nanos"].as_i64())
             .flatten();
-        let estimate = quote
-            .as_ref()
-            .filter(|quote| quote["price_issue"].is_null())
-            .and_then(|quote| quote["cost_nanos"].as_i64());
         let payload = json!({
-            "id":id, "share":share,
+            "id":usage.id, "share":share,
             "model":report_model(text(event,"response_model",text(event,"upstream_model",""))),
             "finished_at":finished.trunc() as i64,
             "input_tokens":token_count(event.get("input_tokens")),
@@ -35,9 +28,9 @@ impl UsageLedger {
             "estimated_usd_nanos":estimate,
             "actual_usd_nanos":null,
         });
-        connection.execute(
+        transaction.execute(
             "INSERT INTO team_outbox VALUES (?,?,?) ON CONFLICT(scope,event_id) DO NOTHING",
-            params![scope, id, payload.to_string()],
+            params![scope, usage.id, payload.to_string()],
         )?;
         Ok(())
     }
