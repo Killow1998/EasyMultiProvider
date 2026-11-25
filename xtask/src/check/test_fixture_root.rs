@@ -320,7 +320,7 @@ fn fixture() {
     NamedTempFile::with_prefix("case-");
     NamedTempFile::with_suffix(".json");
     emp_test_support::fixture_dir();
-    let root = emp_test_support::fixture_root();
+    let root = emp_test_support::fixture_root().expect("fixture root");
     tempfile::Builder::new().prefix("case-").tempdir_in(&root);
     TempDir::with_prefix_in("case-", &root);
     TempDir::with_suffix_in("-case", &root);

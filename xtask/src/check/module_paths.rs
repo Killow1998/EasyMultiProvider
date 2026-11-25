@@ -1,12 +1,82 @@
 use super::{
-    Path, Result, fs,
+    Path, Result, cfg_test, fs,
     test_scope::{Index, SourceKind},
 };
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::{
     collections::BTreeSet,
     path::{Component, PathBuf},
 };
-use syn::{Expr, Lit, LitStr, Meta, ext::IdentExt, punctuated::Punctuated, visit::Visit};
+use syn::{
+    Expr, Lit, Meta,
+    ext::IdentExt,
+    spanned::Spanned,
+    visit::{self, Visit},
+};
+
+pub(super) fn check_conditional(path: &str, source: &str, errors: &mut Vec<String>) -> Result {
+    if !path.ends_with(".rs") || !source.contains("cfg_attr") || !source.contains("path") {
+        return Ok(());
+    }
+    let file = syn::parse_file(source).map_err(|error| format!("{path}: {error}"))?;
+    ConditionalPaths { path, errors }.visit_file(&file);
+    Ok(())
+}
+
+struct ConditionalPaths<'a> {
+    path: &'a str,
+    errors: &'a mut Vec<String>,
+}
+
+impl ConditionalPaths<'_> {
+    fn check(&mut self, meta: &Meta, line: usize) {
+        if let Meta::List(list) = meta
+            && list
+                .path
+                .get_ident()
+                .is_some_and(|name| name.unraw() == "cfg_attr")
+            && cfg_attr_sets_path(list.tokens.clone())
+        {
+            self.errors.push(format!(
+                "[conditional-module-path] {}:{line}: 禁止通过 cfg_attr 设置模块的 path；请用 #[cfg(...)] 分别声明两个 mod，或把差异放到同一文件内的 cfg 块中",
+                self.path
+            ));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ConditionalPaths<'_> {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        for attr in &item.attrs {
+            self.check(&attr.meta, attr.span().start().line);
+        }
+        visit::visit_item_mod(self, item);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        cfg_test::visit_macro_attributes(invocation.tokens.clone(), &mut |meta, line| {
+            self.check(meta, line);
+        });
+    }
+}
+
+fn cfg_attr_sets_path(tokens: TokenStream) -> bool {
+    let tokens: Vec<_> = tokens.into_iter().collect();
+    tokens
+        .split(|token| matches!(token, TokenTree::Punct(punct) if punct.as_char() == ','))
+        .skip(1)
+        .any(|attr| match attr {
+            [TokenTree::Ident(name), TokenTree::Punct(eq), ..] => {
+                name.unraw() == "path" && eq.as_char() == '='
+            }
+            [TokenTree::Ident(name), TokenTree::Group(group)] => {
+                name.unraw() == "cfg_attr"
+                    && group.delimiter() == Delimiter::Parenthesis
+                    && cfg_attr_sets_path(group.stream())
+            }
+            _ => false,
+        })
+}
 
 pub(super) fn check<'a>(
     root: &Path,
@@ -89,19 +159,20 @@ struct ModulePaths<'a, 'source> {
 impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
         let kind = self.kind.in_test(&item.attrs);
-        let mut explicit = Vec::new();
-        for attr in &item.attrs {
-            path_attributes(&attr.meta, [Some(true); 2], &mut explicit);
-        }
-        let mut default_without_test = true;
-        let mut default_with_test = true;
-        for PathAttribute {
-            path,
-            active: [without_test, with_test],
-        } in explicit
-        {
-            default_without_test &= without_test != Some(true);
-            default_with_test &= with_test != Some(true);
+        let explicit = item.attrs.iter().filter_map(|attr| {
+            if let Meta::NameValue(attr) = &attr.meta
+                && attr.path.is_ident("path")
+                && let Expr::Lit(value) = &attr.value
+                && let Lit::Str(path) = &value.lit
+            {
+                Some(path)
+            } else {
+                None
+            }
+        });
+        let mut has_explicit_path = false;
+        for path in explicit {
+            has_explicit_path = true;
             let value = path.value();
             let portable = value.replace('\\', "/");
             let rooted = portable.starts_with('/')
@@ -131,9 +202,7 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
                     path.span().start().line,
                     value
                 ));
-            } else if let Some(kind) =
-                path_scope(kind, without_test != Some(false), with_test != Some(false))
-            {
+            } else {
                 for target in targets {
                     if let Some((_, items)) = &item.content {
                         self.visit_inline(&target, items, kind);
@@ -144,9 +213,9 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
             }
         }
 
-        let Some(kind) = path_scope(kind, default_without_test, default_with_test) else {
+        if has_explicit_path {
             return;
-        };
+        }
         let mut directory = self.directory.to_owned();
         if let Some(module) = &self.module {
             directory.push(module);
@@ -175,89 +244,6 @@ impl ModulePaths<'_, '_> {
         for item in items {
             visitor.visit_item(item);
         }
-    }
-}
-
-fn path_scope(kind: SourceKind, without_test: bool, with_test: bool) -> Option<SourceKind> {
-    if without_test {
-        Some(kind)
-    } else {
-        with_test.then(|| kind.max(SourceKind::Fixture))
-    }
-}
-
-struct PathAttribute {
-    path: LitStr,
-    active: [Option<bool>; 2],
-}
-
-fn path_attributes(meta: &Meta, active: [Option<bool>; 2], paths: &mut Vec<PathAttribute>) {
-    match meta {
-        Meta::NameValue(attr) if attr.path.is_ident("path") => {
-            if let Expr::Lit(value) = &attr.value
-                && let Lit::Str(path) = &value.lit
-            {
-                paths.push(PathAttribute {
-                    path: path.clone(),
-                    active,
-                });
-            }
-        }
-        Meta::List(attr) if attr.path.is_ident("cfg_attr") => {
-            if let Ok(parts) =
-                attr.parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
-                && let Some(condition) = parts.first()
-            {
-                let [without_test, with_test] = active;
-                let active = [
-                    cfg_and(without_test, cfg_value(condition, false)),
-                    cfg_and(with_test, cfg_value(condition, true)),
-                ];
-                for part in parts.iter().skip(1) {
-                    path_attributes(part, active, paths);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn cfg_and(left: Option<bool>, right: Option<bool>) -> Option<bool> {
-    match (left, right) {
-        (Some(false), _) | (_, Some(false)) => Some(false),
-        (Some(true), Some(true)) => Some(true),
-        _ => None,
-    }
-}
-
-fn cfg_value(meta: &Meta, test: bool) -> Option<bool> {
-    match meta {
-        Meta::Path(path) if path.is_ident("test") => Some(test),
-        Meta::List(list) => {
-            let parts = list
-                .parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
-                .ok()?;
-            if list.path.is_ident("not") && parts.len() == 1 {
-                return cfg_value(parts.first()?, test).map(|value| !value);
-            }
-            let identity = if list.path.is_ident("all") {
-                true
-            } else if list.path.is_ident("any") {
-                false
-            } else {
-                return None;
-            };
-            let mut known = true;
-            for part in parts {
-                match cfg_value(&part, test) {
-                    Some(value) if value != identity => return Some(value),
-                    None => known = false,
-                    _ => {}
-                }
-            }
-            known.then_some(identity)
-        }
-        _ => None,
     }
 }
 
@@ -295,8 +281,8 @@ mod tests {
             r#"
 #[path = "../shared.rs"] mod shared;
 #[path = "../../other.rs"] mod outside;
-#[cfg_attr(windows, path = "../../missing.rs")] mod windows_only;
-#[cfg_attr(windows, path = "missing.rs")] mod local_windows_only;
+#[cfg(windows)] #[path = "../../missing.rs"] mod windows_only;
+#[cfg(windows)] #[path = "missing.rs"] mod local_windows_only;
 mod local;
 "#,
         )

@@ -50,6 +50,7 @@ pub fn run(args: &[String]) -> Result {
         let scopes = test_scopes.get(&path);
         if let Ok(source) = std::str::from_utf8(&bytes) {
             single_http_driver(&path, source, &mut errors);
+            module_paths::check_conditional(&path, source, &mut errors)?;
             production_sockets::check(&path, source, scopes, &mut errors)?;
             test_drop::check(&path, source, scopes, &mut errors)?;
             shared_test_module(&path, source, &mut errors)?;
@@ -66,7 +67,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, workflow-contexts, workflow-test-targets, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
+            "check: arch, module-paths, conditional-module-path, module-version, test-boundary, docs-prose, no-python-on-main, workflow-contexts, workflow-test-targets, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, production-sockets, test-deadlines, test-socket-timeouts, test-fixture-root, test-thread-observations, test-drop, shared-test-module passed"
         );
         Ok(())
     } else {
@@ -189,6 +190,40 @@ fn shared_test_module(path: &str, source: &str, errors: &mut Vec<String>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_conditional_module_paths() {
+        let source = r#"
+#[cfg_attr(all(not(test), unix), path = "unix.rs")]
+#[cfg_attr(all(not(test), not(unix)), path = "other.rs")]
+mod backend;
+#[cfg_attr(feature = "test-support", allow(dead_code), path = "fixture.rs")]
+mod transport;
+#[cfg(test)]
+mod fixtures {
+    #[cfg_attr(unix, cfg_attr(test, path = "platform_tests.rs"))]
+    mod platform;
+    macro_rules! declare {
+        ($predicate:meta, $attribute:meta, $file:literal) => {
+            #[cfg_attr($predicate, $attribute, path = $file)]
+            pub(crate) mod generated;
+        };
+    }
+}
+#[cfg(unix)] #[path = "native.rs"] mod native;
+#[cfg(not(unix))] #[path = "portable.rs"] mod native;
+#[cfg_attr(test, allow(dead_code))] mod support;
+"#;
+        let mut errors = Vec::new();
+        module_paths::check_conditional("lib.rs", source, &mut errors).unwrap();
+        assert_eq!(errors.len(), 5, "{errors:?}");
+        for (error, line) in errors.iter().zip([2, 3, 5, 9, 13]) {
+            assert!(
+                error.starts_with(&format!("[conditional-module-path] lib.rs:{line}:")),
+                "{error}"
+            );
+        }
+    }
 
     #[test]
     fn rejects_test_attributes_only_in_shared_integration_modules() {

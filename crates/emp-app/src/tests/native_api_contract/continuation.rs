@@ -19,24 +19,29 @@ fn large_websocket_upload_expires_while_the_peer_keeps_reading() {
     let stop = AtomicBool::new(false);
     let payload = json!({"input": "x".repeat(14 * 1024 * 1024)}).to_string();
     let io_budget = test_timeout(Duration::from_secs(5));
-    let peer_deadline = Deadline::after(io_budget);
+    let accept_deadline = Deadline::after(io_budget);
     thread::scope(|scope| {
-        let peer = scope.spawn(|| {
-            let stream =
-                super::interrupt::complete_upgrade(accept_before(&listener, &peer_deadline));
-            let mut input = peer_deadline.io(stream);
-            let mut reads = 0;
-            while !stop.load(Ordering::Acquire) {
-                match input.read(&mut [0; 8192]) {
-                    Ok(0) => break,
-                    Ok(_) => reads += 1,
-                    Err(error) if error.kind() == ErrorKind::TimedOut => break,
-                    Err(error) => panic!("read upload: {error}"),
-                }
-                #[expect(clippy::disallowed_methods, reason = "模拟对端持续慢读")]
-                thread::sleep(test_timeout(Duration::from_millis(10)).duration());
-            }
-            reads
+        let stop = &stop;
+        let peer = Observation::with_worker(|probe| {
+            scope.spawn(move || {
+                let stream =
+                    super::interrupt::complete_upgrade(accept_before(&listener, &accept_deadline));
+                probe.observe(|deadline| {
+                    let mut input = deadline.io(stream);
+                    let mut reads = 0;
+                    while !stop.load(Ordering::Acquire) {
+                        match input.read(&mut [0; 8192]) {
+                            Ok(0) => break,
+                            Ok(_) => reads += 1,
+                            Err(error) if error.kind() == ErrorKind::TimedOut => break,
+                            Err(error) => panic!("read upload: {error}"),
+                        }
+                        #[expect(clippy::disallowed_methods, reason = "模拟对端持续慢读")]
+                        thread::sleep(test_timeout(Duration::from_millis(10)).duration());
+                    }
+                    reads
+                });
+            })
         });
         let mut client = ClientWebSocket::connect(
             &format!("ws://{address}/v1/responses"),
@@ -47,6 +52,10 @@ fn large_websocket_upload_expires_while_the_peer_keeps_reading() {
         let start = Instant::now();
         let deadline = Deadline::starting_at(start, test_timeout(Duration::from_secs(1)));
         let finish_by = Deadline::starting_at(start, test_timeout(Duration::from_secs(3)));
+        let reads = peer.begin(
+            Deadline::starting_at(start, io_budget),
+            "slow peer reading WebSocket upload",
+        );
         let result = client.send_text_before(&payload, &deadline);
         stop.store(true, Ordering::Release);
         finish_by
@@ -58,7 +67,7 @@ fn large_websocket_upload_expires_while_the_peer_keeps_reading() {
             client.poll_receive_text().unwrap(),
             emp_test_support::websocket::WebSocketPoll::Closed { code: None }
         );
-        assert!(peer.join().unwrap() > 1, "peer did not keep reading");
+        assert!(reads.wait().unwrap() > 1, "peer did not keep reading");
     });
 }
 
