@@ -669,8 +669,8 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
     };
     import_account_state(None, &server.state, &body("upstream-demo")).expect("import demo");
     // Legacy rows exist, but neither adoption nor deletion can reach them.
-    let history_path = root.join("state/quota_history.sqlite3");
-    std::fs::write(&history_path, b"not a sqlite database").expect("break quota history");
+    let history_path = server.state.backend.quota.test_history_path();
+    std::fs::write(history_path, b"not a sqlite database").expect("break quota history");
 
     assert!(delete_account_state(None, &server.state, "demo").is_err());
     assert!(import_account_state(None, &server.state, &body("someone-else")).is_err());

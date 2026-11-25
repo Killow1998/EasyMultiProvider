@@ -1,3 +1,4 @@
+use super::QuotaState;
 use crate::lifecycle::ServerHandle;
 use crate::services::accounts::{quota_refresh_lock, replacing_account_credentials};
 use emp_test_support::{Deadline, test_timeout};
@@ -6,8 +7,15 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
+
+impl QuotaState {
+    pub(crate) fn test_history_path(&self) -> &Path {
+        self.history.path()
+    }
+}
 
 #[test]
 fn replacement_quota_refresh_waits_in_migration_lock_order() {

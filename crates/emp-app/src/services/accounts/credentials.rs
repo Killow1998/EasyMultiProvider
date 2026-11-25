@@ -55,6 +55,7 @@ impl AccountState {
 
     pub(crate) fn test_retain_pending_rotation(&self, auth_file: &str, auth: &Value) {
         self.retain_pending_rotation(auth_file, auth);
+        assert_eq!(self.test_pending_rotation(auth_file).as_ref(), Some(auth));
     }
 }
 
