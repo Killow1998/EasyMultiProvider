@@ -176,7 +176,43 @@ impl Event {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-type EventGate = Arc<Mutex<Option<(&'static str, Box<dyn FnOnce() + Send>)>>>;
+mod event_gate {
+    use std::sync::{Arc, Mutex};
+
+    type Armed = Option<(&'static str, Box<dyn FnOnce() + Send>)>;
+
+    /// Pauses the writer just before it writes the named event.
+    #[derive(Clone, Default)]
+    pub(super) struct EventGate(Arc<Mutex<Armed>>);
+
+    impl EventGate {
+        pub(super) fn arm(&self, name: &'static str, gate: Box<dyn FnOnce() + Send>) {
+            assert!(self.0.lock().unwrap().replace((name, gate)).is_none());
+        }
+
+        pub(super) fn before_write(&self, name: &str) {
+            let gate = self.0.lock().unwrap().take_if(|(armed, _)| *armed == name);
+            if let Some((_, wait)) = gate {
+                wait();
+            }
+        }
+    }
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+mod event_gate {
+    #[derive(Clone, Default)]
+    pub(super) struct EventGate {}
+
+    const _: () = assert!(size_of::<EventGate>() == 0);
+
+    impl EventGate {
+        #[inline]
+        pub(super) fn before_write(&self, _name: &str) {}
+    }
+}
+
+use event_gate::EventGate;
 
 pub struct Journal {
     directory: PathBuf,
@@ -184,7 +220,6 @@ pub struct Journal {
     sender: Sender<Command>,
     queue: Arc<Mutex<QueueState>>,
     flush_lock: Mutex<()>,
-    #[cfg(any(test, feature = "test-support"))]
     event_gate: EventGate,
 }
 
@@ -197,8 +232,7 @@ impl Journal {
             sender,
             queue: Arc::default(),
             flush_lock: Mutex::default(),
-            #[cfg(any(test, feature = "test-support"))]
-            event_gate: Arc::default(),
+            event_gate: EventGate::default(),
         };
         (journal, receiver)
     }
@@ -208,7 +242,6 @@ impl Journal {
         let mut writer = Writer::new(
             journal.directory.clone(),
             journal.run_id.clone(),
-            #[cfg(any(test, feature = "test-support"))]
             journal.event_gate.clone(),
         );
         let queue = Arc::clone(&journal.queue);
@@ -285,13 +318,7 @@ impl Journal {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn gate_next_event(&self, name: &'static str, gate: impl FnOnce() + Send + 'static) {
-        assert!(
-            self.event_gate
-                .lock()
-                .unwrap()
-                .replace((name, Box::new(gate)))
-                .is_none()
-        );
+        self.event_gate.arm(name, Box::new(gate));
     }
 }
 
@@ -313,16 +340,11 @@ struct Writer {
     bytes: u64,
     sequence: u64,
     managed: u64,
-    #[cfg(any(test, feature = "test-support"))]
     event_gate: EventGate,
 }
 
 impl Writer {
-    fn new(
-        directory: PathBuf,
-        run_id: String,
-        #[cfg(any(test, feature = "test-support"))] event_gate: EventGate,
-    ) -> Self {
+    fn new(directory: PathBuf, run_id: String, event_gate: EventGate) -> Self {
         let now = time::OffsetDateTime::now_utc();
         let basename = format!(
             "emp-{:04}{:02}{:02}T{:02}{:02}{:02}Z-{}-{run_id}",
@@ -343,7 +365,6 @@ impl Writer {
             bytes: 0,
             sequence: 0,
             managed: 0,
-            #[cfg(any(test, feature = "test-support"))]
             event_gate,
         }
     }
@@ -448,16 +469,7 @@ impl Writer {
                 self.prune();
             }
             let file = self.file.as_mut().unwrap();
-            #[cfg(any(test, feature = "test-support"))]
-            {
-                let gate = {
-                    let mut armed = self.event_gate.lock().unwrap();
-                    armed.take_if(|(name, _)| *name == event.name)
-                };
-                if let Some((_, wait)) = gate {
-                    wait();
-                }
-            }
+            self.event_gate.before_write(&event.name);
             file.write_all(&bytes)?;
             file.flush()?;
             self.sequence += 1;
