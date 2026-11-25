@@ -1,6 +1,6 @@
 use super::{
-    ConfigError, ConfigResult, Map, Value, json_truthy, safe_capability_identity, string_value,
-    trim_whitespace, valid_python_iso_timestamp,
+    ConfigError, ConfigResult, Map, Value, json_truthy, parse_observed_at,
+    safe_capability_identity, string_value, trim_whitespace,
 };
 
 const CONTEXT_CALIBRATION_LIMIT: usize = 8;
@@ -380,7 +380,7 @@ pub fn normalize_context_calibrations(raw: Option<&Value>) -> ConfigResult<Value
         ] {
             let observed_at = match item.get(name) {
                 None | Some(Value::Null) => Value::Null,
-                Some(Value::String(value)) if valid_python_iso_timestamp(value) => {
+                Some(Value::String(value)) if parse_observed_at(value).is_some() => {
                     Value::String(value.clone())
                 }
                 Some(_) => {

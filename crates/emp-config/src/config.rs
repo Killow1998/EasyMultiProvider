@@ -90,8 +90,8 @@ use context_calibration::{
 
 mod model_provider;
 use model_provider::{
-    MODEL_BOOLEAN_CAPABILITIES, TOP_LEVEL_PROVENANCE_FIELDS, json_truthy, safe_capability_identity,
-    valid_python_iso_timestamp,
+    MODEL_BOOLEAN_CAPABILITIES, TOP_LEVEL_PROVENANCE_FIELDS, json_truthy, parse_observed_at,
+    safe_capability_identity,
 };
 pub use model_provider::{normalize_model, normalize_model_capability_sources, normalize_provider};
 mod route_aliases;

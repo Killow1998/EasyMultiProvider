@@ -1,4 +1,5 @@
 use super::*;
+use time::{Date, Duration, Month, Weekday};
 
 const PROVIDER_PROTOCOLS: [&str; 4] = [
     "auto",
@@ -127,192 +128,115 @@ fn normalize_resolved_protocol(raw: Option<&Value>) -> ConfigResult<String> {
     Ok(value)
 }
 
-fn leap_year(year: u32) -> bool {
-    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+fn parse_iso_week(year: i32, week: &str, day: &str) -> Option<i32> {
+    let day: i32 = day.parse().ok()?;
+    if !(1..=7).contains(&day) {
+        return None;
+    }
+    let monday = Date::from_iso_week_date(year, week.parse().ok()?, Weekday::Monday).ok()?;
+    Some(monday.to_julian_day() + day - 1)
 }
 
-fn valid_iso_date(value: &str) -> bool {
-    if value.len() != 10
-        || value.as_bytes().get(4) != Some(&b'-')
-        || value.as_bytes().get(7) != Some(&b'-')
-    {
-        return false;
-    }
-    let Ok(year) = value[..4].parse::<u32>() else {
-        return false;
-    };
+fn parse_iso_date(value: &str) -> Option<i32> {
+    let (year, rest) = value.split_at_checked(4)?;
+    let year: u16 = year.parse().ok()?;
     if year == 0 {
-        return false;
+        return None;
     }
-    let Ok(month) = value[5..7].parse::<u32>() else {
-        return false;
+    let year = i32::from(year);
+    let (month, day) = match rest.as_bytes() {
+        [b'W', _, _] => return parse_iso_week(year, &rest[1..], "1"),
+        [b'W', _, _, _] => return parse_iso_week(year, rest.get(1..3)?, &rest[3..]),
+        [b'-', b'W', _, _] => return parse_iso_week(year, &rest[2..], "1"),
+        [b'-', b'W', _, _, b'-', _] => return parse_iso_week(year, &rest[2..4], &rest[5..]),
+        [b'-', _, _, b'-', _, _] => (rest.get(1..3)?, &rest[4..]),
+        [_, _, _, _] if value.bytes().all(|byte| byte.is_ascii_digit()) => rest.split_at(2),
+        _ => return None,
     };
-    let Ok(day) = value[8..].parse::<u32>() else {
-        return false;
-    };
-    let days = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap_year(year) => 29,
-        2 => 28,
-        _ => return false,
-    };
-    (1..=days).contains(&day)
+    let month = Month::try_from(month.parse::<u8>().ok()?).ok()?;
+    let date = Date::from_calendar_date(year, month, day.parse().ok()?).ok()?;
+    Some(date.to_julian_day())
 }
 
-fn two_digit_number(value: &str, maximum: u32) -> bool {
-    value.len() == 2
-        && value.bytes().all(|byte| byte.is_ascii_digit())
-        && value.parse::<u32>().is_ok_and(|number| number <= maximum)
-}
-
-fn strip_fraction(value: &str) -> Option<&str> {
-    let separator = value.find(['.', ',']);
-    match separator {
-        None => Some(value),
-        Some(index) => {
-            let fraction = &value[index + 1..];
-            (!fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit()))
-                .then_some(&value[..index])
+fn parse_iso_clock(value: &str) -> Option<Duration> {
+    let (base, fractional_time) = if let Some((base, fraction)) = value.split_once(['.', ',']) {
+        if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
         }
-    }
-}
-
-fn valid_iso_clock(value: &str) -> bool {
-    let Some(base) = strip_fraction(value) else {
-        return false;
-    };
-    let fields = if base.contains(':') {
-        let fields = base.split(':').collect::<Vec<_>>();
-        if !(1..=3).contains(&fields.len()) {
-            return false;
-        }
-        fields
-    } else {
-        match base.len() {
-            2 => vec![&base[..2]],
-            4 => vec![&base[..2], &base[2..4]],
-            6 => vec![&base[..2], &base[2..4], &base[4..6]],
-            _ => return false,
-        }
-    };
-    two_digit_number(fields[0], 23)
-        && fields
-            .get(1)
-            .is_none_or(|minute| two_digit_number(minute, 59))
-        && fields
-            .get(2)
-            .is_none_or(|second| two_digit_number(second, 59))
-}
-
-fn valid_iso_time(value: &str) -> bool {
-    if value.is_empty() {
-        return false;
-    }
-    let (time, offset) = if let Some(time) = value.strip_suffix('Z') {
-        if time.contains('Z') {
-            return false;
-        }
-        (time, None)
-    } else if value.contains('Z') {
-        return false;
-    } else if let Some(index) = value
-        .char_indices()
-        .skip(1)
-        .find_map(|(index, character)| matches!(character, '+' | '-').then_some(index))
-    {
-        (&value[..index], Some(&value[index + 1..]))
-    } else {
-        (value, None)
-    };
-    valid_iso_clock(time) && offset.is_none_or(valid_iso_clock)
-}
-
-fn weekday(year: u32, month: u32, day: u32) -> u32 {
-    const MONTH_OFFSETS: [u32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
-    let adjusted_year = if month < 3 { year - 1 } else { year };
-    (adjusted_year + adjusted_year / 4 - adjusted_year / 100
-        + adjusted_year / 400
-        + MONTH_OFFSETS[(month - 1) as usize]
-        + day)
-        % 7
-}
-
-fn valid_iso_week_date(value: &str) -> bool {
-    let (year, week, day) = match value.len() {
-        7 if value.as_bytes().get(4) == Some(&b'W') => (&value[..4], &value[5..7], "1"),
-        8 if value.as_bytes().get(4) == Some(&b'W') => (&value[..4], &value[5..7], &value[7..8]),
-        8 if value.get(4..6) == Some("-W") => (&value[..4], &value[6..8], "1"),
-        10 if value.get(4..6) == Some("-W") && value.as_bytes().get(8) == Some(&b'-') => {
-            (&value[..4], &value[6..8], &value[9..10])
-        }
-        _ => return false,
-    };
-    let Ok(year) = year.parse::<u32>() else {
-        return false;
-    };
-    let Ok(week) = week.parse::<u32>() else {
-        return false;
-    };
-    let Ok(day) = day.parse::<u32>() else {
-        return false;
-    };
-    if year == 0 || !(1..=7).contains(&day) {
-        return false;
-    }
-    let jan_first = weekday(year, 1, 1);
-    let maximum_week = if jan_first == 4 || (jan_first == 3 && leap_year(year)) {
-        53
-    } else {
-        52
-    };
-    (1..=maximum_week).contains(&week)
-}
-
-fn valid_basic_iso_date(value: &str) -> bool {
-    value.len() == 8
-        && value.bytes().all(|byte| byte.is_ascii_digit())
-        && valid_iso_date(&format!(
-            "{}-{}-{}",
-            &value[..4],
-            &value[4..6],
-            &value[6..8]
-        ))
-}
-
-fn python_iso_date_prefix_length(value: &str) -> Option<usize> {
-    for length in [10usize, 8, 7] {
-        let Some(candidate) = value.get(..length) else {
-            continue;
+        let seconds_per_unit = match base.len() {
+            2 => 3_600.0,
+            4 | 5 => 60.0,
+            _ => 1.0,
         };
-        if valid_iso_date(candidate)
-            || valid_basic_iso_date(candidate)
-            || valid_iso_week_date(candidate)
-        {
-            return Some(length);
+        let fraction = format!("0.{fraction}").parse::<f64>().ok()?;
+        (base, Duration::seconds_f64(fraction * seconds_per_unit))
+    } else {
+        (value, Duration::ZERO)
+    };
+    let (hour, minute, second) = if base.contains(':') {
+        let mut fields = base.split(':');
+        let clock = (
+            fields.next()?,
+            fields.next().unwrap_or("00"),
+            fields.next().unwrap_or("00"),
+        );
+        if fields.next().is_some() {
+            return None;
         }
-    }
-    None
+        clock
+    } else if base.is_ascii() {
+        match base.len() {
+            2 => (base, "00", "00"),
+            4 => (&base[..2], &base[2..], "00"),
+            6 => (&base[..2], &base[2..4], &base[4..]),
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+    let two_digits = |value: &str, maximum| {
+        if value.len() != 2 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        value
+            .parse::<i64>()
+            .ok()
+            .filter(|&number| number <= maximum)
+    };
+    Some(
+        Duration::hours(two_digits(hour, 23)?)
+            + Duration::minutes(two_digits(minute, 59)?)
+            + Duration::seconds(two_digits(second, 59)?)
+            + fractional_time,
+    )
 }
 
-pub(super) fn valid_python_iso_timestamp(value: &str) -> bool {
-    let Some(date_length) = python_iso_date_prefix_length(value) else {
-        return false;
-    };
-    let Some(rest) = value.get(date_length..) else {
-        return false;
-    };
+pub(super) fn parse_observed_at(value: &str) -> Option<Duration> {
+    let (date, rest) = [10, 8, 7].into_iter().find_map(|length| {
+        let (date, rest) = value.split_at_checked(length)?;
+        Some((Duration::days(i64::from(parse_iso_date(date)?)), rest))
+    })?;
     if rest.is_empty() {
-        return true;
+        return Some(date);
     }
     let mut characters = rest.chars();
-    let Some(separator) = characters.next() else {
-        return false;
-    };
-    if separator == 'Z' {
-        return false;
+    if characters.next()? == 'Z' {
+        return None;
     }
-    valid_iso_time(characters.as_str())
+    let time = characters.as_str();
+    if let Some(clock) = time.strip_suffix('Z') {
+        return Some(date + parse_iso_clock(clock)?);
+    }
+    if let Some(index) = time.find(['+', '-']) {
+        let offset = parse_iso_clock(&time[index + 1..])?;
+        let clock = parse_iso_clock(&time[..index])?;
+        return Some(if time.as_bytes()[index] == b'+' {
+            date + clock - offset
+        } else {
+            date + clock + offset
+        });
+    }
+    Some(date + parse_iso_clock(time)?)
 }
 
 fn protocol_confidence(raw: Option<&Value>, default: f64) -> ConfigResult<f64> {
@@ -357,7 +281,7 @@ fn normalize_protocol_observation(raw: Option<&Value>) -> ConfigResult<Value> {
     let confidence = protocol_confidence(raw.get("confidence"), *default_confidence)?;
     let observed_at = match raw.get("observed_at") {
         None | Some(Value::Null) => Value::Null,
-        Some(Value::String(value)) if valid_python_iso_timestamp(value) => {
+        Some(Value::String(value)) if parse_observed_at(value).is_some() => {
             Value::String(value.clone())
         }
         Some(_) => return Err(ConfigError::new("invalid protocol_observation")),
@@ -482,7 +406,7 @@ fn normalize_model_provenance(
     let confidence = model_provenance_confidence(raw.get("confidence"), *default_confidence)?;
     let observed_at = match raw.get("observed_at") {
         None | Some(Value::Null) => Value::Null,
-        Some(Value::String(value)) if valid_python_iso_timestamp(value) => {
+        Some(Value::String(value)) if parse_observed_at(value).is_some() => {
             Value::String(value.clone())
         }
         Some(_) => return Err(ConfigError::new("invalid capability observed_at")),

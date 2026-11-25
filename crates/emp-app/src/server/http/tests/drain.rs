@@ -1183,27 +1183,44 @@ fn drain_native_accounts_for_a_read_terminal_before_previous_frame_flush() {
 }
 
 #[cfg(unix)]
+const PREFIXED_LEARNING_MODEL: &str = "demo/upstream-model";
+
+#[cfg(unix)]
 #[test]
 fn drain_external_releases_business_before_saving_the_learned_protocol() {
-    drain_external_protocol_learning(false, None, "demo/model");
+    drain_external_protocol_learning(false, None, "demo/model", Some(PREFIXED_LEARNING_MODEL));
 }
 
 #[cfg(unix)]
 #[test]
 fn drain_external_discards_learning_when_the_provider_endpoint_changes() {
-    drain_external_protocol_learning(false, Some("http://127.0.0.1:1/replacement"), "demo/model");
+    drain_external_protocol_learning(
+        false,
+        Some("http://127.0.0.1:1/replacement"),
+        "demo/model",
+        Some(PREFIXED_LEARNING_MODEL),
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn drain_external_saves_the_learned_protocol_after_write_failure() {
-    drain_external_protocol_learning(true, None, "demo/model");
+    drain_external_protocol_learning(true, None, "demo/model", Some(PREFIXED_LEARNING_MODEL));
 }
 
 #[cfg(unix)]
 #[test]
 fn drain_external_saves_learning_for_the_selected_aggregate_member() {
-    drain_external_protocol_learning(false, None, "auto/learning");
+    drain_external_protocol_learning(false, None, "auto/learning", None);
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_external_saves_learning_for_long_upstream_model_names() {
+    for length in [252, 257] {
+        let upstream_id = format!("demo/{}", "m".repeat(length));
+        drain_external_protocol_learning(false, None, "demo/model", Some(&upstream_id));
+    }
 }
 
 #[cfg(unix)]
@@ -1230,11 +1247,13 @@ fn drain_external_protocol_learning(
     fail_write: bool,
     replacement_endpoint: Option<&'static str>,
     requested_model: &str,
+    upstream_id: Option<&str>,
 ) {
     use super::inference::{
         FIRST, LAST, STREAM_REQUEST, SseClient, fixture_directory, upstream_reply,
     };
     use crate::tests::OneShotUpstream;
+    use sha2::{Digest, Sha256};
 
     let (send_terminal, ready) = oneshot::channel();
     let mut ready = Some(ready);
@@ -1255,7 +1274,18 @@ fn drain_external_protocol_learning(
     let path = directory.path().join("config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     config["providers"][1]["protocol"] = json!("auto");
-    config["models"][0]["upstream_id"] = json!("demo/upstream-model");
+    let model = config["models"][0].as_object_mut().unwrap();
+    if let Some(upstream_id) = upstream_id {
+        model.insert("upstream_id".into(), json!(upstream_id));
+    } else {
+        model.remove("upstream_id");
+    }
+    let upstream_model = upstream_id.map_or("model", |id| id.strip_prefix("demo/").unwrap());
+    let observed_model = if upstream_model.len() > 256 {
+        format!("@sha256:{:x}", Sha256::digest(upstream_model.as_bytes()))
+    } else {
+        upstream_model.to_owned()
+    };
     config["model_groups"] = json!([{
         "id": "auto/learning", "policy": "priority", "sources": ["demo/model", "native/alias"]
     }]);
@@ -1385,7 +1415,7 @@ fn drain_external_protocol_learning(
             assert_eq!(model["resolved_protocol"], "chat_completions");
             let observation = &provider["protocol_observation"];
             assert_eq!(observation, &model["protocol_observation"]);
-            assert_eq!(observation["upstream_model"], "demo/upstream-model");
+            assert_eq!(observation["upstream_model"], observed_model);
             assert_eq!(observation["deployment_identity"], "default");
             assert_eq!(
                 observation["endpoint_fingerprint"],
@@ -1405,7 +1435,9 @@ fn drain_external_protocol_learning(
             );
         }
     });
-    assert_eq!(upstream.observed().0, "/v1/chat/completions");
+    let (path, _, body) = upstream.observed();
+    assert_eq!(path, "/v1/chat/completions");
+    assert_eq!(body["model"], upstream_model);
 }
 
 #[cfg(unix)]

@@ -127,7 +127,7 @@ pub fn capability_record(provider: &Map<String, Value>, model: &Map<String, Valu
         .unwrap_or("unknown");
     let mut resolved = "unknown";
     let mut observed = provenance(None, "unknown");
-    let observation_key = ProtocolObservationKey::new(provider, model);
+    let observation_key = ProtocolObservationKey::from_model(provider, model);
     for source in [model, provider] {
         let Some(protocol) = source
             .get("resolved_protocol")

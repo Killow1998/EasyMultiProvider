@@ -2,11 +2,10 @@ use super::provider_url::{hostname, parse_provider_url};
 use super::{
     ConfigError, ConfigResult, MASKED_API_KEY, MODEL_BOOLEAN_CAPABILITIES, Map,
     TOP_LEVEL_PROVENANCE_FIELDS, Value, json_truthy, normalize_configuration_with_registry,
-    normalize_input_modalities,
+    normalize_input_modalities, parse_observed_at,
 };
 use emp_domain::{Protocol, ProtocolObservationKey, ResolvedRoute, RouteSource};
 use std::time::{SystemTime, UNIX_EPOCH};
-use time::{Date, OffsetDateTime, PrimitiveDateTime, format_description::well_known::Iso8601};
 
 fn utc_date_parts(seconds: u64) -> (i64, u32, u32) {
     let days = (seconds / 86_400) as i64;
@@ -73,7 +72,7 @@ impl LearnedProtocol {
             requested_model: route.requested_model.clone(),
             model_id: model.get("id")?.as_str()?.to_owned(),
             source: route.source,
-            key: ProtocolObservationKey::new(route.provider.value(), model),
+            key: ProtocolObservationKey::from_route(route),
             protocol,
             observed_at,
         })
@@ -84,22 +83,6 @@ pub enum ProtocolSave {
     Updated(Value),
     Superseded,
     IdentityChanged,
-}
-
-fn observation_time(value: &str) -> Option<OffsetDateTime> {
-    let format = Iso8601::PARSING;
-    OffsetDateTime::parse(value, &format)
-        .ok()
-        .or_else(|| {
-            PrimitiveDateTime::parse(value, &format)
-                .ok()
-                .map(PrimitiveDateTime::assume_utc)
-        })
-        .or_else(|| {
-            Date::parse(value, &format)
-                .ok()
-                .map(|date| date.midnight().assume_utc())
-        })
 }
 
 pub fn remember_learned_protocol(
@@ -126,7 +109,7 @@ pub fn remember_learned_protocol(
     let model = model_index.map(|index| &config["models"][index]);
     let unlisted_model =
         Map::from_iter([("id".to_owned(), Value::String(candidate.model_id.clone()))]);
-    let key = ProtocolObservationKey::new(
+    let key = ProtocolObservationKey::from_model(
         provider.as_object().expect("normalized provider"),
         model.and_then(Value::as_object).unwrap_or(&unlisted_model),
     );
@@ -134,24 +117,29 @@ pub fn remember_learned_protocol(
         return Ok(ProtocolSave::IdentityChanged);
     }
 
-    let observed_at = observation_time(&candidate.observed_at);
-    if std::iter::once(provider).chain(model).any(|entry| {
+    let observed_at = parse_observed_at(&candidate.observed_at);
+    let can_update = |entry: &Value| {
         let observation = &entry["protocol_observation"];
-        key.matches_observation(observation)
-            && observation["observed_at"]
+        !key.matches_observation(observation)
+            || observation["observed_at"]
                 .as_str()
-                .and_then(observation_time)
-                > observed_at
-    }) {
+                .and_then(parse_observed_at)
+                <= observed_at
+    };
+    let update_provider = can_update(provider);
+    let model_index = model_index.filter(|&index| can_update(&config["models"][index]));
+    if !update_provider && model_index.is_none() {
         return Ok(ProtocolSave::Superseded);
     }
 
     let observation = key.observation(&candidate.observed_at);
     let protocol = Value::String(candidate.protocol.as_config_str().to_owned());
     let mut updated = config.clone();
-    let provider = &mut updated["providers"][provider_index];
-    provider["resolved_protocol"] = protocol.clone();
-    provider["protocol_observation"] = observation.clone();
+    if update_provider {
+        let provider = &mut updated["providers"][provider_index];
+        provider["resolved_protocol"] = protocol.clone();
+        provider["protocol_observation"] = observation.clone();
+    }
     if let Some(index) = model_index {
         let model = &mut updated["models"][index];
         model["resolved_protocol"] = protocol;

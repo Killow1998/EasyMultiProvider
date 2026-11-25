@@ -146,7 +146,25 @@ pub struct ProtocolObservationKey {
 }
 
 impl ProtocolObservationKey {
-    pub fn new(provider: &Map<String, Value>, model: &Map<String, Value>) -> Self {
+    pub fn from_route(route: &ResolvedRoute) -> Self {
+        Self::new(
+            route.provider.value(),
+            route.model.value(),
+            &route.upstream_model,
+        )
+    }
+
+    pub fn from_model(provider: &Map<String, Value>, model: &Map<String, Value>) -> Self {
+        let model_id = model.get("id").and_then(Value::as_str).unwrap_or_default();
+        let upstream_model = resolved_upstream_model(provider, model, model_id);
+        Self::new(provider, model, &upstream_model)
+    }
+
+    fn new(
+        provider: &Map<String, Value>,
+        model: &Map<String, Value>,
+        upstream_model: &str,
+    ) -> Self {
         let endpoint_fingerprint = if let Some(vertex) = provider.get("vertex") {
             let project = &vertex["project"];
             let api_key =
@@ -161,14 +179,12 @@ impl ProtocolObservationKey {
         } else {
             endpoint_fingerprint(provider.get("base_url").and_then(Value::as_str))
         };
-        let upstream_model = model
-            .get("upstream_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .or_else(|| model.get("id").and_then(Value::as_str))
-            .unwrap_or_default()
-            .to_owned();
+        let upstream_model = if upstream_model.len() > 256 || upstream_model.starts_with("@sha256:")
+        {
+            format!("@sha256:{:x}", Sha256::digest(upstream_model.as_bytes()))
+        } else {
+            upstream_model.to_owned()
+        };
         Self {
             endpoint_fingerprint,
             deployment_identity: deployment_identity(provider, model),
@@ -306,12 +322,12 @@ impl ResolvedRoute {
             "protocol".to_owned(),
             Value::String(protocol.as_config_str().to_owned()),
         );
-        resolved_route_from_parts(
-            &self.requested_model,
-            provider,
-            self.model.value().clone(),
-            self.source,
-        )
+        Ok(Self {
+            dialect: classify_dialect(&provider),
+            provider: crate::OpaqueJson::new(provider).map_err(ValidationError::from)?,
+            protocol,
+            ..self.clone()
+        })
     }
 }
 

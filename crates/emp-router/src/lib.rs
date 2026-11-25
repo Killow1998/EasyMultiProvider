@@ -218,8 +218,7 @@ pub struct ExternalRouter<'a> {
     gemini_signatures: Option<std::sync::Arc<dyn emp_domain::SignatureStore>>,
 }
 
-/// Order candidates without mutating configuration; trust observations only when endpoint, deployment
-/// and raw upstream model identities still match the frozen route.
+/// Order candidates using observations that match the resolved route identity.
 pub fn protocol_candidates(route: &ResolvedRoute) -> Vec<Protocol> {
     if route.protocol != Protocol::Auto {
         return vec![route.protocol];
@@ -269,11 +268,7 @@ pub fn protocol_candidates(route: &ResolvedRoute) -> Vec<Protocol> {
 pub fn observed_protocol(route: &ResolvedRoute) -> Option<Protocol> {
     let model = route.model.value();
     let provider = route.provider.value();
-    model
-        .get("upstream_id")?
-        .as_str()
-        .filter(|id| !id.trim().is_empty())?;
-    let key = emp_domain::ProtocolObservationKey::new(provider, model);
+    let key = emp_domain::ProtocolObservationKey::from_route(route);
     [model, provider].into_iter().find_map(|entry| {
         if !key.matches_observation(entry.get("protocol_observation")?) {
             return None;
