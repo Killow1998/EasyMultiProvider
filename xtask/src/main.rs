@@ -1,5 +1,6 @@
 mod check;
 mod cross_check;
+mod loc;
 mod module_e2e;
 mod package;
 mod release;
@@ -27,6 +28,7 @@ commands:
   package-module ID [--output DIR] build one official module and its checksum
   module-e2e [--skip-aero]          build real modules and run ignored module journeys
   cross-check [windows|macos]      clippy the workspace for Windows and macOS from Linux
+  loc BASE HEAD [--subtract-merge COMMIT]... [--prefix PATH]...
   server-bench --bin PATH [--label NAME] [--out JSON]
   server-bench --compare BASELINE.json CANDIDATE.json
   package-smoke                    run update/install smoke tests against artifacts/
@@ -42,6 +44,7 @@ fn main() -> ExitCode {
         Some("package-module") => package::run_module(rest),
         Some("module-e2e") => module_e2e::run(rest),
         Some("cross-check") => cross_check::run(rest),
+        Some("loc") => loc::run(rest),
         Some("server-bench") => server_bench::run(rest),
         Some("package-smoke") => smoke::run(rest),
         Some("validate-release") => release::validate_command(rest),

@@ -173,6 +173,14 @@ Snap 环境可直接使用包内的 Firefox 和 geckodriver 二进制运行无�
 
 ## 4. 候选与发布
 
+每个阶段门槛用 `xtask loc` 结算 Rust 物理行数。命令读取 Git 对象，统计空行、注释和平台分支，单列测试与 examples，排除 `xtask` 和 `emp-test-support`。测试文件、测试子树、bench 与由 `cfg(test)` 标记的内联项计入测试。内联项保留阶段 4b 的文本识别口径。
+
+```sh
+cargo xtask loc <base> <head> [--subtract-merge <commit>]... [--prefix <path>]...
+```
+
+`phase` 为区间差额扣除每个指定合并提交相对第一父提交的差额。`--prefix` 按路径前缀汇总区间起点、终点和差额，目录前缀可加尾斜线。
+
 提交前运行格式检查和受影响包的严格 Clippy，保留前面的行为验收结果：
 
 ```sh

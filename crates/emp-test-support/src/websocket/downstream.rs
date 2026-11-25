@@ -1,10 +1,7 @@
-use super::{
-    MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError, frame_length_prefix,
-    server::map_downstream_frame_error,
-};
-use crate::{
-    MAX_PROXY_REQUEST_BYTES,
-    websocket::frame::{FrameDecoder, FramePoll, WebSocketPoll},
+use super::WebSocketPoll;
+use emp_transport::{
+    MAX_PROXY_REQUEST_BYTES, MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError,
+    websocket_codec::{FrameDecoder, FramePoll, frame_length_prefix, map_downstream_frame_error},
 };
 use serde_json::Value;
 use std::io::{Read, Write};

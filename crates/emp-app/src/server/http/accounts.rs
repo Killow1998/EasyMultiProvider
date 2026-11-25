@@ -146,7 +146,12 @@ impl AccountWriteRoute {
             Self::RefreshModels(account) => AccountWrite::RefreshModels(account),
             Self::RefreshQuota(account) => AccountWrite::Quota(account, QuotaCommand::Refresh),
             Self::ResetQuota(account) => AccountWrite::Quota(account, QuotaCommand::reset(&body)),
-            Self::EditConfiguration => AccountWrite::EditConfiguration(body),
+            Self::EditConfiguration => {
+                let Value::Object(body) = body else {
+                    unreachable!("JSON body reader requires an object")
+                };
+                AccountWrite::EditConfiguration(body)
+            }
             Self::Delete(_) | Self::MissingAccount => unreachable!("route does not read a body"),
         }
     }

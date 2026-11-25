@@ -1116,7 +1116,12 @@ dependencies = [
 name = "emp-test-support"
 version = "0.15.9"
 dependencies = [
+ "emp-transport",
+ "polling",
+ "serde_json",
+ "socket2",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1130,7 +1135,6 @@ dependencies = [
  "getrandom 0.2.17",
  "hotpath",
  "libc",
- "polling",
  "rcgen",
  "reqwest",
  "ring",
@@ -4373,6 +4377,7 @@ dependencies = [
  "emp-updater",
  "flate2",
  "proc-macro2",
+ "regex",
  "ring",
  "serde",
  "serde_json",

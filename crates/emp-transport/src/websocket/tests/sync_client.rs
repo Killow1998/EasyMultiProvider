@@ -1,5 +1,5 @@
-use crate::test_support::{ClientWebSocket, WebSocketConnection};
 use crate::websocket_accept;
+use emp_test_support::websocket::{ClientWebSocket, WebSocketConnection};
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress};
 use serde_json::json;
 use std::io::{Read, Write};

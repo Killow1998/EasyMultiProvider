@@ -134,7 +134,7 @@ impl<W: AsyncWrite + Unpin> WebSocketWriter<W> {
     }
 }
 
-pub(super) fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
+pub fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
     match error {
         FrameDecodeError::Protocol => WebSocketError::new(1002, "invalid websocket frame"),
         FrameDecodeError::TooLarge => WebSocketError::new(1009, "websocket message is too large"),

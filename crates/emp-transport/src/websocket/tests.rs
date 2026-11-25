@@ -1,10 +1,8 @@
 use super::compression::{DecompressionError, PerMessageDeflate};
 use super::frame::{FrameDecoder, FramePoll};
-use super::{
-    test_support::{WebSocketConnection, WebSocketPoll},
-    *,
-};
+use super::*;
 use crate::MAX_PROXY_REQUEST_BYTES;
+use emp_test_support::websocket::{WebSocketConnection, WebSocketPoll};
 use flate2::{Compress, Compression, FlushCompress};
 use std::future::Future;
 use std::io::Cursor;

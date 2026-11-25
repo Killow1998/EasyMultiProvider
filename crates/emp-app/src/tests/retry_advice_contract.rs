@@ -13,7 +13,7 @@ fn client_failure(
             "x-emp-session".to_owned(),
             session.trim_start_matches("X-EMP-Session: ").to_owned(),
         )]);
-        let mut socket = emp_transport::test_support::ClientWebSocket::connect(
+        let mut socket = emp_test_support::websocket::ClientWebSocket::connect(
             &format!("ws://{}/v1/responses", server.local_addr()),
             &headers,
             Duration::from_secs(5),
@@ -371,7 +371,7 @@ fn upstream_retry_advice_reaches_http_and_websocket_clients() {
                     "x-emp-session".to_owned(),
                     session.trim_start_matches("X-EMP-Session: ").to_owned(),
                 )]);
-                let mut socket = emp_transport::test_support::ClientWebSocket::connect(
+                let mut socket = emp_test_support::websocket::ClientWebSocket::connect(
                     &format!("ws://{}/v1/responses", server.local_addr()),
                     &headers,
                     Duration::from_secs(5),

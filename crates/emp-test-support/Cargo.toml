@@ -7,7 +7,12 @@ license.workspace = true
 description = "Shared fixtures and deadlines for EMP tests."
 
 [dependencies]
+emp-transport = { path = "../emp-transport" }
+polling = { version = "=3.11.0", default-features = false }
+serde_json.workspace = true
+socket2 = { version = "0.6.5", features = ["all"] }
 tempfile = "3.27"
+tokio = { version = "1.53.1", features = ["rt", "time"] }
 
 [lints]
 workspace = true

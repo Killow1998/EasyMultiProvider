@@ -630,7 +630,7 @@ fn websocket_auto_review_excludes_free_and_go_in_the_shared_route() {
             .trim_start_matches("X-EMP-Session: ")
             .to_owned(),
     )]);
-    let mut socket = emp_transport::test_support::ClientWebSocket::connect(
+    let mut socket = emp_test_support::websocket::ClientWebSocket::connect(
         &url,
         &headers,
         Duration::from_secs(5),

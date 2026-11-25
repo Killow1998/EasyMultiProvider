@@ -3,30 +3,6 @@ use crate::{RequestBudget, RequestLimits, TransportKind};
 use std::{fmt, io, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Clone, PartialEq, Eq)]
-pub enum WebSocketPoll<T> {
-    Pending,
-    Text(T),
-    Ping(Vec<u8>),
-    Closed { code: Option<u16> },
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl<T> fmt::Debug for WebSocketPoll<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Pending => formatter.write_str("Pending"),
-            Self::Text(_) => formatter.write_str("Text(<redacted>)"),
-            Self::Ping(_) => formatter.write_str("Ping(<redacted>)"),
-            Self::Closed { code } => formatter
-                .debug_struct("Closed")
-                .field("code", code)
-                .finish(),
-        }
-    }
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub enum WebSocketEvent {
     Text(String),
@@ -48,14 +24,14 @@ impl fmt::Debug for WebSocketEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FrameDecodeError {
+pub enum FrameDecodeError {
     Protocol,
     TooLarge,
     AtCapacity,
     Io,
 }
 
-pub(crate) enum FramePoll {
+pub enum FramePoll {
     Pending,
     Message {
         opcode: u8,
@@ -76,7 +52,7 @@ struct ParsedFrame {
     payload: Vec<u8>,
 }
 
-pub(crate) struct FrameDecoder {
+pub struct FrameDecoder {
     buffer: Vec<u8>,
     needed: usize,
     message: Vec<u8>,
@@ -88,7 +64,7 @@ pub(crate) struct FrameDecoder {
 }
 
 impl FrameDecoder {
-    pub(crate) fn new(max_message_bytes: usize) -> Self {
+    pub fn new(max_message_bytes: usize) -> Self {
         Self {
             buffer: Vec::new(),
             needed: 2,
@@ -101,7 +77,7 @@ impl FrameDecoder {
         }
     }
 
-    pub(crate) fn set_max_message_bytes(&mut self, maximum: usize) {
+    pub fn set_max_message_bytes(&mut self, maximum: usize) {
         self.max_message_bytes = maximum;
     }
 
@@ -113,7 +89,7 @@ impl FrameDecoder {
         self.request_budget.take()
     }
 
-    pub(crate) fn feed(&mut self, prefix: &[u8]) -> Result<(), FrameDecodeError> {
+    pub fn feed(&mut self, prefix: &[u8]) -> Result<(), FrameDecodeError> {
         let limit = self
             .max_message_bytes
             .checked_add(8192)
@@ -130,7 +106,7 @@ impl FrameDecoder {
         Ok(())
     }
 
-    pub(crate) fn poll<R: std::io::Read + ?Sized>(
+    pub fn poll<R: std::io::Read + ?Sized>(
         &mut self,
         stream: &mut R,
         expect_mask: bool,
@@ -612,6 +588,8 @@ mod tests {
 
     #[test]
     fn websocket_poll_debug_redacts_payloads() {
+        use emp_test_support::websocket::WebSocketPoll;
+
         assert!(!format!("{:?}", WebSocketPoll::Text("private".to_owned())).contains("private"));
         assert!(!format!("{:?}", WebSocketEvent::Text("private".to_owned())).contains("private"));
     }

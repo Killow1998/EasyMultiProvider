@@ -19,8 +19,6 @@ use crate::services::{
 };
 use accept::{ACCEPT_RETRY, AcceptLog, request_rejected};
 use axum::{Router, middleware::from_fn_with_state};
-#[cfg(test)]
-use std::net::SocketAddr;
 use std::{
     cell::RefCell,
     io,
@@ -42,6 +40,8 @@ use tokio::{
 pub(crate) mod raw_tcp;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::ServerHandle;
 
 pub(crate) const REQUEST_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -174,61 +174,11 @@ impl ServerControl {
     }
 }
 
-#[cfg(test)]
-pub(crate) struct ServerHandle {
-    address: SocketAddr,
-    control: Arc<ServerControl>,
-    listener: JoinHandle<Result<(), ServeError>>,
-}
-
 #[derive(Debug)]
 pub(crate) enum ServeError {
     Accept(io::Error),
     Worker(JoinError),
     AdmissionNotDrained,
-}
-
-#[cfg(test)]
-impl ServerHandle {
-    pub(crate) async fn bind(
-        address: SocketAddr,
-        router: Router,
-        admission: Arc<ConnectionAdmission>,
-    ) -> io::Result<Self> {
-        let socket = TcpListener::bind(address).await?;
-        let address = socket.local_addr()?;
-        let control = Arc::new(ServerControl::new(admission));
-        let listener = tokio::spawn(serve(socket, router, Arc::clone(&control), None));
-        Ok(Self {
-            address,
-            control,
-            listener,
-        })
-    }
-
-    pub(crate) fn local_addr(&self) -> SocketAddr {
-        self.address
-    }
-
-    pub(crate) fn shutdown_signal(&self) -> ShutdownSignal {
-        self.control.signal()
-    }
-
-    pub(crate) async fn shutdown(self) -> Result<(), ServeError> {
-        self.control.stop(ShutdownReason::Requested);
-        self.join().await
-    }
-
-    pub(crate) async fn join(mut self) -> Result<(), ServeError> {
-        (&mut self.listener).await.map_err(ServeError::Worker)?
-    }
-}
-
-#[cfg(test)]
-impl Drop for ServerHandle {
-    fn drop(&mut self) {
-        self.control.stop(ShutdownReason::Requested);
-    }
 }
 
 async fn serve_http(listener: TcpListener, state: Arc<ServerState>) -> Result<(), ServeError> {
@@ -265,7 +215,6 @@ fn http_router(state: Arc<ServerState>) -> Router {
             .merge(http::team::routes())
             .merge(http::migration::routes())
             .merge(http::websocket::routes())
-            .merge(declared_module_routes(&[]))
             .fallback(http::unmatched),
         state.clone(),
     )
@@ -273,13 +222,6 @@ fn http_router(state: Arc<ServerState>) -> Router {
     .method_not_allowed_fallback(http::unmatched)
     .layer(from_fn_with_state(state.clone(), http::guard_route_method))
     .with_state(state)
-}
-
-enum ModuleRoute {}
-
-/// TODO(A2-S11): Check route conflicts when enabling or switching module declarations.
-fn declared_module_routes(_declarations: &[ModuleRoute]) -> Router<Arc<ServerState>> {
-    Router::new()
 }
 
 #[cfg(test)]

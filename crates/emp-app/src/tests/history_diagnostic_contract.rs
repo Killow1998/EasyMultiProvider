@@ -2,7 +2,7 @@
 use super::request_observation_contract::finished;
 use super::*;
 
-fn next_response(socket: &mut emp_transport::test_support::ClientWebSocket) -> Value {
+fn next_response(socket: &mut emp_test_support::websocket::ClientWebSocket) -> Value {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(300)));
     loop {
         let event = websocket_event_before(socket, &deadline);
@@ -52,7 +52,7 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
         "x-emp-session".into(),
         session.trim_start_matches("X-EMP-Session: ").into(),
     )]);
-    let mut socket = emp_transport::test_support::ClientWebSocket::connect(
+    let mut socket = emp_test_support::websocket::ClientWebSocket::connect(
         &format!("ws://{}/v1/responses", server.local_addr()),
         &headers,
         Duration::from_secs(3),

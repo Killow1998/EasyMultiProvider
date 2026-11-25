@@ -28,7 +28,7 @@ use emp_state::WEB_SESSION_TOKEN_LENGTH;
 use emp_state::load_configuration;
 use emp_state::provider_api_key;
 use emp_state::save_configuration;
-use emp_transport::test_support::WebSocketConnection;
+use emp_test_support::websocket::WebSocketConnection;
 use emp_transport::websocket_accept;
 use serde_json::Value;
 use serde_json::json;
@@ -488,7 +488,7 @@ fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
 }
 
 fn websocket_event_before(
-    socket: &mut emp_transport::test_support::ClientWebSocket,
+    socket: &mut emp_test_support::websocket::ClientWebSocket,
     deadline: &Deadline,
 ) -> Value {
     loop {
@@ -496,15 +496,15 @@ fn websocket_event_before(
             .accept(deadline.remaining(), "WebSocket response event")
             .unwrap();
         match socket.poll_receive_text_with_timeout(remaining).unwrap() {
-            emp_transport::test_support::WebSocketPoll::Text(text) => {
+            emp_test_support::websocket::WebSocketPoll::Text(text) => {
                 if let Ok(value @ Value::Object(_)) = serde_json::from_str(&text) {
                     return deadline.accept(value, "WebSocket response event").unwrap();
                 }
             }
-            emp_transport::test_support::WebSocketPoll::Ping(payload) => {
+            emp_test_support::websocket::WebSocketPoll::Ping(payload) => {
                 socket.send_pong(&payload).unwrap()
             }
-            emp_transport::test_support::WebSocketPoll::Pending => {}
+            emp_test_support::websocket::WebSocketPoll::Pending => {}
             other => panic!("WebSocket ended before response event: {other:?}"),
         }
     }

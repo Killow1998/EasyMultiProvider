@@ -29,6 +29,8 @@ pub use http_policy::{
     ProxyOrigin, ProxyPolicy, ProxySnapshot, ProxySource, RequestPlan, TimeoutPolicy,
 };
 pub use system_memory::system_memory_status;
+#[doc(hidden)]
+pub use websocket::websocket_codec;
 pub use websocket::{
     AsyncClientWebSocket, ClientWebSocketError, DEFAULT_WEBSOCKET_MESSAGE_BYTES, LocalWebSocket,
     MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError, WebSocketEvent, WebSocketReader,
@@ -283,6 +285,3 @@ where
     output.extend(parser.finish()?);
     Ok(output)
 }
-
-#[cfg(any(test, feature = "test-support"))]
-pub use websocket::test_support;

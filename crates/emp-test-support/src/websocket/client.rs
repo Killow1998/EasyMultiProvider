@@ -1,4 +1,5 @@
-use super::{AsyncClientWebSocket, ClientWebSocketError, WebSocketEvent, frame::WebSocketPoll};
+use super::WebSocketPoll;
+use emp_transport::{AsyncClientWebSocket, ClientWebSocketError, WebSocketEvent};
 use serde_json::Value;
 use std::{collections::BTreeMap, time::Duration};
 

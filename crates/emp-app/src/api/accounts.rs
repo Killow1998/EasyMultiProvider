@@ -9,7 +9,7 @@ use crate::services::accounts::{
 use crate::services::configuration::{ChangeError, settings};
 use crate::services::quota::commands::{self, CommandError, QuotaCommand};
 use crate::services::quota::{QuotaHistoryResponseError, quota_history_response};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 pub(crate) fn read(
     request: Request<'_>,
@@ -79,7 +79,7 @@ pub(crate) fn read(
 pub(crate) enum AccountWrite {
     Import(Result<AccountImport, String>),
     Delete(String),
-    EditConfiguration(Value),
+    EditConfiguration(Map<String, Value>),
     RefreshModels(String),
     Quota(String, QuotaCommand),
 }
@@ -94,7 +94,7 @@ impl AccountWrite {
                 .map(|()| json!({"status":"ok"}))
                 .map_err(|error| JsonReply::error(400, &error, None)),
             Self::EditConfiguration(body) => {
-                return match settings::update(id, state, &body) {
+                return match settings::update(id, state, &Value::Object(body)) {
                     Ok(()) => super::catalog::read_configuration(state),
                     Err(ChangeError::Invalid(message)) => JsonReply::error(400, &message, None),
                     Err(ChangeError::Unavailable) => EntryError::internal().reply(),

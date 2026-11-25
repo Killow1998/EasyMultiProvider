@@ -110,7 +110,7 @@ fn next_activity_snapshot(reader: &mut SseReader, in_flight: u64) -> Value {
     }
 }
 
-fn send_turn(socket: &mut emp_transport::test_support::ClientWebSocket, input: &str) {
+fn send_turn(socket: &mut emp_test_support::websocket::ClientWebSocket, input: &str) {
     socket
         .send_json(&json!({
             "type":"response.create",
@@ -121,7 +121,7 @@ fn send_turn(socket: &mut emp_transport::test_support::ClientWebSocket, input: &
 }
 
 fn receive_completed_turn(
-    socket: &mut emp_transport::test_support::ClientWebSocket,
+    socket: &mut emp_test_support::websocket::ClientWebSocket,
     deadline: &Deadline,
 ) {
     for _ in 0..16 {
@@ -165,7 +165,7 @@ fn websocket_idle_connection_is_inactive_and_each_turn_has_its_own_activity() {
         "x-emp-session".to_owned(),
         session.trim_start_matches("X-EMP-Session: ").to_owned(),
     )]);
-    let mut socket = emp_transport::test_support::ClientWebSocket::connect(
+    let mut socket = emp_test_support::websocket::ClientWebSocket::connect(
         &url,
         &headers,
         Duration::from_secs(5),

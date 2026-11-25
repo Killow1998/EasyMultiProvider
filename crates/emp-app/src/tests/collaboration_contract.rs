@@ -8,7 +8,7 @@ fn collaboration_websocket_rejects_disabled_and_unowned_tasks_without_forwarding
         ("X-EMP-Session".into(), server.session_token().to_owned()),
         ("x-openai-subagent".into(), "collab_spawn".into()),
     ]);
-    let mut socket = emp_transport::test_support::ClientWebSocket::connect(
+    let mut socket = emp_test_support::websocket::ClientWebSocket::connect(
         &url,
         &headers,
         Duration::from_secs(5),

@@ -261,14 +261,18 @@ pub(super) async fn drive(
     control: Arc<ServerControl>,
     permit: BusinessToken,
 ) {
+    #[cfg(not(test))]
+    let mode = ServerMode::Recovery;
+    #[cfg(test)]
     let mode = control.mode;
     let head = match GuardedHead::read(&mut io, accepted + mode.head_timeout()).await {
         Ok(head) => head,
-        Err(response) => {
+        Err(_error) => {
             let _slot = permit.slot().clone();
             drop(permit);
+            #[cfg(test)]
             if matches!(mode, ServerMode::Http) {
-                let _ = io.write_all(&response.reply().encode()).await;
+                let _ = io.write_all(&_error.reply().encode()).await;
             }
             let _ = io.shutdown().await;
             return;

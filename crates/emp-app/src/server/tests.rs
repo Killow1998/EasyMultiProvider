@@ -28,6 +28,53 @@ use tokio::{
     time::{Duration, advance, timeout},
 };
 
+pub(crate) struct ServerHandle {
+    address: SocketAddr,
+    control: Arc<ServerControl>,
+    listener: JoinHandle<Result<(), ServeError>>,
+}
+
+impl ServerHandle {
+    pub(crate) async fn bind(
+        address: SocketAddr,
+        router: Router,
+        admission: Arc<ConnectionAdmission>,
+    ) -> io::Result<Self> {
+        let socket = TcpListener::bind(address).await?;
+        let address = socket.local_addr()?;
+        let control = Arc::new(ServerControl::new(admission));
+        let listener = tokio::spawn(serve(socket, router, Arc::clone(&control), None));
+        Ok(Self {
+            address,
+            control,
+            listener,
+        })
+    }
+
+    pub(crate) fn local_addr(&self) -> SocketAddr {
+        self.address
+    }
+
+    pub(crate) fn shutdown_signal(&self) -> ShutdownSignal {
+        self.control.signal()
+    }
+
+    pub(crate) async fn shutdown(self) -> Result<(), ServeError> {
+        self.control.stop(ShutdownReason::Requested);
+        self.join().await
+    }
+
+    pub(crate) async fn join(mut self) -> Result<(), ServeError> {
+        (&mut self.listener).await.map_err(ServeError::Worker)?
+    }
+}
+
+impl Drop for ServerHandle {
+    fn drop(&mut self) {
+        self.control.stop(ShutdownReason::Requested);
+    }
+}
+
 pub(super) struct TestDrainClock {
     now: std::sync::Mutex<DrainInstant>,
     pub(super) cutoff: tokio::sync::Notify,

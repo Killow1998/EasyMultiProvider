@@ -1,8 +1,8 @@
 //! Large-context continuation through both real credential-selection paths.
 use super::super::*;
+use emp_test_support::websocket::ClientWebSocket;
+use emp_test_support::websocket::WebSocketPoll;
 use emp_test_support::{Deadline, test_timeout};
-use emp_transport::test_support::ClientWebSocket;
-use emp_transport::test_support::WebSocketPoll;
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 

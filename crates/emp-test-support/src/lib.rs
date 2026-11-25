@@ -9,6 +9,7 @@ use std::{
 };
 
 mod observation;
+pub mod websocket;
 pub use observation::{Observation, ObservationResult, Probe};
 
 pub fn accept_blocking(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {

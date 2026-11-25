@@ -4,14 +4,10 @@ use std::fmt;
 
 mod client;
 mod compression;
-#[cfg(any(test, feature = "test-support"))]
-mod downstream;
 mod frame;
 mod local;
 mod network;
 mod server;
-#[cfg(any(test, feature = "test-support"))]
-mod sync_client;
 #[cfg(test)]
 mod tests;
 
@@ -19,10 +15,12 @@ pub use client::AsyncClientWebSocket;
 pub use frame::WebSocketEvent;
 pub use local::LocalWebSocket;
 pub use server::{WebSocketReader, WebSocketWriter, split_websocket};
-#[cfg(any(test, feature = "test-support"))]
-pub mod test_support {
+#[doc(hidden)]
+pub mod websocket_codec {
     pub use super::{
-        downstream::WebSocketConnection, frame::WebSocketPoll, sync_client::ClientWebSocket,
+        frame::{FrameDecodeError, FrameDecoder, FramePoll},
+        frame_length_prefix,
+        server::map_downstream_frame_error,
     };
 }
 pub const DEFAULT_WEBSOCKET_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
@@ -37,7 +35,8 @@ pub struct WebSocketError {
 }
 
 impl WebSocketError {
-    const fn new(code: u16, message: &'static str) -> Self {
+    #[doc(hidden)]
+    pub const fn new(code: u16, message: &'static str) -> Self {
         Self { code, message }
     }
     pub const fn close_code(self) -> u16 {
@@ -46,7 +45,7 @@ impl WebSocketError {
 }
 
 /// RFC 6455 payload length prefix: 7-bit inline, 126 + u16, or 127 + u64.
-fn frame_length_prefix(length: usize) -> Vec<u8> {
+pub fn frame_length_prefix(length: usize) -> Vec<u8> {
     if length < 126 {
         vec![length as u8]
     } else if length <= u16::MAX as usize {
@@ -88,7 +87,8 @@ pub struct ClientWebSocketError {
     io_kind: Option<std::io::ErrorKind>,
 }
 impl ClientWebSocketError {
-    pub(crate) const fn new(status: u16, message: &'static str) -> Self {
+    #[doc(hidden)]
+    pub const fn new(status: u16, message: &'static str) -> Self {
         Self {
             status,
             message,
