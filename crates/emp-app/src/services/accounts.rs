@@ -18,7 +18,7 @@ pub(crate) use import::{
     AccountImport, import_account_state, import_emp_login_account_state, import_parsed_account,
     matching_account,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -77,60 +77,32 @@ pub(crate) fn native_account_snapshot(state: &ServerState, config: &Value) -> Va
     })
 }
 
-pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
-    let mut config = state.backend.configuration.read().ok()?.clone();
+pub(crate) fn project_public_accounts(state: &ServerState, config: &mut Value) -> Vec<Value> {
     state
         .backend
         .team
-        .project_subscription_credentials(state, &mut config);
+        .project_subscription_credentials(state, config);
     let duplicates = duplicate_accounts(
-        &config,
+        config,
         &state.backend.configuration.vault,
         &state.backend.codex.auth_path,
     );
-    let mut accounts = emp_state::config::public_accounts(&config, &duplicates);
+    let mut accounts = emp_state::config::public_accounts(config, &duplicates);
     state
         .backend
         .team
         .label_subscription_permissions(&mut accounts);
-    let mut errors = state
-        .backend
-        .accounts
-        .quota_refresh_errors
-        .lock()
-        .ok()
-        .map(|errors| {
-            errors
-                .iter()
-                .map(|(key, value)| (key.clone(), Value::String(value.clone())))
-                .collect::<serde_json::Map<_, _>>()
-        })?;
-    for account in config["accounts"].as_array().expect("normalized accounts") {
-        if let Some(source) = account["_emp_shared_source"].as_str() {
-            let id = account["id"].as_str().expect("normalized account ID");
-            errors.remove(id);
-            if let Some(error) = errors.get(source).cloned() {
-                errors.insert(id.to_owned(), error);
-            }
-        }
-    }
-    Some(serde_json::json!({
-        "native_account": native_account_snapshot(state, &config),
-        "accounts": accounts,
-        "refresh_errors": errors,
-        "claude_quota": state.backend.claude_quota.snapshot(crate::util::system_now()),
-        "provider_quotas": super::cpa_quota::snapshot(state, &config),
-        "memory_routing_status": state.backend.memory_status.snapshot(),
-    }))
+    let Value::Array(accounts) = accounts else {
+        unreachable!("public account list");
+    };
+    accounts
 }
 
 pub(crate) fn account_public_snapshot(state: &ServerState, account_id: &str) -> Option<Value> {
-    accounts_snapshot(state)?
-        .get("accounts")?
-        .as_array()?
-        .iter()
+    let mut config = state.backend.configuration.snapshot().ok()?;
+    project_public_accounts(state, &mut config)
+        .into_iter()
         .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
-        .cloned()
 }
 
 pub(crate) fn native_auth_document(path: &Path) -> Option<Value> {
@@ -231,6 +203,27 @@ pub(crate) struct AccountState {
     /// Kept by encrypted auth file because rotation may invalidate the stored refresh token.
     pending_rotations: Mutex<BTreeMap<String, Value>>,
     credential_operations: CredentialOperationGate,
+}
+
+impl AccountState {
+    pub(crate) fn refresh_errors(&self, config: &Value) -> Option<Map<String, Value>> {
+        let mut errors = self.quota_refresh_errors.lock().ok().map(|errors| {
+            errors
+                .iter()
+                .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+                .collect::<Map<_, _>>()
+        })?;
+        for account in config["accounts"].as_array().expect("normalized accounts") {
+            if let Some(source) = account["_emp_shared_source"].as_str() {
+                let id = account["id"].as_str().expect("normalized account ID");
+                errors.remove(id);
+                if let Some(error) = errors.get(source).cloned() {
+                    errors.insert(id.to_owned(), error);
+                }
+            }
+        }
+        Some(errors)
+    }
 }
 
 pub(crate) fn duplicate_accounts(

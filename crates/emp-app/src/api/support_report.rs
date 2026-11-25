@@ -402,7 +402,7 @@ fn runtime_report(state: &ServerState) -> Value {
 }
 
 fn accounts_report(state: &ServerState) -> Result<Value, ()> {
-    let public = crate::services::accounts::accounts_snapshot(state).ok_or(())?;
+    let public = super::accounts::accounts_snapshot(state).ok_or(())?;
     let errors = public.get("refresh_errors").and_then(Value::as_object);
     let native = public.get("native_account").and_then(Value::as_object);
     let native_present = native

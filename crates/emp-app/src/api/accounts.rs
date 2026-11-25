@@ -4,12 +4,28 @@ use crate::http::request::{percent_decode, query_values};
 use crate::server::http::error::{EntryError, JsonReply};
 use crate::services::account_catalog::{self, CatalogRefreshError};
 use crate::services::accounts::{
-    AccountImport, accounts_snapshot, delete_account_state, import_parsed_account,
+    AccountImport, delete_account_state, import_parsed_account, native_account_snapshot,
+    project_public_accounts,
 };
 use crate::services::configuration::{ChangeError, settings};
+use crate::services::cpa_quota;
 use crate::services::quota::commands::{self, CommandError, QuotaCommand};
 use crate::services::quota::{QuotaHistoryResponseError, quota_history_response};
 use serde_json::{Map, Value, json};
+
+pub(super) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
+    let mut config = state.backend.configuration.snapshot().ok()?;
+    let accounts = project_public_accounts(state, &mut config);
+    let errors = state.backend.accounts.refresh_errors(&config)?;
+    Some(json!({
+        "native_account": native_account_snapshot(state, &config),
+        "accounts": Value::Array(accounts),
+        "refresh_errors": errors,
+        "claude_quota": state.backend.claude_quota.snapshot(crate::util::system_now()),
+        "provider_quotas": cpa_quota::snapshot(state, &config),
+        "memory_routing_status": state.backend.memory_status.snapshot(),
+    }))
+}
 
 pub(crate) fn read(
     request: Request<'_>,

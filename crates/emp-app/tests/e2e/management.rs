@@ -95,6 +95,21 @@ fn support_report_is_authenticated_downloadable_and_private() {
     assert_eq!(report["configuration"]["path"], "<custom>/config.json");
     assert_eq!(report["configuration"]["exists"], true);
     assert_eq!(report["network"]["connectivity_probe"], "not_run");
+    assert_eq!(
+        report["accounts"]
+            .as_object()
+            .expect("accounts summary")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "imported",
+            "imported_count",
+            "imported_truncated",
+            "native",
+            "scope"
+        ]
+    );
     assert_eq!(report["accounts"]["imported_count"], 0);
     // The value reflects EMP's own background quota check (which depends on
     // whether a Codex binary exists on this machine), not the report.
