@@ -3,6 +3,7 @@ use super::{
     registry::with_registry_server, write_response,
 };
 use crate::{
+    http::request::request_body_timeout,
     lifecycle::ServerHandle,
     modules::process::ModuleProcess,
     server::http::tests::json_body,
@@ -25,8 +26,9 @@ use std::{
     io,
     net::{Ipv4Addr, Shutdown},
     path::Path,
+    process::{Command, Stdio},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader},
@@ -37,6 +39,7 @@ use tokio::{
 };
 
 const PREFIX: &str = "/api/module-runtime/data";
+const LEADER_EXIT_GATE: &str = "EMP_TEST_API3_DATA_LEADER_EXIT_GATE";
 const MANIFEST: &str = r#"{
     "id":"data","module_version":"1.0.0","host_api":{"major":3,"min_minor":0},
     "contributions":[
@@ -57,6 +60,26 @@ const LARGE_CHUNK: usize = 64 * 1024;
 const SLOW_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) fn child(mut output: File) {
+    if let Ok(address) = std::env::var(LEADER_EXIT_GATE) {
+        use std::io::Read as _;
+
+        #[expect(
+            clippy::zombie_processes,
+            reason = "组长先于持有控制和数据连接的工作进程退出，由 Core 终止整组"
+        )]
+        let _worker = super::fixture("data")
+            .env_remove(LEADER_EXIT_GATE)
+            .stdin(Stdio::inherit())
+            .stdout(output)
+            .spawn()
+            .unwrap();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
+        let mut gate = deadline.io(deadline.connect(address.parse().unwrap()).unwrap());
+        let mut exit = [0];
+        gate.read_exact(&mut exit).unwrap();
+        assert_eq!(exit, [b'x']);
+        return;
+    }
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -234,6 +257,15 @@ async fn start(
     generation: u64,
 ) -> (ModuleProcess, TcpListener) {
     let (command, side) = fixture_with_sideband("data").await;
+    (publish(server, root, generation, command).await, side)
+}
+
+async fn publish(
+    server: &ServerHandle,
+    root: &Path,
+    generation: u64,
+    command: Command,
+) -> ModuleProcess {
     let (process, manifest) = ModuleProcess::start(command, root, Handlers::default(), budget())
         .await
         .unwrap();
@@ -250,7 +282,7 @@ async fn start(
             server.state.backend.gateway_key.len(),
         )
         .unwrap();
-    (process, side)
+    process
 }
 
 fn public_request(
@@ -614,6 +646,33 @@ fn losing_control_cancels_only_the_old_generations_requests() {
 }
 
 #[test]
+fn leader_exit_invalidates_requests_still_using_the_worker() {
+    with_registry_server(async |server, root| {
+        let gate = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let (mut command, side) = fixture_with_sideband("data").await;
+        command.env(LEADER_EXIT_GATE, gate.local_addr().unwrap().to_string());
+        let process = publish(server, root, 1, command).await;
+        timeout(budget(), async {
+            let mut client = send(server, &public_request(server, "GET", "/wait", &[], b"")).await;
+            let mut worker = BufReader::new(accept_sideband(&side).await);
+            assert!(
+                read_head(&mut worker)
+                    .await
+                    .unwrap()
+                    .starts_with(b"GET /wait ")
+            );
+            let mut leader = accept_sideband(&gate).await;
+            leader.write_all(b"x").await.unwrap();
+            assert_status(&read_head(&mut client).await.unwrap(), 503);
+            assert_eq!(worker.read(&mut [0]).await.unwrap(), 0);
+            assert!(process.stop().await.unwrap().success());
+        })
+        .await
+        .unwrap();
+    });
+}
+
+#[test]
 fn a_reset_backpressured_upload_releases_its_admission_slot() {
     check_backpressured_upload_disconnect(UploadDisconnect::Reset);
 }
@@ -635,6 +694,7 @@ fn check_backpressured_upload_disconnect(disconnect: UploadDisconnect) {
         let socket = TcpSocket::new_v4().unwrap();
         socket.set_send_buffer_size(16 * 1024).unwrap();
         let mut client = socket.connect(server.local_addr()).await.unwrap();
+        let earliest_upload_expiry = Instant::now() + request_body_timeout(length);
         client
             .write_all(&public_request(
                 server,
@@ -675,8 +735,16 @@ fn check_backpressured_upload_disconnect(disconnect: UploadDisconnect) {
             }
             UploadDisconnect::Fin => SockRef::from(&client).shutdown(Shutdown::Write).unwrap(),
         }
+        // wait <= remaining / 2 < remaining before the earliest upload expiry, at any scale.
+        // A release observed at or after that expiry cannot pass, even if the waiter was delayed.
+        let remaining = earliest_upload_expiry.saturating_duration_since(Instant::now());
         assert!(
-            admission.quiesce(0, budget()).is_some(),
+            !remaining.is_zero(),
+            "the fixture exhausted the upload window"
+        );
+        let released = admission.quiesce(0, budget().min(remaining / 2)).is_some();
+        assert!(
+            released && Instant::now() < earliest_upload_expiry,
             "the disconnected upload still holds its admission slot"
         );
         process.stop().await.unwrap();

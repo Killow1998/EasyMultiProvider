@@ -44,7 +44,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 use tokio::{
-    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, Interest},
     sync::{oneshot, watch},
     task::JoinSet,
     time::{Duration, Instant},
@@ -297,7 +297,8 @@ pub(super) async fn drive_http(
         websocket_probe,
         inference,
         stream,
-        module_read_probe: (cfg!(unix) && module_runtime_target(request.raw_path()).is_some())
+        module_read_probe: module_runtime_target(request.raw_path())
+            .is_some()
             .then(|| io.probe().ok())
             .flatten(),
     };
@@ -343,21 +344,54 @@ pub(super) async fn drive(
     drive_connection(io, peer, router, control, permit, head, None).await;
 }
 
-pub(super) async fn wait_for_read_close(socket: Option<TcpStream>) {
-    #[cfg(unix)]
-    if let Some(socket) = socket
-        && let Ok(probe) =
-            tokio::io::unix::AsyncFd::with_interest(socket, tokio::io::Interest::READABLE)
-    {
-        while let Ok(mut event) = probe.readable().await {
-            if event.ready().is_read_closed() {
-                return;
+pub(super) async fn wait_for_read_close(
+    socket: Option<TcpStream>,
+    uploaded: watch::Receiver<bool>,
+) {
+    if let Some(socket) = socket {
+        #[cfg(windows)]
+        let mut uploaded = uploaded;
+        #[cfg(windows)]
+        let probe = if uploaded.wait_for(|complete| *complete).await.is_ok() {
+            tokio::net::TcpStream::from_std(socket).ok()
+        } else {
+            None
+        };
+        #[cfg(unix)]
+        let probe = tokio::io::unix::AsyncFd::with_interest(socket, Interest::READABLE).ok();
+        if let Some(probe) = probe {
+            loop {
+                #[cfg(unix)]
+                let Ok(mut event) = probe.readable().await else {
+                    break;
+                };
+                #[cfg(unix)]
+                let ready = event.ready();
+                #[cfg(windows)]
+                let Ok(ready) = probe.ready(Interest::READABLE).await else {
+                    break;
+                };
+                if ready.is_read_closed() {
+                    return;
+                }
+                if *uploaded.borrow() {
+                    #[cfg(unix)]
+                    let peeked = probe.get_ref().peek(&mut [0]);
+                    #[cfg(windows)]
+                    let peeked = probe.peek(&mut [0]).await;
+                    match peeked {
+                        Ok(0) => return,
+                        Ok(_) => break,
+                        #[cfg(unix)]
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => return,
+                    }
+                }
+                #[cfg(unix)]
+                event.clear_ready_matching(tokio::io::Ready::READABLE);
             }
-            event.clear_ready_matching(tokio::io::Ready::READABLE);
         }
     }
-    #[cfg(not(unix))]
-    let _ = socket;
     pending().await
 }
 

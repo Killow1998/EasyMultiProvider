@@ -225,8 +225,9 @@ impl ModuleProcess {
         let (finished, exit) = oneshot::channel();
         monitor
             .send(Box::new(move || {
-                let status = monitored.tree.wait(&mut child);
-                monitored.invalidate();
+                let status = monitored
+                    .tree
+                    .wait_with_group_stop(&mut child, || monitored.invalidate());
                 #[cfg(unix)]
                 drop(close_pipes);
                 process_exited();

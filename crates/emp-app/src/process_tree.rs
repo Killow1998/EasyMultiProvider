@@ -16,13 +16,16 @@ use rustix::{
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 #[cfg(windows)]
 use windows_sys::Win32::{
-    Foundation::INVALID_HANDLE_VALUE,
+    Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0},
     System::{
         Diagnostics::ToolHelp::{
             CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
         },
         JobObjects::{AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject},
-        Threading::{CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME},
+        Threading::{
+            CREATE_SUSPENDED, INFINITE, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
+            WaitForSingleObject,
+        },
     },
 };
 
@@ -141,18 +144,36 @@ impl ProcessTree {
     }
 
     pub(crate) fn wait(&self, child: &mut Child) -> io::Result<ExitStatus> {
+        self.wait_with_group_stop(child, || self.request_group_stop())
+    }
+
+    pub(crate) fn wait_with_group_stop(
+        &self,
+        child: &mut Child,
+        stop_group: impl FnOnce(),
+    ) -> io::Result<ExitStatus> {
         #[cfg(unix)]
-        {
-            self.observe_exit(WaitIdOptions::empty())
-                .map_err(|error| self.handle_observation_error(child, error))?;
-            self.terminate_and_reap(child)
+        let observed = self.observe_exit(WaitIdOptions::empty());
+        #[cfg(unix)]
+        if observed == Err(Errno::CHILD) {
+            let error = self.handle_observation_error(child, Errno::CHILD);
+            stop_group();
+            return Err(error);
         }
+        #[cfg(unix)]
+        let observed = observed.map(|_| ()).map_err(io::Error::from);
         #[cfg(windows)]
-        {
-            let status = child.wait();
-            self.request_group_stop();
-            status
-        }
+        let observed = {
+            drop(child.stdin.take());
+            // SAFETY: child owns the live process handle throughout the wait.
+            match unsafe { WaitForSingleObject(child.as_raw_handle(), INFINITE) } {
+                WAIT_OBJECT_0 => Ok(()),
+                _ => Err(io::Error::last_os_error()),
+            }
+        };
+        stop_group();
+        let status = child.wait();
+        observed.and(status)
     }
 
     #[cfg(unix)]

@@ -203,21 +203,21 @@ async fn forward(
     }
 
     let failure = Arc::new(Mutex::new(None));
-    let (upload_finished, uploaded) = oneshot::channel::<()>();
+    let (body_read, read_complete) = watch::channel(length == 0);
     let upload = if length == 0 {
-        drop(upload_finished);
+        drop(body_read);
         Body::empty()
     } else {
         Body::from_stream(stream::try_unfold(
             Some((
                 body,
                 length,
-                upload_finished,
+                body_read,
                 failure.clone(),
                 forwarding.signal.clone(),
             )),
             move |state| async move {
-                let Some((mut body, remaining, finished, failure, signal)) = state else {
+                let Some((mut body, remaining, body_read, failure, signal)) = state else {
                     return Ok(None);
                 };
                 let chunk = read_frame(&mut body, deadline).await.and_then(|frame| {
@@ -229,8 +229,11 @@ async fn forward(
                 match chunk {
                     Ok(chunk) => {
                         let remaining = remaining - chunk.len();
+                        if remaining == 0 {
+                            body_read.send_replace(true);
+                        }
                         let next = (remaining != 0)
-                            .then_some((body, remaining, finished, failure, signal));
+                            .then_some((body, remaining, body_read, failure, signal));
                         Ok(Some((chunk, next)))
                     }
                     Err(error) => {
@@ -247,9 +250,13 @@ async fn forward(
     let timeouts = TimeoutPolicy::default();
     let (progress, mut progressed) = watch::channel(None::<Instant>);
     let watch_progress = progress.clone();
+    let mut uploaded = read_complete.clone();
     let deadlines = async move {
         let _progress = watch_progress;
-        if timeout_at(deadline, uploaded).await.is_err() {
+        if timeout_at(deadline, uploaded.wait_for(|complete| *complete))
+            .await
+            .is_err()
+        {
             return ForwardCancellation::UploadTimeout;
         }
         if timeout(timeouts.first_event, progressed.wait_for(Option::is_some))
@@ -291,7 +298,7 @@ async fn forward(
             biased;
             _ = signal.cancelled() => return,
             _ = disconnected.wait_for(|closed| *closed) => ForwardCancellation::Generation,
-            _ = wait_for_read_close(read_probe) => ForwardCancellation::Peer,
+            _ = wait_for_read_close(read_probe, read_complete) => ForwardCancellation::Peer,
             cause = deadlines => cause,
             never = &mut exchange => match never {},
         };

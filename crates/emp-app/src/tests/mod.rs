@@ -80,6 +80,7 @@ pub(crate) use internal_events_contract::{flushed_journal, live_journal, live_jo
 mod management_http_contract;
 mod management_operation_contract;
 mod memory_routing_contract;
+mod module_disconnect_contract;
 #[cfg(unix)]
 mod module_process_contract;
 mod native_api_contract;
