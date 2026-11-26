@@ -26,6 +26,7 @@ use tokio::{
 
 const PHASE_BUDGET: Duration = Duration::from_secs(5);
 const CANCEL_REQUEST: &str = "$/cancelRequest";
+const HOST_HOOK: &str = "host.hook";
 const RECEIVED_FRAME: &str = "host.received_frame";
 type FrameReceipt = (String, Value);
 type ReceivedFrame = (String, FrameReceipt, Instant);
@@ -45,7 +46,7 @@ pub(super) fn child(output: File) {
         let gated = gated.clone();
         handlers.register(method, move |params, token, peer| {
             peer.call(
-                "host.hook",
+                HOST_HOOK,
                 json!({"method":method,"params":params}),
                 budget(),
             )
@@ -56,7 +57,7 @@ pub(super) fn child(output: File) {
                     std::process::exit(0);
                 }
                 peer.call(
-                    "host.hook",
+                    HOST_HOOK,
                     json!({"method":"cancelled","params":token.is_cancelled()}),
                     budget(),
                 )
@@ -160,7 +161,7 @@ impl Fixture {
         let module = id.to_owned();
         let report = self.report.clone();
         let mut handlers = Handlers::default();
-        handlers.register("host.hook", move |mut call, _, _| {
+        handlers.register(HOST_HOOK, move |mut call, _, _| {
             assert!(registry.get(&module).is_some());
             call["module_id"] = json!(module);
             report.send(call).unwrap();
@@ -177,15 +178,21 @@ impl Fixture {
             budget(),
             |side, reader, writer, handlers| {
                 Peer::connect_observing_frames(side, reader, writer, handlers, move |frame, _| {
-                    if let Message::Notification(notification) = frame
-                        && notification.method == RECEIVED_FRAME
-                    {
-                        let received_at = Instant::now();
-                        let receipt = serde_json::from_value(notification.params.clone()).unwrap();
-                        record
-                            .send((recorded_module.clone(), receipt, received_at))
-                            .unwrap();
-                    }
+                    let received_at = Instant::now();
+                    let event = match frame {
+                        Message::Notification(notification)
+                            if notification.method == RECEIVED_FRAME =>
+                        {
+                            serde_json::from_value(notification.params.clone()).unwrap()
+                        }
+                        Message::Request(request) if request.method == HOST_HOOK => {
+                            (request.method.clone(), request.params.clone())
+                        }
+                        _ => return,
+                    };
+                    record
+                        .send((recorded_module.clone(), event, received_at))
+                        .unwrap();
                 })
             },
             move || registry.revoke(&module, generation),
@@ -342,9 +349,13 @@ fn phase_observation_window(
     started: Instant,
     parent_deadline: Option<Instant>,
 ) -> (Instant, RangeInclusive<Instant>) {
+    // Half the gap between the two-second parent deadline and the five-second phase budget.
+    const MAX_MARGIN: Duration = Duration::from_millis(1500);
     let phase_end = started + PHASE_BUDGET;
     let expected_end = phase_end.min(parent_deadline.unwrap_or(phase_end));
-    let margin = test_timeout(Duration::from_millis(750)).duration();
+    let margin = test_timeout(Duration::from_millis(750))
+        .duration()
+        .min(MAX_MARGIN);
     (expected_end, expected_end - margin..=expected_end + margin)
 }
 
@@ -400,22 +411,30 @@ async fn check_shared_phase_deadline(parent_budget: Option<Duration>) {
         );
         sleep_until((started + (expected_end - started) / 2).into()).await;
         fixture_call(&first, "module.release").await.unwrap();
-        let entered = fixture.seen.recv().await.unwrap();
-        assert_eq!(entered["module_id"], "alpha");
+        let (module, (method, entered), _) = fixture.frames.recv().await.unwrap();
+        assert_eq!((module.as_str(), method.as_str()), ("alpha", HOST_HOOK));
         assert_eq!(entered["method"], ProjectCatalog.method());
+        let (module, (method, released), _) = fixture.frames.recv().await.unwrap();
         assert_eq!(
-            fixture.seen.recv().await.unwrap(),
-            json!({"module_id":"alpha","method":"cancelled","params":false})
+            (module.as_str(), method.as_str(), released),
+            ("alpha", HOST_HOOK, json!({"method":"cancelled","params":false}))
         );
         let (module, (method, request_id), _) = fixture.frames.recv().await.unwrap();
         assert_eq!(
             (module.as_str(), method.as_str()),
             ("zeta", ProjectCatalog.method())
         );
+        let (module, (method, entered), _) = fixture.frames.recv().await.unwrap();
+        assert_eq!(
+            (module.as_str(), method.as_str()),
+            ("zeta", HOST_HOOK),
+            "expected zeta to enter ProjectCatalog before the cancellation receipt"
+        );
+        assert_eq!(entered["method"], ProjectCatalog.method());
         (request_id, fixture.frames.recv().await.unwrap())
     })
     .await
-    .expect("expected the zeta cancellation receipt by the observation deadline");
+    .expect("expected zeta to enter ProjectCatalog and receive cancellation by the observation deadline");
     assert_eq!(module, "zeta");
     assert_eq!(
         cancellation,
