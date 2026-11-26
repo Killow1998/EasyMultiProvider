@@ -108,23 +108,32 @@ impl ChunkDecoder {
                     };
                     self.line.extend_from_slice(&input[..=newline]);
                     *input = &input[newline + 1..];
-                    let line = self.line.strip_suffix(b"\r\n").ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidData, "invalid HTTP chunk line ending")
-                    })?;
                     if matches!(self.state, ChunkState::Header) {
-                        let size = std::str::from_utf8(
-                            line.split(|&byte| byte == b';').next().unwrap(),
-                        )
-                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                        let length = usize::from_str_radix(size.trim(), 16)
+                        let Ok(httparse::Status::Complete((_, length))) =
+                            httparse::parse_chunk_size(&self.line)
+                        else {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "invalid HTTP chunk size line",
+                            ));
+                        };
+                        let length = usize::try_from(length)
                             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
                         self.state = if length == 0 {
                             ChunkState::Trailers
                         } else {
                             ChunkState::Data(length)
                         };
-                    } else if trailer_is_end(line)? {
-                        self.state = ChunkState::End;
+                    } else {
+                        let line = self.line.strip_suffix(b"\r\n").ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "invalid HTTP chunk line ending",
+                            )
+                        })?;
+                        if trailer_is_end(line)? {
+                            self.state = ChunkState::End;
+                        }
                     }
                     self.line.clear();
                 }
@@ -159,6 +168,10 @@ impl ChunkDecoder {
             }
         }
         Ok(&[])
+    }
+
+    pub fn at_chunk_ending(&self) -> bool {
+        matches!(self.state, ChunkState::Ending(0))
     }
 
     pub fn is_finished(&self) -> bool {
@@ -310,6 +323,26 @@ mod tests {
         body.extend_from_slice(decoder.decode(&mut second).unwrap());
         let frame = sse::read_frame(&mut body.as_slice()).unwrap().unwrap();
         assert_eq!(frame.raw(), "data: first\n\n");
+    }
+
+    #[test]
+    fn chunk_decoder_rejects_an_extra_carriage_return_in_the_terminal_header() {
+        let mut decoder = ChunkDecoder::default();
+        let mut wire = b"0\r\r\n\r\n".as_slice();
+        assert_eq!(
+            decoder.decode(&mut wire).unwrap_err().kind(),
+            io::ErrorKind::InvalidData,
+        );
+    }
+
+    #[test]
+    fn chunk_decoder_accepts_a_chunk_header_with_an_extension() {
+        let mut decoder = ChunkDecoder::default();
+        let mut wire = b"5;ext=1\r\nhello\r\n0\r\n\r\n".as_slice();
+        assert_eq!(decoder.decode(&mut wire).unwrap(), b"hello");
+        assert!(decoder.decode(&mut wire).unwrap().is_empty());
+        decoder.finish().unwrap();
+        assert!(wire.is_empty());
     }
 
     #[test]

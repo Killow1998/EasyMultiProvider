@@ -9,7 +9,7 @@ use crate::{
     },
     tests::live_journal,
 };
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
 use tokio::sync::oneshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1212,21 +1212,18 @@ fn drain_aero_sse_eof_before_last_flush() {
 
 async fn assert_stream_prefix(client: &mut BufReader<TcpStream>, prefix: &[u8]) {
     timeout(wire_timeout().duration(), async {
+        let mut decoder = ChunkDecoder::default();
         let mut received = Vec::new();
-        while received.len() < prefix.len() {
-            let mut length = String::new();
-            assert_ne!(client.read_line(&mut length).await.unwrap(), 0);
-            let length = usize::from_str_radix(length.trim_end(), 16).unwrap();
-            assert!(length > 0);
-            let start = received.len();
-            received.resize(start + length, 0);
-            client.read_exact(&mut received[start..]).await.unwrap();
-            assert_eq!(
-                client.read_u16().await.unwrap(),
-                u16::from_be_bytes(*b"\r\n")
-            );
+        while received.len() < prefix.len() && !decoder.is_finished() {
+            read_chunk_data(client, &mut decoder, &mut received)
+                .await
+                .unwrap();
         }
         assert_eq!(received, prefix);
+        assert!(decoder.at_chunk_ending(), "prefix ends at a chunk boundary");
+        let mut ending = [0; 2];
+        client.read_exact(&mut ending).await.unwrap();
+        decoder.decode(&mut ending.as_slice()).unwrap();
     })
     .await
     .expect("upstream bytes reach the downstream client");

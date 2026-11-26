@@ -4,7 +4,8 @@ mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
 use base64::engine::general_purpose::STANDARD;
 use emp_test_support::{
-    Deadline, DeadlineIo, Observation, Probe, TestBudget, accept_blocking, sse, test_timeout,
+    Deadline, DeadlineIo, Observation, Probe, TestBudget, accept_blocking, http::Body, sse,
+    test_timeout,
 };
 
 use crate::cli::Cli;
@@ -284,59 +285,26 @@ fn delete(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
     complete_response(&mut stream)
 }
 
-struct ChunkedSse<R> {
-    input: R,
+struct SseBody<R> {
+    decoded: Body<R>,
     deadline: Deadline,
-    remaining: usize,
-    ended: bool,
 }
 
-type SseReader = BufReader<ChunkedSse<BufReader<DeadlineIo<TcpStream>>>>;
-
-fn set_sse_deadline(reader: &mut SseReader, deadline: &Deadline) {
-    let stream = reader.get_mut();
-    stream.input.get_mut().set_deadline(deadline);
-    stream.deadline = *deadline;
-}
-
-impl<R: BufRead> Read for ChunkedSse<R> {
+impl<R: BufRead> Read for SseBody<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        if self.ended || buffer.is_empty() {
-            return Ok(0);
-        }
-        if self.remaining == 0 {
-            let mut length = String::new();
-            self.input.read_line(&mut length)?;
-            self.remaining = usize::from_str_radix(
-                length.strip_suffix("\r\n").expect("HTTP chunk length line"),
-                16,
-            )
-            .expect("HTTP chunk length");
-            if self.remaining == 0 {
-                let mut end = [0; 2];
-                self.input.read_exact(&mut end)?;
-                assert_eq!(&end, b"\r\n", "terminal HTTP chunk delimiter");
-                self.ended = true;
-                return Ok(0);
-            }
-        }
-        let length = buffer.len().min(self.remaining);
-        let count = self.input.read(&mut buffer[..length])?;
-        assert!(count > 0, "HTTP chunk ended before its payload");
-        self.remaining -= count;
-        if self.remaining == 0 {
-            let mut end = [0; 2];
-            self.input.read_exact(&mut end)?;
-            assert_eq!(&end, b"\r\n", "HTTP chunk delimiter");
-        }
-        Ok(count)
+        self.decoded.read(buffer)
     }
 }
 
-fn read_sse_head<R: BufRead>(
-    mut input: R,
-    deadline: &Deadline,
-) -> (String, BufReader<ChunkedSse<R>>) {
+type SseReader<R = BufReader<DeadlineIo<TcpStream>>> = BufReader<SseBody<R>>;
+
+fn set_sse_deadline(reader: &mut SseReader, deadline: &Deadline) {
+    let body = reader.get_mut();
+    body.decoded.get_mut().get_mut().set_deadline(deadline);
+    body.deadline = *deadline;
+}
+
+fn read_sse_head<R: BufRead>(mut input: R, deadline: &Deadline) -> (String, SseReader<R>) {
     let mut head = String::new();
     loop {
         let mut line = String::new();
@@ -353,16 +321,14 @@ fn read_sse_head<R: BufRead>(
         .unwrap();
     (
         head,
-        BufReader::new(ChunkedSse {
-            input,
+        BufReader::new(SseBody {
+            decoded: Body::new(input, true),
             deadline: *deadline,
-            remaining: 0,
-            ended: false,
         }),
     )
 }
 
-fn read_sse_frame<R: BufRead>(reader: &mut BufReader<ChunkedSse<R>>) -> sse::Frame {
+fn read_sse_frame<R: BufRead>(reader: &mut SseReader<R>) -> sse::Frame {
     let frame = sse::read_frame(reader)
         .expect("read SSE frame")
         .expect("SSE stream ended before the next frame");
@@ -373,9 +339,7 @@ fn read_sse_frame<R: BufRead>(reader: &mut BufReader<ChunkedSse<R>>) -> sse::Fra
         .unwrap()
 }
 
-fn read_sse_frames<R: BufRead>(
-    reader: &mut BufReader<ChunkedSse<R>>,
-) -> impl Iterator<Item = sse::Frame> {
+fn read_sse_frames<R: BufRead>(reader: &mut SseReader<R>) -> impl Iterator<Item = sse::Frame> {
     std::iter::from_fn(move || {
         (!reader.fill_buf().expect("read SSE body").is_empty()).then(|| read_sse_frame(reader))
     })

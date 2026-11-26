@@ -1126,6 +1126,7 @@ version = "0.15.9"
 dependencies = [
  "emp-domain",
  "emp-transport",
+ "httparse",
  "polling",
  "rustix",
  "serde_json",

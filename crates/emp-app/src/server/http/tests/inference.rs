@@ -688,7 +688,6 @@ impl<R: tokio::io::AsyncRead + Unpin> SseClient<R> {
     }
 
     pub(super) async fn next_frame(&mut self) -> Option<sse::Frame> {
-        use tokio::io::AsyncBufReadExt as _;
         loop {
             let ended = self.chunked.is_finished();
             let mut available = self.pending.as_slice();
@@ -709,15 +708,9 @@ impl<R: tokio::io::AsyncRead + Unpin> SseClient<R> {
                 Err(error) => panic!("read SSE frame: {error}"),
             }
 
-            let mut input = self.io.fill_buf().await.expect("read chunked HTTP body");
-            if input.is_empty() {
-                self.chunked.finish().expect("finish chunked HTTP body");
-            }
-            let length = input.len();
-            let body = self.chunked.decode(&mut input).expect("decode HTTP chunk");
-            self.pending.extend_from_slice(body);
-            let consumed = length - input.len();
-            self.io.consume(consumed);
+            read_chunk_data(&mut self.io, &mut self.chunked, &mut self.pending)
+                .await
+                .expect("read chunked HTTP body");
         }
     }
 
@@ -743,8 +736,9 @@ impl<R: tokio::io::AsyncRead + Unpin> SseClient<R> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn sse_client_delivers_delta_before_chunk_ending_arrives() {
+async fn sse_client_delivers_delta_before_the_rest_of_the_chunk_arrives() {
     let payload = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\"}\n\n";
+    let tail = ": keep-alive\n\n";
     let (mut sender, receiver) = tokio::io::duplex(1024);
     let mut client = SseClient {
         io: tokio::io::BufReader::new(receiver),
@@ -752,13 +746,14 @@ async fn sse_client_delivers_delta_before_chunk_ending_arrives() {
         pending: Vec::new(),
     };
     let deadline = Deadline::after(wire_timeout());
-    let first_chunk = format!("{:x}\r\n{payload}", payload.len());
+    let first_chunk = format!("{:x}\r\n{payload}", payload.len() + tail.len());
     sender.write_all(first_chunk.as_bytes()).await.unwrap();
 
     let events = client.first_output(&deadline).await;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["delta"], "answer");
 
+    sender.write_all(tail.as_bytes()).await.unwrap();
     sender.write_all(b"\r\n0\r\n\r\n").await.unwrap();
     assert!(
         timeout(deadline.remaining(), client.next_frame())

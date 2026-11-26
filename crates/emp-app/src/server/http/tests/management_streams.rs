@@ -9,7 +9,7 @@ use crate::{
 };
 use emp_test_support::Deadline;
 use std::{collections::BTreeMap, time::Instant};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
 
 const ACCOUNT_EVENTS: &str = "/api/accounts/events";
 const CALLS: &str = "/api/calls?start=1&end=10";
@@ -19,6 +19,7 @@ const ACCEPT: &str = "Accept: text/event-stream";
 struct Stream {
     io: BufReader<TcpStream>,
     headers: BTreeMap<String, String>,
+    chunked: ChunkDecoder,
     pending: Vec<u8>,
 }
 
@@ -45,6 +46,7 @@ impl Stream {
         Self {
             io: BufReader::new(io),
             headers,
+            chunked: ChunkDecoder::default(),
             pending: Vec::new(),
         }
     }
@@ -57,30 +59,15 @@ impl Stream {
                         String::from_utf8(self.pending.drain(..end + 2).collect()).unwrap(),
                     );
                 }
-                {
-                    let mut line = String::new();
-                    assert_ne!(self.io.read_line(&mut line).await.unwrap(), 0);
-                    let size = usize::from_str_radix(line.trim_end(), 16).unwrap();
-                    let start = self.pending.len();
-                    self.pending.resize(start + size, 0);
-                    self.io
-                        .read_exact(&mut self.pending[start..])
-                        .await
-                        .unwrap();
-                    assert_eq!(
-                        self.io.read_u16().await.unwrap(),
-                        u16::from_be_bytes(*b"\r\n")
-                    );
-                    if size == 0 {
-                        break;
-                    }
+                if self.chunked.is_finished() {
+                    break;
                 }
+                read_chunk_data(&mut self.io, &mut self.chunked, &mut self.pending)
+                    .await
+                    .expect("read management SSE body");
             }
             assert!(self.pending.is_empty(), "partial SSE event");
-            assert_eq!(
-                self.io.read_u8().await.unwrap_err().kind(),
-                std::io::ErrorKind::UnexpectedEof
-            );
+            assert!(self.io.fill_buf().await.unwrap().is_empty());
             None
         })
         .await

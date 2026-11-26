@@ -25,7 +25,11 @@ use axum::{
     extract::{Request, State},
     routing::{any, get, post},
 };
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{
+    Deadline,
+    http::{Body, ChunkDecoder},
+    test_timeout,
+};
 use emp_transport::{MemoryStatus, RequestLimits, RequestLimitsConfig};
 use flate2::{Compression, GzBuilder};
 use serde::Deserialize;
@@ -42,7 +46,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     time::timeout,
 };
@@ -210,20 +214,34 @@ fn decode_report_wire(wire: Vec<u8>) -> Vec<u8> {
     }
     headers.sort_unstable();
     let mut decoded = format!("{status}\r\n{}\r\n\r\n", headers.join("\r\n")).into_bytes();
-    let mut body = &wire[split + 4..];
     assert!(chunked.is_some(), "missing chunked transfer encoding");
-    loop {
-        let end = body.windows(2).position(|bytes| bytes == b"\r\n").unwrap();
-        let size = usize::from_str_radix(std::str::from_utf8(&body[..end]).unwrap(), 16).unwrap();
-        body = &body[end + 2..];
-        decoded.extend_from_slice(&body[..size]);
-        assert_eq!(&body[size..size + 2], b"\r\n");
-        body = &body[size + 2..];
-        if size == 0 {
-            assert!(body.is_empty());
-            return decoded;
+    let mut body = Body::new(&wire[split + 4..], true);
+    std::io::Read::read_to_end(&mut body, &mut decoded).unwrap();
+    assert!(body.get_mut().is_empty());
+    decoded
+}
+
+async fn read_chunk_data(
+    io: &mut (impl AsyncBufRead + Unpin),
+    decoder: &mut ChunkDecoder,
+    output: &mut Vec<u8>,
+) -> std::io::Result<()> {
+    while !decoder.is_finished() {
+        let mut input = io.fill_buf().await?;
+        if input.is_empty() {
+            return decoder.finish();
+        }
+        let length = input.len();
+        let body = decoder.decode(&mut input)?;
+        let delivered = !body.is_empty();
+        output.extend_from_slice(body);
+        let consumed = length - input.len();
+        io.consume(consumed);
+        if delivered {
+            break;
         }
     }
+    Ok(())
 }
 
 #[cfg(unix)]
