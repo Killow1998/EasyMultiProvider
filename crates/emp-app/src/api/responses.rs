@@ -1,13 +1,16 @@
 use crate::api::history_response::{PreparationOutput, prepare_http_error};
-use crate::api::streaming::ObservedSse;
 use crate::api::streaming::serve_external_stream;
 use crate::api::streaming::serve_generated_response;
 use crate::api::streaming::serve_native_stream;
+use crate::api::streaming::{ModelSse, ObservedSse};
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::proxy::workflow::{self, ContextPreparation};
 use crate::server::http::stream::BodyOutput;
-use crate::server::http::{error::HttpReply, inference::InferenceOutcome};
+use crate::server::http::{
+    error::HttpReply,
+    inference::{InferenceOutcome, ModelOutcome},
+};
 use crate::services::compaction::external_compaction_response;
 use crate::services::compaction::has_trailing_compaction_trigger;
 use crate::services::native;
@@ -15,8 +18,11 @@ use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::providers::save_learned_protocol;
 use crate::services::request_preparation::{PreparedRequest, RequestOperation};
 use crate::util::projection_ids;
-use emp_domain::json_truthy;
+use emp_domain::{ResolvedRoute, json_truthy};
+use emp_router::ProjectionIds;
 use emp_state::{config::LearnedProtocol, observed_at_now};
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 pub(crate) fn execute<'a>(
     downstream: &mut BodyOutput<'a>,
@@ -99,195 +105,21 @@ pub(crate) fn execute<'a>(
     };
     observation.phase(Phase::Execute);
     if route.dialect != emp_domain::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
-        let started = std::time::Instant::now();
-        let mut usage = crate::services::request_outcome::RequestGuard::deferred(
-            state,
-            &route,
-            &body,
-            &incoming,
-            None,
-            "responses",
-        )
-        .started_at(started);
-        let (compacted, candidate) = if crate::services::claude_cli::selected(&route) {
-            let summary_body = crate::services::compaction::compaction_summary_body(&body);
-            let mut monitor = downstream.disconnect().ok();
-            usage.track_route();
-            match crate::services::claude_cli::execute_complete(
-                state,
-                &route,
-                &summary_body,
-                &incoming,
-                monitor.as_mut(),
-                &mut usage,
-                &mut |_, _| Ok(()),
-            ) {
-                Ok(completion) => {
-                    let Some(summary) = crate::services::compaction::response_output_text(
-                        &completion.response.body,
-                    ) else {
-                        return InferenceOutcome::Buffered(HttpReply::error(
-                            502,
-                            "external compaction failed",
-                            Some("external_compaction_failed"),
-                        ));
-                    };
-                    usage.http_status(completion.response.status);
-                    let compacted =
-                        match crate::services::compaction::external_compaction_from_summary(
-                            &body, &summary,
-                        ) {
-                            Ok(compacted) => compacted,
-                            Err(error) => {
-                                return crate::api::history_response::compaction_error_response(
-                                    error,
-                                )
-                                .into();
-                            }
-                        };
-                    (compacted, completion.route)
-                }
-                Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
-                    usage.disconnected();
-                    return InferenceOutcome::NoBufferedReply;
-                }
-                Err(error) => {
-                    if let crate::services::claude_cli::ClaudeCliError::Router(router_error) =
-                        &error
-                    {
-                        usage.router_error(router_error);
-                    } else if matches!(
-                        &error,
-                        crate::services::claude_cli::ClaudeCliError::ShuttingDown
-                    ) {
-                        usage.http_status(503);
-                    }
-                    return crate::api::claude_response::http_response_for_route(&error, &route)
-                        .into();
-                }
-            }
-        } else {
-            let mut monitor = downstream.disconnect().ok();
-            match external_compaction_response(
-                state,
-                &route,
-                &body,
-                &incoming,
-                &ids,
-                monitor.as_mut(),
-                &mut usage,
-            ) {
-                Ok(result) => result,
-                Err(error) => {
-                    return crate::api::history_response::compaction_error_response(error).into();
-                }
-            }
-        };
-        let learned = LearnedProtocol::from_route(&route, candidate.protocol, observed_at_now());
-        usage.observe(&compacted);
-        usage.finish();
-        save_learned_protocol(state, learned);
-        if body.get("stream").is_some_and(json_truthy) {
-            let downstream = ObservedSse::new(downstream, observation, &incoming);
-            return serve_generated_response(downstream, usage, compacted, &ids);
-        }
-        let compacted = match serde_json::to_vec(&compacted) {
-            Ok(body) => body,
-            Err(_) => {
-                return InferenceOutcome::Buffered(HttpReply::error(
-                    500,
-                    "internal server error",
-                    None,
-                ));
-            }
-        };
-        return InferenceOutcome::Buffered(HttpReply::new(200, compacted));
+        let downstream = ObservedSse::new(downstream, observation, &incoming);
+        return execute_compaction(downstream, state, &route, &body, &incoming, &ids).into();
     }
     if crate::services::claude_cli::selected(&route) {
-        let started = std::time::Instant::now();
-        let mut monitor = downstream.disconnect().ok();
-        let mut usage = crate::services::request_outcome::RequestGuard::new(
+        let downstream = ObservedSse::new(downstream, observation, &incoming);
+        return execute_claude(
+            downstream,
             state,
             &route,
             &body,
             &incoming,
-            None,
-            "responses",
+            &ids,
+            stream_requested,
         )
-        .started_at(started);
-        let mut downstream = ObservedSse::new(downstream, observation, &incoming);
-        let mut live =
-            crate::api::claude_stream::LiveText::new(&ids, false, |event: &serde_json::Value| {
-                if event["type"] == "response.created" {
-                    downstream.head()?;
-                }
-                let frame = crate::services::events::sse_frame(
-                    event["type"].as_str().expect("event type"),
-                    event,
-                )
-                .map_err(std::io::Error::other)?;
-                downstream.event(event, &[frame])
-            });
-        let completion = match crate::services::claude_cli::execute_complete(
-            state,
-            &route,
-            &body,
-            &incoming,
-            monitor.as_mut(),
-            &mut usage,
-            &mut |id, text| {
-                if stream_requested {
-                    live.push(id, text)
-                } else {
-                    Ok(())
-                }
-            },
-        ) {
-            Ok(completion) => completion,
-            Err(error) => {
-                let disconnected = matches!(
-                    error,
-                    crate::services::claude_cli::ClaudeCliError::Disconnected
-                );
-                if live.started() {
-                    if !disconnected {
-                        let _ = live.event(
-                            &crate::api::claude_response::websocket_value_for_route(&error, &route),
-                        );
-                    }
-                    return downstream.finish(usage, Ok(()));
-                }
-                if disconnected {
-                    return InferenceOutcome::NoBufferedReply;
-                }
-                return crate::api::claude_response::http_response_for_route(&error, &route).into();
-            }
-        };
-        let learned =
-            LearnedProtocol::from_route(&route, completion.route.protocol, observed_at_now());
-        let route = &completion.route;
-        let mut response_value = completion.response.body;
-        if stream_requested {
-            response_value["id"] = serde_json::json!(ids.response_id());
-        }
-        usage.candidate(route);
-        usage.http_status(completion.response.status);
-        usage.upstream_observation(&completion.response.observation);
-        usage.observe(&response_value);
-        usage.finish();
-        if response_value["status"] == "completed" {
-            crate::services::context::record(state, route, &body, true);
-        }
-        save_learned_protocol(state, learned);
-        if stream_requested {
-            let _ = live.finish(response_value);
-            return downstream.finish(usage, Ok(()));
-        }
-        let body = serde_json::to_vec(&response_value).expect("validated Claude response");
-        return InferenceOutcome::Buffered(
-            HttpReply::new(completion.response.status, body)
-                .with_content_type(completion.response.content_type),
-        );
+        .into();
     }
     let native = route.dialect == emp_domain::Dialect::CodexNative;
     let streaming = body.get("stream").is_some_and(json_truthy);
@@ -297,7 +129,8 @@ pub(crate) fn execute<'a>(
             serve_native_stream(downstream, state, &route, &config, &body, &incoming, &ids)
         } else {
             serve_external_stream(downstream, state, &route, &body, &incoming, &ids)
-        };
+        }
+        .into();
     }
     if native {
         return crate::api::native_response::complete_response(native::complete(
@@ -324,4 +157,200 @@ pub(crate) fn execute<'a>(
     HttpReply::new(result.status, body)
         .with_content_type(result.content_type)
         .into()
+}
+
+fn execute_compaction<'a>(
+    downstream: ObservedSse<'_, 'a>,
+    state: &'a ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+) -> ModelOutcome {
+    let started = std::time::Instant::now();
+    let mut usage = crate::services::request_outcome::RequestGuard::deferred(
+        state,
+        route,
+        body,
+        incoming,
+        None,
+        "responses",
+    )
+    .started_at(started);
+    let (compacted, candidate) = if crate::services::claude_cli::selected(route) {
+        let summary_body = crate::services::compaction::compaction_summary_body(body);
+        let mut monitor = downstream.disconnect();
+        usage.track_route();
+        match crate::services::claude_cli::execute_complete(
+            state,
+            route,
+            &summary_body,
+            incoming,
+            monitor.as_mut(),
+            &mut usage,
+            |_, _, _| Ok(()),
+        ) {
+            Ok(completion) => {
+                let Some(summary) =
+                    crate::services::compaction::response_output_text(&completion.response.body)
+                else {
+                    return ModelOutcome::Buffered(HttpReply::error(
+                        502,
+                        "external compaction failed",
+                        Some("external_compaction_failed"),
+                    ));
+                };
+                usage.http_status(completion.response.status);
+                let compacted = match crate::services::compaction::external_compaction_from_summary(
+                    body, &summary,
+                ) {
+                    Ok(compacted) => compacted,
+                    Err(error) => {
+                        return crate::api::history_response::compaction_error_response(error)
+                            .into();
+                    }
+                };
+                (compacted, completion.route)
+            }
+            Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
+                usage.disconnected();
+                return ModelOutcome::Finished;
+            }
+            Err(error) => {
+                if let crate::services::claude_cli::ClaudeCliError::Router(router_error) = &error {
+                    usage.router_error(router_error);
+                } else if matches!(
+                    &error,
+                    crate::services::claude_cli::ClaudeCliError::ShuttingDown
+                ) {
+                    usage.http_status(503);
+                }
+                return crate::api::claude_response::http_response_for_route(&error, route).into();
+            }
+        }
+    } else {
+        let mut monitor = downstream.disconnect();
+        match external_compaction_response(
+            state,
+            route,
+            body,
+            incoming,
+            ids,
+            monitor.as_mut(),
+            &mut usage,
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                return crate::api::history_response::compaction_error_response(error).into();
+            }
+        }
+    };
+    let learned = LearnedProtocol::from_route(route, candidate.protocol, observed_at_now());
+    usage.observe(&compacted);
+    usage.finish();
+    save_learned_protocol(state, learned);
+    if body.get("stream").is_some_and(json_truthy) {
+        return serve_generated_response(downstream.with_request(usage), compacted, ids);
+    }
+    let compacted = match serde_json::to_vec(&compacted) {
+        Ok(body) => body,
+        Err(_) => {
+            return ModelOutcome::Buffered(HttpReply::error(500, "internal server error", None));
+        }
+    };
+    HttpReply::new(200, compacted).into()
+}
+
+fn execute_claude<'a>(
+    downstream: ObservedSse<'_, 'a>,
+    state: &'a ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+    stream_requested: bool,
+) -> ModelOutcome {
+    let started = std::time::Instant::now();
+    let mut monitor = downstream.disconnect();
+    let usage = crate::services::request_outcome::RequestGuard::new(
+        state,
+        route,
+        body,
+        incoming,
+        None,
+        "responses",
+    )
+    .started_at(started);
+    let mut downstream = downstream.with_request(usage);
+    let send = |downstream: &mut ModelSse<'_, '_>, event: &Value| {
+        if event["type"] == "response.created" {
+            downstream.open(std::iter::empty())?;
+        }
+        let frame =
+            crate::services::events::sse_frame(event["type"].as_str().expect("event type"), event)
+                .map_err(std::io::Error::other)?;
+        downstream.event(event, &[frame])
+    };
+    let mut live = crate::api::claude_stream::LiveText::new(ids, false);
+    let completion = match crate::services::claude_cli::execute_complete(
+        state,
+        route,
+        body,
+        incoming,
+        monitor.as_mut(),
+        &mut downstream,
+        |downstream, id, text| {
+            if stream_requested {
+                live.push(id, text, |event| send(downstream, event))
+            } else {
+                Ok(())
+            }
+        },
+    ) {
+        Ok(completion) => completion,
+        Err(error) => {
+            let disconnected = matches!(
+                error,
+                crate::services::claude_cli::ClaudeCliError::Disconnected
+            );
+            if live.started() {
+                if !disconnected {
+                    let _ = send(
+                        &mut downstream,
+                        &crate::api::claude_response::websocket_value_for_route(&error, route),
+                    );
+                }
+                return downstream.finish(Ok(()));
+            }
+            if disconnected {
+                return ModelOutcome::Finished;
+            }
+            return crate::api::claude_response::http_response_for_route(&error, route).into();
+        }
+    };
+    let learned = LearnedProtocol::from_route(route, completion.route.protocol, observed_at_now());
+    let route = &completion.route;
+    let mut response_value = completion.response.body;
+    if stream_requested {
+        response_value["id"] = serde_json::json!(ids.response_id());
+    }
+    let usage = downstream.as_mut();
+    usage.candidate(route);
+    usage.http_status(completion.response.status);
+    usage.upstream_observation(&completion.response.observation);
+    usage.observe(&response_value);
+    usage.finish();
+    if response_value["status"] == "completed" {
+        crate::services::context::record(state, route, body, true);
+    }
+    save_learned_protocol(state, learned);
+    if stream_requested {
+        let _ = live.finish(response_value, |event| send(&mut downstream, event));
+        return downstream.finish(Ok(()));
+    }
+    let body = serde_json::to_vec(&response_value).expect("validated Claude response");
+    ModelOutcome::Buffered(
+        HttpReply::new(completion.response.status, body)
+            .with_content_type(completion.response.content_type),
+    )
 }

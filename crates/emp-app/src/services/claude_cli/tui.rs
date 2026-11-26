@@ -55,20 +55,20 @@ impl Drop for Turn {
     clippy::too_many_arguments,
     reason = "The turn executor needs routing, child identity, cancellation, accounting and streamed output"
 )]
-pub(super) fn execute(
+pub(super) fn execute<'request, Output: AsMut<super::RequestGuard<'request>>>(
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
     incoming: &BTreeMap<String, String>,
     executable: &emp_codex::installed_cli::InstalledClaudeCli,
     mut monitor: Option<&mut DisconnectMonitor>,
-    usage: &mut crate::services::request_outcome::RequestGuard<'_>,
-    text: &mut dyn FnMut(&str, &str) -> std::io::Result<()>,
+    output: &mut Output,
+    mut text: impl FnMut(&mut Output, &str, &str) -> std::io::Result<()>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let candidate = route
         .with_protocol(Protocol::AnthropicMessages)
         .map_err(|_| ClaudeCliError::Failure("unsupported_provider_protocol"))?;
-    usage.candidate(&candidate);
+    output.as_mut().candidate(&candidate);
     let identity = identity(body, incoming);
     let stateless = identity.is_none();
     let (key, turn_id) = identity.unwrap_or_else(|| {
@@ -196,7 +196,7 @@ pub(super) fn execute(
             .map_err(|_| ClaudeCliError::Failure("claude_cli_process_failed"))?;
     }
     let mut cancelled = None;
-    let (output, completed) = loop {
+    let (transcript, completed) = loop {
         if cancelled.is_none()
             && let Some(reason) = cancellation_reason(state, &mut monitor)
         {
@@ -210,9 +210,9 @@ pub(super) fn execute(
             });
         }
         match turn.receiver.recv_timeout(Duration::from_millis(25)) {
-            Ok(Reply::Dispatched) => usage.dispatch(),
+            Ok(Reply::Dispatched) => output.as_mut().dispatch(),
             Ok(Reply::Text(id, delta)) => {
-                if cancelled.is_none() && text(&id, &delta).is_err() {
+                if cancelled.is_none() && text(output, &id, &delta).is_err() {
                     turn.cancelled.cancel();
                     cancelled = Some(ClaudeCliError::Disconnected);
                 }
@@ -230,10 +230,10 @@ pub(super) fn execute(
         }
     };
     let result =
-        completed.and_then(|()| projection::response_from_cli(&output, &candidate, body, 200));
-    if result.is_err() && output["usage"].is_object() {
-        usage.observe_upstream(
-            &json!({"usage":emp_protocol::anthropic_projection::anthropic_usage(&output["usage"])}),
+        completed.and_then(|()| projection::response_from_cli(&transcript, &candidate, body, 200));
+    if result.is_err() && transcript["usage"].is_object() {
+        output.as_mut().observe_upstream(
+            &json!({"usage":emp_protocol::anthropic_projection::anthropic_usage(&transcript["usage"])}),
         );
     }
     turn.pending = result

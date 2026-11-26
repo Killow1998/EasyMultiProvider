@@ -53,13 +53,14 @@ pub(super) async fn serve(
         )
         .started_at(started)
         .transport("websocket");
-        let mut live = crate::api::claude_stream::LiveText::new(&ids, true, |event: &Value| {
+        let mut live = crate::api::claude_stream::LiveText::new(&ids, true);
+        let send = |event: &Value| {
             let (acknowledge, receipt) = oneshot::channel();
             events
                 .blocking_send(Delivery::Event(event.clone(), acknowledge))
                 .map_err(io::Error::other)?;
             receipt.blocking_recv().map_err(io::Error::other)?
-        });
+        };
         let completion = crate::services::claude_cli::execute_complete(
             &state,
             &route,
@@ -67,7 +68,7 @@ pub(super) async fn serve(
             &headers,
             Some(&mut monitor),
             &mut usage,
-            &mut |id, text| live.push(id, text),
+            |_, id, text| live.push(id, text, send),
         );
         let result = match completion {
             Ok(completion) => {
@@ -88,7 +89,7 @@ pub(super) async fn serve(
                     crate::services::context::record(&state, &selected_route, &body, true);
                 }
                 save_learned_protocol(&state, learned);
-                live.finish(response)
+                live.finish(response, send)
             }
             Err(
                 crate::services::claude_cli::ClaudeCliError::Disconnected
@@ -104,7 +105,7 @@ pub(super) async fn serve(
             }
             Err(error) => {
                 usage.finish();
-                live.event(&crate::api::claude_response::websocket_value_for_route(
+                send(&crate::api::claude_response::websocket_value_for_route(
                     &error, &route,
                 ))
             }

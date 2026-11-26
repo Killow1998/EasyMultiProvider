@@ -3,7 +3,7 @@ use super::{
     error::{EntryError, HttpReply, no_response},
     proxy::{AdmittedCallback, RequestAccess, request_source, require_proxy},
     raw_head,
-    stream::{BodyOutput, SseHandoff, StreamConnection},
+    stream::{BodyOutput, StreamConnection},
 };
 use crate::{
     api::{compact, decisions, images, responses, search},
@@ -43,7 +43,34 @@ pub(crate) enum InferenceOutcome {
     Buffered(HttpReply),
     Closed,
     NoBufferedReply,
-    Streamed(SseHandoff),
+}
+
+pub(crate) enum ModelOutcome {
+    Buffered(HttpReply),
+    Closed,
+    Finished,
+}
+
+impl From<HttpReply> for ModelOutcome {
+    fn from(reply: HttpReply) -> Self {
+        Self::Buffered(reply)
+    }
+}
+
+impl From<Option<HttpReply>> for ModelOutcome {
+    fn from(reply: Option<HttpReply>) -> Self {
+        reply.map_or(Self::Closed, Self::Buffered)
+    }
+}
+
+impl From<ModelOutcome> for InferenceOutcome {
+    fn from(outcome: ModelOutcome) -> Self {
+        match outcome {
+            ModelOutcome::Buffered(reply) => Self::Buffered(reply),
+            ModelOutcome::Closed => Self::Closed,
+            ModelOutcome::Finished => Self::NoBufferedReply,
+        }
+    }
 }
 
 impl From<HttpReply> for InferenceOutcome {
@@ -248,7 +275,6 @@ async fn submit(
                     no_response()
                 }
                 InferenceOutcome::NoBufferedReply => no_response(),
-                InferenceOutcome::Streamed(_handoff) => no_response(),
             });
             *inference.model.lock().expect("model observation") = observation;
         }

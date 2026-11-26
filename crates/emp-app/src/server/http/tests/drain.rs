@@ -216,13 +216,14 @@ fn external_route_stays_busy_until_the_terminal_frame_is_written() {
             } else {
                 b"event: response.completed\n"
             };
-            let written = publications.clone();
+            let delivered = publications.clone();
             let probe = Probe::arm(
                 fixture,
                 "/v1/responses",
-                Some(WriteTrigger::Bytes(
+                Some(WriteTrigger::observe_delivery(
                     marker,
-                    Some(Box::new(move || written.terminal_written())),
+                    !websocket,
+                    move || delivered.delivered(),
                 )),
             );
             let at_handoff = (!websocket).then(|| stream_handoff(fixture));
@@ -363,13 +364,14 @@ fn claude_cli_sse_half_close_keeps_route_busy_until_the_queued_delta_is_written(
     ).unwrap();
     Fixture::with_directory(directory).run_wire(async |fixture, address| {
         let publications = fixture.server.state.backend.activity.record_publications();
-        let written = publications.clone();
+        let delivered = publications.clone();
         let probe = Probe::arm(
             fixture,
             "/v1/responses",
-            Some(WriteTrigger::Bytes(
+            Some(WriteTrigger::observe_delivery(
                 b"event: response.output_text.delta\n",
-                Some(Box::new(move || written.terminal_written())),
+                true,
+                move || delivered.delivered(),
             )),
         );
         let at_handoff = stream_handoff(fixture);

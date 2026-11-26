@@ -102,6 +102,7 @@ impl Delivery {
             if let Some(diagnostics) = diagnostics {
                 diagnostics.flushed();
             }
+            self.write_hook.frame_flushed();
             let _ = ack.0.try_send(());
         }
         if let Some(body) = body {
@@ -135,8 +136,6 @@ pub(crate) struct BodyOutput<'a> {
     frame_pending: bool,
     hooks: ServerHooksHandle,
 }
-
-pub(crate) struct SseHandoff(());
 
 enum ResponseWork {
     Request(BusinessToken),
@@ -254,10 +253,14 @@ impl<'a> BodyOutput<'a> {
         self.after_handoff = Some(Box::new(effect));
     }
 
-    pub(crate) fn handoff_sse(&mut self, mut request: RequestGuard<'a>) -> Option<SseHandoff> {
-        request.finish();
+    pub(crate) fn retain_request(&mut self, request: RequestGuard<'a>) {
         self.request_activity = Some(request);
-        self.stream.as_ref().map(|_| SseHandoff(()))
+    }
+
+    pub(crate) fn stream_request(&mut self) -> &mut RequestGuard<'a> {
+        self.request_activity
+            .as_mut()
+            .expect("model stream request")
     }
 
     pub(super) fn finish(mut self, response: impl FnOnce() -> Response) -> io::Result<()> {

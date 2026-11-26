@@ -82,8 +82,11 @@ pub(super) fn prepare_http_error(
     };
     let failed = history_stream_error(&history, observation);
     if let Ok(frame) = sse_frame("response.failed", &failed) {
+        let _ = observation.written(
+            downstream.head(200, "text/event-stream", std::iter::empty()),
+            false,
+        );
         let mut downstream = ObservedSse::new(downstream, observation, headers);
-        let _ = downstream.head();
         let _ = downstream.frames(&[frame], "response.failed");
     } else if !at_destination {
         return HttpReply::error(500, "internal server error", None).into();

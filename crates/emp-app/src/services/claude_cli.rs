@@ -17,6 +17,7 @@ pub(crate) mod tui;
 
 use crate::app::ServerState;
 use crate::services::disconnect::{DisconnectMonitor, DisconnectRace};
+use crate::services::request_outcome::RequestGuard;
 use emp_domain::ResolvedRoute;
 use emp_router::CompleteResponse;
 use serde_json::{Value, json};
@@ -49,14 +50,14 @@ pub(crate) fn preflight_input(body: &Value) -> Result<(), ClaudeCliError> {
 
 pub(crate) use context::{assess_context, context_estimation_payload};
 
-pub(crate) fn execute_complete(
+pub(crate) fn execute_complete<'request, Output: AsMut<RequestGuard<'request>>>(
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
     incoming: &BTreeMap<String, String>,
     monitor: Option<&mut DisconnectMonitor>,
-    usage: &mut crate::services::request_outcome::RequestGuard<'_>,
-    text: &mut dyn FnMut(&str, &str) -> std::io::Result<()>,
+    output: &mut Output,
+    text: impl FnMut(&mut Output, &str, &str) -> std::io::Result<()>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let started = Instant::now();
     let result = (|| {
@@ -73,7 +74,7 @@ pub(crate) fn execute_complete(
             incoming,
             &executable,
             monitor,
-            usage,
+            output,
             text,
         )
     })();
@@ -84,7 +85,7 @@ pub(crate) fn execute_complete(
             ClaudeCliError::Disconnected => (499, "client_disconnected"),
             ClaudeCliError::ShuttingDown => (503, "server_shutting_down"),
         };
-        usage.claude_error(error);
+        output.as_mut().claude_error(error);
         state.backend.diagnostics.journal.event(
             "warning",
             "claude_cli_request_failed",

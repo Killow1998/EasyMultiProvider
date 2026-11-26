@@ -47,7 +47,7 @@ pub(crate) fn execute_summary_request(
             incoming,
             monitor,
             usage,
-            &mut |_, _| Ok(()),
+            |_, _, _| Ok(()),
         ) {
             Ok(completion) => Ok((completion.response, completion.route)),
             Err(crate::services::claude_cli::ClaudeCliError::Router(error)) => {

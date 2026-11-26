@@ -3,9 +3,8 @@ use emp_router::ProjectionIds;
 use serde_json::{Value, json};
 use std::io;
 
-pub(super) struct LiveText<F> {
+pub(super) struct LiveText {
     ids: ProjectionIds,
-    send: F,
     started: bool,
     items: Vec<PublicText>,
 }
@@ -23,11 +22,10 @@ impl PublicText {
     }
 }
 
-impl<F: FnMut(&Value) -> io::Result<()>> LiveText<F> {
-    pub(super) fn new(ids: &ProjectionIds, started: bool, send: F) -> Self {
+impl LiveText {
+    pub(super) fn new(ids: &ProjectionIds, started: bool) -> Self {
         Self {
             ids: ids.clone(),
-            send,
             started,
             items: Vec::new(),
         }
@@ -37,25 +35,28 @@ impl<F: FnMut(&Value) -> io::Result<()>> LiveText<F> {
         self.started
     }
 
-    pub(super) fn event(&mut self, event: &Value) -> io::Result<()> {
-        (self.send)(event)
-    }
-
-    pub(super) fn push(&mut self, source: &str, delta: &str) -> io::Result<()> {
+    pub(super) fn push(
+        &mut self,
+        source: &str,
+        delta: &str,
+        mut send: impl FnMut(&Value) -> io::Result<()>,
+    ) -> io::Result<()> {
         if !self.started {
             self.started = true;
-            self.event(&json!({"type":"response.created","response":{"id":self.ids.response_id(),"object":"response","status":"in_progress","output":[]}}))?;
+            send(
+                &json!({"type":"response.created","response":{"id":self.ids.response_id(),"object":"response","status":"in_progress","output":[]}}),
+            )?;
         }
         if self.items.last().is_none_or(|item| source != item.source) {
-            self.close_item()?;
+            self.close_item(&mut send)?;
             let index = self.items.len();
             let id = format!("{}_live_{index}", self.ids.message_id());
             let item = json!({"id":id,"type":"message","role":"assistant","status":"in_progress","content":[]});
-            self.event(
-                &json!({"type":"response.output_item.added","output_index":index,"item":item}),
-            )?;
+            send(&json!({"type":"response.output_item.added","output_index":index,"item":item}))?;
             let part = json!({"type":"output_text","text":"","annotations":[]});
-            self.event(&json!({"type":"response.content_part.added","item_id":id,"output_index":index,"content_index":0,"part":part}))?;
+            send(
+                &json!({"type":"response.content_part.added","item_id":id,"output_index":index,"content_index":0,"part":part}),
+            )?;
             self.items.push(PublicText {
                 source: source.to_owned(),
                 id,
@@ -66,22 +67,30 @@ impl<F: FnMut(&Value) -> io::Result<()>> LiveText<F> {
         let item = &mut self.items[index];
         item.text.push_str(delta);
         let event = json!({"type":"response.output_text.delta","item_id":item.id,"output_index":index,"content_index":0,"delta":delta});
-        self.event(&event)
+        send(&event)
     }
 
-    fn close_item(&mut self) -> io::Result<()> {
+    fn close_item(&self, mut send: impl FnMut(&Value) -> io::Result<()>) -> io::Result<()> {
         let Some(item) = self.items.last() else {
             return Ok(());
         };
         let item = item.completed();
         let index = self.items.len() - 1;
-        self.event(&json!({"type":"response.output_text.done","item_id":item["id"],"output_index":index,"content_index":0,"text":item["content"][0]["text"]}))?;
-        self.event(&json!({"type":"response.content_part.done","item_id":item["id"],"output_index":index,"content_index":0,"part":item["content"][0]}))?;
-        self.event(&json!({"type":"response.output_item.done","output_index":index,"item":item}))
+        send(
+            &json!({"type":"response.output_text.done","item_id":item["id"],"output_index":index,"content_index":0,"text":item["content"][0]["text"]}),
+        )?;
+        send(
+            &json!({"type":"response.content_part.done","item_id":item["id"],"output_index":index,"content_index":0,"part":item["content"][0]}),
+        )?;
+        send(&json!({"type":"response.output_item.done","output_index":index,"item":item}))
     }
 
-    pub(super) fn finish(&mut self, mut response: Value) -> io::Result<()> {
-        self.close_item()?;
+    pub(super) fn finish(
+        &mut self,
+        mut response: Value,
+        mut send: impl FnMut(&Value) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.close_item(&mut send)?;
         response["id"] = json!(self.ids.response_id());
         let output = response["output"]
             .as_array_mut()
@@ -110,7 +119,7 @@ impl<F: FnMut(&Value) -> io::Result<()>> LiveText<F> {
             {
                 continue;
             }
-            self.event(&event)?;
+            send(&event)?;
         }
         Ok(())
     }

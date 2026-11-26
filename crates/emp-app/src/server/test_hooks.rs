@@ -129,6 +129,9 @@ mod implementation {
         }
 
         #[inline]
+        pub(in crate::server) fn frame_flushed(&self) {}
+
+        #[inline]
         pub(in crate::server) fn cancel(&self) {}
     }
 
@@ -157,9 +160,31 @@ mod implementation {
     }
 
     pub(in crate::server) enum WriteTrigger {
-        Bytes(&'static [u8], Option<OutputProbe>),
+        Bytes(&'static [u8], Option<DeliveryProbe>),
         Output,
         Frame(FrameMatcher),
+    }
+
+    #[cfg(unix)]
+    impl WriteTrigger {
+        pub(in crate::server) fn observe_delivery(
+            marker: &'static [u8],
+            confirm_sse_flush: bool,
+            delivered: impl FnOnce() + Send + 'static,
+        ) -> Self {
+            Self::Bytes(
+                marker,
+                Some(DeliveryProbe {
+                    confirm_sse_flush,
+                    delivered: Box::new(delivered),
+                }),
+            )
+        }
+    }
+
+    pub(in crate::server) struct DeliveryProbe {
+        confirm_sse_flush: bool,
+        delivered: OutputProbe,
     }
 
     type FrameMatcher = Box<dyn Fn(&[u8]) -> bool + Send>;
@@ -412,15 +437,19 @@ mod implementation {
                     let _ = ready!(Pin::new(release).poll(cx));
                     probe.release = None;
                 }
-                if matches!(probe.trigger, WriteTrigger::Bytes(_, Some(_))) {
+                if let WriteTrigger::Bytes(_, Some(delivery)) = &probe.trigger {
+                    if delivery.confirm_sse_flush {
+                        drop(armed);
+                        return write(cx);
+                    }
                     let result = ready!(write(cx));
                     if result.is_err() || result.as_ref().is_ok_and(|written| *written == buf.len())
                     {
                         if let WriteTrigger::Bytes(_, written) = &mut probe.trigger
                             && result.is_ok()
-                            && let Some(written) = written.take()
+                            && let Some(delivery) = written.take()
                         {
-                            written();
+                            (delivery.delivered)();
                         }
                         armed.take();
                     }
@@ -430,6 +459,22 @@ mod implementation {
             }
             drop(armed);
             write(cx)
+        }
+
+        pub(in crate::server) fn frame_flushed(&self) {
+            let mut armed = self.0.lock().unwrap();
+            if armed.as_ref().is_some_and(|probe| {
+                matches!(&probe.trigger, WriteTrigger::Bytes(_, Some(delivery)) if delivery.confirm_sse_flush)
+                    && probe.reached.is_none()
+                    && probe.release.is_none()
+            }) && let Some(WriteProbe {
+                trigger: WriteTrigger::Bytes(_, Some(delivery)),
+                ..
+            }) = armed.take()
+            {
+                drop(armed);
+                (delivery.delivered)();
+            }
         }
 
         pub(in crate::server) fn cancel(&self) {

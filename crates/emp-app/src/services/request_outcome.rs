@@ -465,6 +465,12 @@ impl Drop for RequestGuard<'_> {
     }
 }
 
+impl<'a> AsMut<RequestGuard<'a>> for RequestGuard<'a> {
+    fn as_mut(&mut self) -> &mut Self {
+        self
+    }
+}
+
 impl PendingRequest {
     fn observe_event(
         &mut self,

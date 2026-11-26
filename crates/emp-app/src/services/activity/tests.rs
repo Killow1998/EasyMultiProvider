@@ -27,7 +27,7 @@ pub(crate) struct Publications {
 #[derive(Default)]
 struct History {
     snapshots: Vec<Value>,
-    terminal_written: Option<usize>,
+    delivered: Option<usize>,
 }
 
 impl ActivityService {
@@ -67,9 +67,9 @@ impl Publications {
     }
 
     #[cfg(unix)]
-    pub(crate) fn terminal_written(&self) {
+    pub(crate) fn delivered(&self) {
         let mut history = self.history.lock().unwrap();
-        history.terminal_written = Some(history.snapshots.len());
+        history.delivered = Some(history.snapshots.len());
     }
 
     pub(crate) fn assert_intervals(&self, request_ids: &[&str], check_delivery: bool) {
@@ -110,9 +110,9 @@ impl Publications {
                 if check_delivery {
                     assert!(
                         history
-                            .terminal_written
-                            .is_some_and(|written| written <= index),
-                        "route became idle before the terminal write: {snapshot}"
+                            .delivered
+                            .is_some_and(|delivered| delivered <= index),
+                        "route became idle before downstream delivery: {snapshot}"
                     );
                 }
             }
