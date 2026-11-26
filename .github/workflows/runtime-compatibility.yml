@@ -107,6 +107,8 @@ jobs:
         run: cargo xtask ci windows-private-state
       - name: Verify restoration before process exit
         run: cargo xtask ci windows-shutdown
+      - name: Verify admission release on client disconnect during a module request
+        run: cargo xtask ci windows-module-runtime
       - name: Select classic console for Windows close-event tests
         shell: pwsh
         run: |

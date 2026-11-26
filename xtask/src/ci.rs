@@ -140,6 +140,13 @@ pub const PROFILES: &[Profile] = &[
         invocations: &[Invocation::lib(&["emp-app"], "lifecycle::shutdown::tests")],
     },
     Profile {
+        name: "windows-module-runtime",
+        invocations: &[Invocation::lib(
+            &["emp-app"],
+            "tests::module_disconnect_contract",
+        )],
+    },
+    Profile {
         name: "windows-exit-process",
         invocations: &[Invocation::new(
             Packages::Selected(&["emp-app"]),
