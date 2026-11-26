@@ -9,19 +9,26 @@ use emp_modules::{
 };
 use emp_storage::diagnostics::ServiceOwner;
 use emp_test_support::{fixture_dir, test_timeout};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs::File,
     io::{self, BufReader},
     sync::{Arc, Mutex, mpsc},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use tempfile::TempDir;
 use tokio::{
-    sync::mpsc as events,
+    sync::{mpsc as events, oneshot},
     task::JoinHandle,
-    time::{sleep_until, timeout, timeout_at},
+    time::{sleep_until, timeout},
 };
+
+#[derive(Default, Deserialize, Serialize)]
+struct NotificationReceipts {
+    call_finished: usize,
+    cancellations: Vec<SystemTime>,
+}
 
 pub(super) fn child(output: File) {
     let manifest: Value =
@@ -72,10 +79,30 @@ pub(super) fn child(output: File) {
         release.send(()).unwrap();
         Ok(Value::Null)
     });
-    Peer::connect(Side::Module, BufReader::new(io::stdin()), output, handlers)
-        .unwrap()
-        .wait()
-        .unwrap();
+    let receipts = Arc::new(Mutex::new(NotificationReceipts::default()));
+    let reported = receipts.clone();
+    handlers.register("module.receipts", move |_, _, _| {
+        Ok(serde_json::to_value(&*reported.lock().unwrap()).unwrap())
+    });
+    Peer::connect_recording_notifications(
+        Side::Module,
+        BufReader::new(io::stdin()),
+        output,
+        handlers,
+        move |method| match method {
+            "$/cancelRequest" => {
+                let received = SystemTime::now();
+                receipts.lock().unwrap().cancellations.push(received);
+            }
+            method if method == CallFinished.method() => {
+                receipts.lock().unwrap().call_finished += 1;
+            }
+            _ => {}
+        },
+    )
+    .unwrap()
+    .wait()
+    .unwrap();
 }
 
 struct Fixture {
@@ -189,11 +216,15 @@ fn dispatch(
     })
 }
 
-async fn release(process: &ModuleProcess) -> Result<Value, CallError> {
+async fn fixture_call(process: &ModuleProcess, method: &'static str) -> Result<Value, CallError> {
     let connection = process.connection();
-    tokio::task::spawn_blocking(move || connection.call("module.release", Value::Null, budget()))
+    tokio::task::spawn_blocking(move || connection.call(method, Value::Null, budget()))
         .await
         .unwrap()
+}
+
+async fn receipts(process: &ModuleProcess) -> NotificationReceipts {
+    serde_json::from_value(fixture_call(process, "module.receipts").await.unwrap()).unwrap()
 }
 
 #[tokio::test]
@@ -252,23 +283,17 @@ async fn call_finished_reaches_a_live_subscriber_after_the_first_exits() {
         .install("zeta", 1, &[CallFinished], Value::Null)
         .await;
     let operation = fixture.capture("finished");
+    operation.bind_caller("fixture");
     first.stop().await.unwrap();
 
     operation.notify_finished(json!({"result":"success"}));
+    assert_eq!(receipts(&unsubscribed).await.call_finished, 0);
     assert_eq!(
         fixture.event().await,
         json!({
             "module_id":"zeta", "method":CallFinished.method(),
-            "params":{"operation_id":"finished", "caller_id":null, "input":{"result":"success"}}
+            "params":{"operation_id":"finished", "caller_id":"fixture", "input":{"result":"success"}}
         })
-    );
-    assert!(
-        timeout(
-            test_timeout(Duration::from_millis(250)).duration(),
-            fixture.seen.recv(),
-        )
-        .await
-        .is_err()
     );
     assert_eq!(
         fixture.failures("finished"),
@@ -297,23 +322,19 @@ async fn hooks_share_a_phase_deadline_and_report_timeout() {
             json!({(ProjectCatalog.method()):"block"}),
         )
         .await;
-    let phase_budget = test_timeout(Duration::from_secs(4))
-        .duration()
-        .min(Duration::from_secs(4));
-    let deadline = Instant::now() + phase_budget;
-    let operation = HookOperation::capture(
-        &fixture.registry,
-        &fixture.diagnostics,
-        Some("deadline"),
-        Some(deadline),
-    )
-    .unwrap();
-    let running = dispatch(operation, ProjectCatalog, Value::Null);
+    let phase_budget = Duration::from_secs(5);
+    let operation = fixture.capture("deadline");
+    let (start, started) = oneshot::channel();
+    let running = tokio::task::spawn_blocking(move || {
+        start.send((Instant::now(), SystemTime::now())).unwrap();
+        operation.dispatch::<bool, _>(ProjectCatalog, || Value::Null, |_, value| Ok(Some(value)))
+    });
+    let (started, wall_started) = started.await.unwrap();
     let entered = fixture.event().await;
     assert_eq!(entered["module_id"], "alpha");
     assert_eq!(entered["method"], ProjectCatalog.method());
-    sleep_until((deadline - phase_budget / 2).into()).await;
-    release(&first).await.unwrap();
+    sleep_until((started + phase_budget / 2).into()).await;
+    fixture_call(&first, "module.release").await.unwrap();
     assert_eq!(
         fixture.event().await,
         json!({"module_id":"alpha","method":"cancelled","params":false})
@@ -321,66 +342,66 @@ async fn hooks_share_a_phase_deadline_and_report_timeout() {
     let entered = fixture.event().await;
     assert_eq!(entered["module_id"], "zeta");
     assert_eq!(entered["method"], ProjectCatalog.method());
-    let observation_end = deadline + phase_budget / 4;
     assert_eq!(
-        timeout_at(observation_end.into(), running)
+        timeout(test_timeout(Duration::from_secs(10)).duration(), running)
             .await
             .unwrap()
             .unwrap(),
         Ok(None)
     );
-    assert!(Instant::now() >= deadline);
+    let received = receipts(&later).await.cancellations;
+    let [received] = received.as_slice() else {
+        panic!("expected exactly one cancellation frame, got {received:?}");
+    };
+    let elapsed = received.duration_since(wall_started).unwrap();
+    let window = phase_budget..=phase_budget + phase_budget / 4;
+    assert!(
+        window.contains(&elapsed),
+        "expected a cancellation frame in {window:?}, got {elapsed:?}"
+    );
     assert_eq!(
         fixture.failures("deadline"),
         [("zeta".into(), "Timeout".into())]
-    );
-    release(&later).await.unwrap();
-    assert_eq!(
-        fixture.event().await,
-        json!({"module_id":"zeta","method":"cancelled","params":true})
     );
     first.stop().await.unwrap();
     later.stop().await.unwrap();
 }
 
 #[tokio::test]
-async fn resolve_route_exit_fails_closed_without_revoking_the_new_generation() {
-    let mut fixture = Fixture::new();
-    let old = fixture
-        .install(
-            "router",
-            1,
-            &[ResolveRoute],
-            json!({(ResolveRoute.method()):"exit"}),
-        )
-        .await;
-    let running = dispatch(fixture.capture("old"), ResolveRoute, Value::Null);
-    assert_eq!(fixture.event().await["params"]["operation_id"], "old");
+async fn hook_exit_fails_closed_without_revoking_the_new_generation() {
+    for phase in [CheckAccess, ResolveRoute] {
+        let mut fixture = Fixture::new();
+        let old = fixture
+            .install("router", 1, &[phase], json!({(phase.method()):"exit"}))
+            .await;
+        let running = dispatch(fixture.capture("old"), phase, Value::Null);
+        assert_eq!(fixture.event().await["params"]["operation_id"], "old");
 
-    let new = fixture
-        .install(
-            "router",
-            2,
-            &[ResolveRoute],
-            json!({(ResolveRoute.method()):{"status":"claimed","value":true}}),
-        )
-        .await;
-    assert!(matches!(
-        release(&old).await,
-        Ok(_) | Err(CallError::Disconnected)
-    ));
-    assert_eq!(running.await.unwrap(), Err(()));
-    assert!(old.stop().await.unwrap().success());
-    assert_eq!(
-        fixture.failures("old"),
-        [("router".into(), "Exited".into())]
-    );
+        let new = fixture
+            .install(
+                "router",
+                2,
+                &[phase],
+                json!({(phase.method()):{"status":"claimed","value":true}}),
+            )
+            .await;
+        assert!(matches!(
+            fixture_call(&old, "module.release").await,
+            Ok(_) | Err(CallError::Disconnected)
+        ));
+        assert_eq!(running.await.unwrap(), Err(()), "{phase:?}");
+        assert!(old.stop().await.unwrap().success());
+        assert_eq!(
+            fixture.failures("old"),
+            [("router".into(), "Exited".into())]
+        );
 
-    assert_eq!(fixture.registry.get("router").unwrap().generation, 2);
-    let running = dispatch(fixture.capture("new"), ResolveRoute, Value::Null);
-    assert_eq!(fixture.event().await["params"]["operation_id"], "new");
-    assert_eq!(running.await.unwrap(), Ok(Some(true)));
-    new.stop().await.unwrap();
+        assert_eq!(fixture.registry.get("router").unwrap().generation, 2);
+        let running = dispatch(fixture.capture("new"), phase, Value::Null);
+        assert_eq!(fixture.event().await["params"]["operation_id"], "new");
+        assert_eq!(running.await.unwrap(), Ok(Some(true)));
+        new.stop().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -404,7 +425,7 @@ async fn cancelling_a_hook_sends_the_peer_cancellation() {
         [("access".into(), "Cancelled".into())]
     );
 
-    release(&process).await.unwrap();
+    fixture_call(&process, "module.release").await.unwrap();
     let cancelled = fixture.event().await;
     assert_eq!(cancelled["method"], "cancelled");
     assert_eq!(cancelled["params"], true);
@@ -465,7 +486,7 @@ async fn oversized_hook_frame_does_not_fail_another_call_on_the_same_peer() {
         fixture.failures("large"),
         [("access".into(), "InvalidFrame".into())]
     );
-    release(&process).await.unwrap();
+    fixture_call(&process, "module.release").await.unwrap();
     let completion = fixture.event().await;
     assert_eq!(completion["method"], "cancelled");
     assert_eq!(completion["params"], false);

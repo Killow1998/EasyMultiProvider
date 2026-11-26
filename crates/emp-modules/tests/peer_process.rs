@@ -313,6 +313,72 @@ fn cancel_while_waiting(request: PendingRequest) {
     assert!(matches!(result.wait().unwrap(), Err(CallError::Cancelled)));
 }
 
+fn wire_peer(handlers: Handlers) -> (Observation<Message>, Peer, PipeWriter) {
+    let (input, inbound) = io::pipe().unwrap();
+    let (output, writer) = io::pipe().unwrap();
+    let outbound = Observation::spawn(move |probe| {
+        let mut output = BufReader::new(output);
+        while probe.observe(|_| Message::read(&mut output).unwrap().unwrap()) {}
+    });
+    let peer = Peer::connect(Side::Host, BufReader::new(input), writer, handlers).unwrap();
+    (outbound, peer, inbound)
+}
+
+fn outbound_frame(outbound: &Observation<Message>) -> Message {
+    outbound
+        .begin(
+            Deadline::after(test_timeout(Duration::from_secs(5))),
+            "outbound peer frame",
+        )
+        .wait()
+        .unwrap()
+}
+
+#[test]
+fn timeout_claims_the_request_before_a_late_reply() {
+    let (outbound, peer, mut inbound) = wire_peer(Handlers::default());
+    let host = peer.handle();
+    let pending = host.start_request("module.late", Value::Null).unwrap();
+    let Message::Request(request) = outbound_frame(&outbound) else {
+        panic!("expected the request that will time out");
+    };
+    let (claimed, claim) = mpsc::channel();
+    let (resume, paused) = mpsc::channel();
+    let waiter = Observation::spawn(move |probe| {
+        probe.observe(|deadline| {
+            pending.wait_observing_timeout(Duration::ZERO, || {
+                claimed.send(()).unwrap();
+                paused.recv_timeout(deadline.remaining()).unwrap();
+            })
+        });
+    });
+    let result = waiter.begin(
+        Deadline::after(test_timeout(Duration::from_secs(5))),
+        "timed out waiter",
+    );
+    claim.recv_timeout(budget()).unwrap();
+
+    let confirmation = host.start_request("module.confirm", Value::Null).unwrap();
+    let Message::Request(confirm) = outbound_frame(&outbound) else {
+        panic!("expected the confirmation request");
+    };
+    Message::from(Response::new_ok(request.id.clone(), "late"))
+        .write(&mut inbound)
+        .unwrap();
+    Message::from(Response::new_ok(confirm.id, "confirmed"))
+        .write(&mut inbound)
+        .unwrap();
+    assert_eq!(confirmation.wait(budget()).unwrap(), json!("confirmed"));
+
+    resume.send(()).unwrap();
+    assert!(matches!(result.wait().unwrap(), Err(CallError::TimedOut)));
+    let Message::Notification(cancel) = outbound_frame(&outbound) else {
+        panic!("expected a cancellation notification");
+    };
+    assert_eq!(cancel.method, "$/cancelRequest");
+    assert_eq!(cancel.params, json!({"id": request.id}));
+}
+
 #[test]
 fn child_exit_disconnects_every_waiter() {
     let mut handlers = Handlers::default();
@@ -361,6 +427,37 @@ fn invalid_frames_disconnect_and_report_the_protocol_error() {
             .unwrap();
         assert!(exit.status.success(), "{mode}");
     }
+}
+
+#[test]
+fn inbound_request_ids_are_canonical_and_fit_fixed_error_replies() {
+    let mut handlers = Handlers::default();
+    handlers.register("host.oversized", |_, _, _| {
+        Ok(Value::String("x".repeat(16 * 1024 * 1024)))
+    });
+    let (outbound, peer, mut inbound) = wire_peer(handlers);
+    let longest = RequestId::from(format!("m:{}", u64::MAX));
+    Message::from(Request::new(longest.clone(), "host.oversized".into(), ()))
+        .write(&mut inbound)
+        .unwrap();
+    let Message::Response(response) = outbound_frame(&outbound) else {
+        panic!("expected a fixed error reply for the longest request ID");
+    };
+    assert_eq!(response.id, longest);
+    let error = response.response_result.unwrap_err();
+    assert_eq!(error.code, ErrorCode::InternalError as i32);
+    assert_eq!(error.message, "invalid frame length");
+    assert_eq!(error.data, None);
+
+    Message::from(Request::new(
+        "m:01".to_owned().into(),
+        "host.unknown".into(),
+        (),
+    ))
+    .write(&mut inbound)
+    .unwrap();
+    drop(inbound);
+    assert_eq!(peer.wait().unwrap_err().kind(), io::ErrorKind::InvalidData);
 }
 
 #[test]

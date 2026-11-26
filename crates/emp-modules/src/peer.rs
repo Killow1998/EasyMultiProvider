@@ -43,8 +43,11 @@ impl Side {
     fn check_id(self, id: &RequestId) -> io::Result<()> {
         let id = serde_json::to_value(id)?;
         if id.as_str().is_some_and(|id| {
-            id.strip_prefix(self.prefix())
-                .is_some_and(|number| number.parse::<u64>().is_ok())
+            id.strip_prefix(self.prefix()).is_some_and(|number| {
+                (number == "0" || !number.starts_with('0'))
+                    && number.bytes().all(|byte| byte.is_ascii_digit())
+                    && number.parse::<u64>().is_ok()
+            })
         }) {
             Ok(())
         } else {
@@ -226,7 +229,7 @@ impl Peer {
         writer: impl Write + Send + 'static,
         handlers: Handlers,
     ) -> io::Result<Self> {
-        Self::connect_inner(side, reader, writer, handlers, |_| {}, || {})
+        Self::connect_inner(side, reader, writer, handlers, |_| {}, || {}, |_| {})
     }
 
     #[cfg(feature = "test-support")]
@@ -245,6 +248,30 @@ impl Peer {
             handlers,
             reader_exiting,
             writer_exiting,
+            |_| {},
+        )
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn connect_recording_notifications(
+        side: Side,
+        reader: impl BufRead + Send + 'static,
+        writer: impl Write + Send + 'static,
+        handlers: Handlers,
+        mut record: impl FnMut(&str) + Send + 'static,
+    ) -> io::Result<Self> {
+        Self::connect_inner(
+            side,
+            reader,
+            writer,
+            handlers,
+            |_| {},
+            || {},
+            move |message| {
+                if let Message::Notification(notification) = message {
+                    record(&notification.method);
+                }
+            },
         )
     }
 
@@ -255,6 +282,7 @@ impl Peer {
         handlers: Handlers,
         reader_exiting: impl FnOnce(Option<io::ErrorKind>) + Send + 'static,
         writer_exiting: impl FnOnce() + Send + 'static,
+        observe: impl FnMut(&Message) + Send + 'static,
     ) -> io::Result<Self> {
         let (send, frames) = mpsc::channel();
         let (close, closed) = mpsc::channel();
@@ -281,7 +309,7 @@ impl Peer {
         let reader = thread::Builder::new()
             .name("emp-peer-reader".into())
             .spawn(move || {
-                let result = input.read_loop(&mut reader, &handlers);
+                let result = input.read_loop(&mut reader, &handlers, observe);
                 reader_exiting(result.as_ref().err().map(io::Error::kind));
                 input.disconnect(result);
             });
@@ -392,18 +420,24 @@ impl PeerHandle {
             connection.writer()?;
             build(connection)
         };
-        let frame = Frame::encode(&message).or_else(|error| match message {
-            Message::Response(response) => Frame::encode(
-                &Response::new_err(
-                    response.id,
-                    ErrorCode::InternalError as i32,
-                    "invalid frame length".into(),
+        let frame = match Frame::encode(&message) {
+            Ok(frame) => frame,
+            Err(_) => {
+                let Message::Response(response) = message else {
+                    return Err(CallError::InvalidFrame);
+                };
+                Frame::encode(
+                    &Response::new_err(
+                        response.id,
+                        ErrorCode::InternalError as i32,
+                        "invalid frame length".into(),
+                    )
+                    .into(),
                 )
-                .into(),
-            ),
-            _ => Err(error),
-        });
-        Ok((frame.map_err(|_| CallError::InvalidFrame)?, metadata))
+                .expect("a canonical request ID fits the fixed error frame")
+            }
+        };
+        Ok((frame, metadata))
     }
 
     fn send_response(&self, response: Response) {
@@ -476,8 +510,14 @@ impl PeerHandle {
         }
     }
 
-    fn read_loop(&self, reader: &mut impl BufRead, handlers: &Handlers) -> io::Result<()> {
+    fn read_loop(
+        &self,
+        reader: &mut impl BufRead,
+        handlers: &Handlers,
+        mut observe: impl FnMut(&Message),
+    ) -> io::Result<()> {
         while let Some(message) = read_frame(reader)? {
+            observe(&message);
             let mut state = self.connection.lock().unwrap();
             let Some(connection) = state.as_mut() else {
                 break;
@@ -623,15 +663,25 @@ impl PendingRequest {
     }
 
     pub fn wait(self, timeout: Duration) -> CallResult {
-        self.wait_inner(timeout, || {})
+        self.wait_inner(timeout, || {}, || {})
     }
 
     #[cfg(feature = "test-support")]
     pub fn wait_registered(self, timeout: Duration, registered: impl FnOnce()) -> CallResult {
-        self.wait_inner(timeout, registered)
+        self.wait_inner(timeout, registered, || {})
     }
 
-    fn wait_inner(self, timeout: Duration, registered: impl FnOnce()) -> CallResult {
+    #[cfg(feature = "test-support")]
+    pub fn wait_observing_timeout(self, timeout: Duration, claimed: impl FnOnce()) -> CallResult {
+        self.wait_inner(timeout, || {}, claimed)
+    }
+
+    fn wait_inner(
+        self,
+        timeout: Duration,
+        registered: impl FnOnce(),
+        claimed: impl FnOnce(),
+    ) -> CallResult {
         let mut registered = Some(registered);
         let result = self.reply.result.lock().unwrap();
         let (mut result, _) = self
@@ -651,7 +701,7 @@ impl PendingRequest {
             return result;
         }
         drop(result);
-        self.canceller.finish(CallError::TimedOut);
+        self.canceller.finish(CallError::TimedOut, claimed);
         self.reply.result.lock().unwrap().take().unwrap()
     }
 }
@@ -670,34 +720,22 @@ pub struct RequestCanceller {
 
 impl RequestCanceller {
     pub fn cancel(&self) {
-        self.finish(CallError::Cancelled);
+        self.finish(CallError::Cancelled, || {});
     }
 
-    fn finish(&self, error: CallError) {
-        if !self
-            .peer
-            .connection
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|connection| connection.pending.contains_key(&self.id))
+    fn finish(&self, error: CallError, claimed: impl FnOnce()) {
         {
-            return;
-        }
-        let notification = Notification {
-            method: CANCEL_REQUEST.into(),
-            params: json!({"id": self.id}),
-        };
-        let prepared = self.peer.prepare_outgoing(|_| (notification.into(), ()));
-        let mut state = self.peer.connection.lock().unwrap();
-        if let Some(connection) = state.as_mut()
-            && let Some(pending) = connection.pending.remove(&self.id)
-        {
+            let mut state = self.peer.connection.lock().unwrap();
+            let Some(pending) = state
+                .as_mut()
+                .and_then(|connection| connection.pending.remove(&self.id))
+            else {
+                return;
+            };
             pending.reply.complete(Err(error));
-            if let Ok((frame, ())) = prepared {
-                let _ = connection.send_control(frame);
-            }
         }
+        claimed();
+        let _ = self.peer.notify(CANCEL_REQUEST, json!({"id": self.id}));
     }
 }
 
