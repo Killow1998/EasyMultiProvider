@@ -714,6 +714,14 @@ impl<R: tokio::io::AsyncRead + Unpin> SseClient<R> {
         }
     }
 
+    pub(super) async fn stop_at_chunk_boundary(&mut self) {
+        if self.pending.is_empty() {
+            stop_at_chunk_boundary(&mut self.io, &mut self.chunked)
+                .await
+                .expect("validate SSE chunk ending before disconnect");
+        }
+    }
+
     async fn first_output(&mut self, deadline: &Deadline) -> Vec<Value> {
         let events = timeout(deadline.remaining(), async {
             let mut events = Vec::new();
@@ -752,6 +760,9 @@ async fn sse_client_delivers_delta_before_the_rest_of_the_chunk_arrives() {
     let events = client.first_output(&deadline).await;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["delta"], "answer");
+    timeout(deadline.remaining(), client.stop_at_chunk_boundary())
+        .await
+        .unwrap();
 
     sender.write_all(tail.as_bytes()).await.unwrap();
     sender.write_all(b"\r\n0\r\n\r\n").await.unwrap();
@@ -934,6 +945,9 @@ fn inference_stream_disconnect_closes_upstream_and_settles_once() {
                 let mut downstream =
                     SseClient::from_raw(RawClient::request_before(address, &wire, &deadline).await);
                 downstream.first_output(&deadline).await;
+                timeout(deadline.remaining(), downstream.stop_at_chunk_boundary())
+                    .await
+                    .expect("SSE chunk ending before deadline");
                 downstream.io.get_ref().set_zero_linger().unwrap();
                 let deadline = Deadline::after(wire_timeout());
                 let closure = upstream.begin(deadline, "upstream was closed");

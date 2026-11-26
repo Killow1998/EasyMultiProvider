@@ -244,6 +244,23 @@ pub(crate) async fn read_chunk_data(
     Ok(())
 }
 
+async fn stop_at_chunk_boundary(
+    io: &mut (impl AsyncBufRead + Unpin),
+    decoder: &mut ChunkDecoder,
+) -> std::io::Result<()> {
+    while decoder.at_chunk_ending() {
+        let mut input = io.fill_buf().await?;
+        if input.is_empty() {
+            return decoder.finish();
+        }
+        let length = input.len();
+        decoder.stop_at_chunk_boundary(&mut input)?;
+        let consumed = length - input.len();
+        io.consume(consumed);
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 async fn assert_wire_with<T>(
     address: SocketAddr,

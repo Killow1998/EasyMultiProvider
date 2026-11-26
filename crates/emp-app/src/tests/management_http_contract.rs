@@ -524,6 +524,7 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
         read_sse_frame(&mut events).raw(),
         "event: integration-updated\ndata: {}\n\n"
     );
+    stop_sse_at_chunk_boundary(&mut events);
     let status = request(&server, "/api/integration", &[&session]);
     let status = response_json(&status);
     assert_eq!(status["configuration"]["persisted"], true);

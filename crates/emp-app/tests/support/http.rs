@@ -205,6 +205,7 @@ impl SseClient {
         while let Some(frame) = sse::read_frame(&mut self.body)? {
             if let Some(data) = frame.data().filter(|data| !data.is_empty()) {
                 if data.trim() == "[DONE]" {
+                    self.stop_at_chunk_boundary()?;
                     return deadline.accept(None, "SSE done marker");
                 }
                 let event = serde_json::from_str(&data)
@@ -213,5 +214,12 @@ impl SseClient {
             }
         }
         deadline.accept(None, "SSE body EOF")
+    }
+
+    pub fn stop_at_chunk_boundary(&mut self) -> io::Result<()> {
+        if self.body.buffer().is_empty() {
+            self.body.get_mut().stop_at_chunk_boundary()?;
+        }
+        Ok(())
     }
 }

@@ -110,6 +110,7 @@ fn sse_visible_delta_arrives_before_upstream_is_released() {
         let completed = next_kind(&mut client, "response.completed");
         assert_eq!(completed["response"]["status"], "completed");
         assert_eq!(completed["response"]["usage"]["total_tokens"], 5);
+        client.stop_at_chunk_boundary().unwrap();
         upstream.assert_idle();
     }
 }
@@ -133,6 +134,7 @@ fn downstream_sse_disconnect_closes_the_still_gated_upstream() {
             next_kind(&mut client, "response.output_text.delta")["delta"],
             "First visible answer"
         );
+        client.stop_at_chunk_boundary().unwrap();
         let closed = gate.observe_close(Deadline::after(test_timeout(Duration::from_secs(5))));
         drop(client);
         closed.wait().unwrap();
@@ -170,6 +172,7 @@ fn downstream_disconnect_closes_external_sse_with_a_blocking_registry_override()
         next_kind(&mut client, "response.output_text.delta")["delta"],
         "First visible answer"
     );
+    client.stop_at_chunk_boundary().unwrap();
     let closed = gate.observe_close(Deadline::after(test_timeout(Duration::from_secs(5))));
     drop(client);
     closed.wait().unwrap();

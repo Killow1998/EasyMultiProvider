@@ -267,6 +267,7 @@ fn external_route_stays_busy_until_the_terminal_frame_is_written() {
                     loop {
                         let event = client.next().await.expect("terminal SSE event");
                         if event["type"] == "response.completed" {
+                            client.stop_at_chunk_boundary().await;
                             break event;
                         }
                     }
@@ -1223,9 +1224,7 @@ async fn assert_stream_prefix(client: &mut BufReader<TcpStream>, prefix: &[u8]) 
         }
         assert_eq!(received, prefix);
         assert!(decoder.at_chunk_ending(), "prefix ends at a chunk boundary");
-        let mut ending = [0; 2];
-        client.read_exact(&mut ending).await.unwrap();
-        decoder.decode(&mut ending.as_slice()).unwrap();
+        stop_at_chunk_boundary(client, &mut decoder).await.unwrap();
     })
     .await
     .expect("upstream bytes reach the downstream client");

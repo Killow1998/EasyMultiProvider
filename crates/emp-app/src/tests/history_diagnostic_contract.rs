@@ -120,6 +120,7 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
         let frame = sse::first_business_frame(&mut reader)
             .expect("read history failure SSE stream")
             .expect("history failure SSE frame");
+        stop_sse_at_chunk_boundary(&mut reader);
         let frame = deadline.accept(frame, "history failure SSE frame").unwrap();
         assert_eq!(frame.event(), Some("response.failed"), "{frame:?}");
         let data = frame.data().expect("response.failed SSE data");
@@ -224,6 +225,7 @@ fn assert_missing_summary_output(stream: bool) {
         let data = frame.data().expect("response.failed SSE data");
         let failed: Value = serde_json::from_str(&data).expect("response.failed SSE JSON");
         assert_eq!(failed["type"], "response.failed");
+        stop_sse_at_chunk_boundary(&mut reader);
     } else {
         let response = post(&server, "/v1/responses", &body, &[&session]);
         assert!(response.starts_with("HTTP/1.1 409"), "{response}");

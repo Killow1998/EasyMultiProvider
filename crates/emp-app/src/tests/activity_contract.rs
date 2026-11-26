@@ -232,6 +232,7 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
         snapshot["routes"][0]["in_flight"] == 0
             && snapshot["routes"][0]["last_finished"].as_u64().is_some()
     });
+    stop_sse_at_chunk_boundary(&mut events);
     assert_eq!(only_route(&finished)["in_flight"], 0);
     assert!(only_route(&finished)["last_finished"].as_u64().is_some());
     publications.assert_intervals(&[first_id, second_id], false);
@@ -276,6 +277,7 @@ fn upstream_error_finishes_the_activity_guard() {
         snapshot["routes"][0]["in_flight"] == 0
             && snapshot["routes"][0]["last_finished"].as_u64().is_some()
     });
+    stop_sse_at_chunk_boundary(&mut events);
     assert_eq!(only_route(&finished)["in_flight"], 0);
     server.shutdown().expect("shutdown activity test server");
 }

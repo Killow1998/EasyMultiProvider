@@ -73,6 +73,18 @@ impl Stream {
         .await
         .expect("SSE event or end of stream before deadline")
     }
+
+    async fn stop_at_chunk_boundary(&mut self) {
+        if self.pending.is_empty() {
+            timeout(
+                wire_timeout().duration(),
+                stop_at_chunk_boundary(&mut self.io, &mut self.chunked),
+            )
+            .await
+            .expect("management SSE chunk ending before deadline")
+            .expect("validate management SSE chunk ending before disconnect");
+        }
+    }
 }
 
 fn event(frame: &str) -> (&str, Value) {
@@ -223,6 +235,7 @@ fn account_stream_disconnect_releases_subscription_without_another_event() {
         for _ in 0..crate::api::quota::QUOTA_EVENT_SLOT_LIMIT {
             let mut stream = Stream::open(address, &wire, "no-store").await;
             account_snapshot(&mut stream).await;
+            stream.stop_at_chunk_boundary().await;
             streams.push(stream);
         }
         let denied = exchange_wire(address, &wire, false).await;
@@ -252,6 +265,7 @@ fn account_stream_disconnect_releases_subscription_without_another_event() {
 
         let mut replacement = Stream::open(address, &wire, "no-store").await;
         account_snapshot(&mut replacement).await;
+        replacement.stop_at_chunk_boundary().await;
         assert_eq!(
             fixture
                 .server
@@ -375,6 +389,7 @@ fn report_disconnect_cancels_query_and_releases_admission() {
                     fixture.server.state.lifecycle.admission.active_requests(),
                     1
                 );
+                stream.stop_at_chunk_boundary().await;
                 stream.io.get_ref().set_zero_linger().unwrap();
                 drop(stream);
 

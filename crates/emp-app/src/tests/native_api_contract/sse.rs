@@ -190,6 +190,7 @@ fn assert_native_sse_activity_settlement(subscription: bool) {
             .find(matching_request)
             .is_some_and(|row| row["state"] != "active")
     });
+    stop_sse_at_chunk_boundary(&mut events);
     let activity = snapshot["requests"]
         .as_array()
         .unwrap()
@@ -326,6 +327,7 @@ fn native_sse_prewarm_preserves_activity_and_billing_boundaries() {
                             first_native_sse_event(read_sse_frames(&mut stream))["type"],
                             "response.output_text.delta"
                         );
+                        stop_sse_at_chunk_boundary(&mut stream);
                         drop(stream);
                         assert!(upstream_closed_before(&upstream, deadline));
                     }

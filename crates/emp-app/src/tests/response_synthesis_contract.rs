@@ -150,6 +150,7 @@ fn disconnect_during_synthesis_stops_delivery_without_retry_or_false_completion(
                 break;
             }
         }
+        stop_sse_at_chunk_boundary(&mut reader);
         stream.shutdown(Shutdown::Both).unwrap();
         drop(reader);
         let _ = upstream.observed();

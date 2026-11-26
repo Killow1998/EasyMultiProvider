@@ -275,6 +275,7 @@ fn stream_errors_keep_pre_and_post_output_boundaries() {
         .filter_map(|data| serde_json::from_str::<Value>(&data).ok())
         .find(|event| event["type"] == "response.failed")
         .expect("terminal failure is valid SSE JSON");
+    stop_sse_at_chunk_boundary(&mut reader);
     assert_eq!(failed["response"]["error"]["status"], 502, "{failed}");
     assert!(response.contains("Selected source 'Demo' and model 'upstream-model'"));
     assert!(response.contains("Some output was delivered"));

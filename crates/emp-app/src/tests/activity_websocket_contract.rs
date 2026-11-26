@@ -196,6 +196,7 @@ fn websocket_idle_connection_is_inactive_and_each_turn_has_its_own_activity() {
     }
 
     drop(socket);
+    stop_sse_at_chunk_boundary(&mut activity);
     drop(activity);
     server
         .shutdown()

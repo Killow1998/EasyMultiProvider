@@ -339,6 +339,16 @@ fn read_sse_frame<R: BufRead>(reader: &mut SseReader<R>) -> sse::Frame {
         .unwrap()
 }
 
+fn stop_sse_at_chunk_boundary<R: BufRead>(reader: &mut SseReader<R>) {
+    if reader.buffer().is_empty() {
+        reader
+            .get_mut()
+            .decoded
+            .stop_at_chunk_boundary()
+            .expect("validate SSE chunk ending before disconnect");
+    }
+}
+
 fn read_sse_frames<R: BufRead>(reader: &mut SseReader<R>) -> impl Iterator<Item = sse::Frame> {
     std::iter::from_fn(move || {
         (!reader.fill_buf().expect("read SSE body").is_empty()).then(|| read_sse_frame(reader))

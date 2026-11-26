@@ -183,6 +183,7 @@ fn m03_offline_completion_retries_unacknowledged_usage_without_double_billing() 
         next_event(&mut client, "response.completed")["response"]["id"],
         "resp_m03_offline"
     );
+    client.stop_at_chunk_boundary().unwrap();
     let local = poll("offline completion in local ledger", |deadline| {
         let usage = crate::support::team::report_before(
             &fixture.devices[1],
@@ -332,6 +333,7 @@ fn m03_hot_update_switches_workers_and_delivers_each_usage_event_once() {
     let release_receipt = fixture.relay.hold_next_report_reply();
     gate.finish();
     next_event(&mut client, "response.completed");
+    client.stop_at_chunk_boundary().unwrap();
     let in_flight = fixture.relay.next_report();
     assert_eq!(in_flight.events.len(), 1);
     assert_eq!(in_flight.inserted, 1);

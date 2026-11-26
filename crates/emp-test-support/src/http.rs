@@ -1,3 +1,5 @@
+//! Decodes only the chunked bytes written by EMP, without chunk extensions or trailers.
+
 use std::{
     collections::BTreeMap,
     io::{self, BufRead, BufReader, Read},
@@ -90,9 +92,11 @@ pub struct ChunkDecoder {
 enum ChunkState {
     #[default]
     Header,
-    Data(usize),
-    Ending(usize),
-    Trailers,
+    Data(u64),
+    Ending {
+        matched: usize,
+        terminal: bool,
+    },
     End,
 }
 
@@ -100,69 +104,55 @@ impl ChunkDecoder {
     pub fn decode<'a>(&mut self, input: &mut &'a [u8]) -> io::Result<&'a [u8]> {
         while !input.is_empty() {
             match self.state {
-                ChunkState::Header | ChunkState::Trailers => {
-                    let Some(newline) = input.iter().position(|&byte| byte == b'\n') else {
-                        self.line.extend_from_slice(input);
-                        *input = &[];
-                        break;
-                    };
-                    self.line.extend_from_slice(&input[..=newline]);
-                    *input = &input[newline + 1..];
-                    if matches!(self.state, ChunkState::Header) {
-                        let Ok(httparse::Status::Complete((_, length))) =
-                            httparse::parse_chunk_size(&self.line)
-                        else {
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "invalid HTTP chunk size line",
-                            ));
-                        };
-                        let length = usize::try_from(length)
-                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                        self.state = if length == 0 {
-                            ChunkState::Trailers
-                        } else {
-                            ChunkState::Data(length)
-                        };
-                    } else {
-                        let line = self.line.strip_suffix(b"\r\n").ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "invalid HTTP chunk line ending",
-                            )
-                        })?;
-                        if trailer_is_end(line)? {
-                            self.state = ChunkState::End;
-                        }
+                ChunkState::Header => {
+                    const MAX_HEADER_BYTES: usize = 16 + 2;
+                    let newline = input.iter().position(|&byte| byte == b'\n');
+                    let count = newline.map_or(input.len(), |index| index + 1);
+                    let header_len = self.line.len() + count;
+                    if header_len > MAX_HEADER_BYTES
+                        || (header_len == MAX_HEADER_BYTES && newline.is_none())
+                    {
+                        return Err(invalid_chunk_header());
                     }
+                    self.line.extend_from_slice(&input[..count]);
+                    *input = &input[count..];
+                    if newline.is_none() {
+                        break;
+                    }
+                    let length = self
+                        .line
+                        .strip_suffix(b"\r\n")
+                        .filter(|digits| digits.iter().all(u8::is_ascii_hexdigit))
+                        .and_then(|digits| str::from_utf8(digits).ok())
+                        .and_then(|digits| u64::from_str_radix(digits, 16).ok())
+                        .filter(|&length| length != 0 || self.line == b"0\r\n")
+                        .ok_or_else(invalid_chunk_header)?;
                     self.line.clear();
+                    self.state = if length == 0 {
+                        ChunkState::Ending {
+                            matched: 0,
+                            terminal: true,
+                        }
+                    } else {
+                        ChunkState::Data(length)
+                    };
                 }
                 ChunkState::Data(remaining) => {
-                    let count = remaining.min(input.len());
-                    let (body, rest) = input.split_at(count);
+                    let count = remaining.min(input.len() as u64);
+                    let (body, rest) = input.split_at(count as usize);
                     *input = rest;
                     self.state = if count == remaining {
-                        ChunkState::Ending(0)
+                        ChunkState::Ending {
+                            matched: 0,
+                            terminal: false,
+                        }
                     } else {
                         ChunkState::Data(remaining - count)
                     };
                     return Ok(body);
                 }
-                ChunkState::Ending(matched) => {
-                    let expected = &b"\r\n"[matched..];
-                    let count = expected.len().min(input.len());
-                    if input[..count] != expected[..count] {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "invalid HTTP chunk ending",
-                        ));
-                    }
-                    *input = &input[count..];
-                    self.state = if count == expected.len() {
-                        ChunkState::Header
-                    } else {
-                        ChunkState::Ending(matched + count)
-                    };
+                ChunkState::Ending { matched, terminal } => {
+                    self.read_ending(input, matched, terminal)?;
                 }
                 ChunkState::End => break,
             }
@@ -171,7 +161,47 @@ impl ChunkDecoder {
     }
 
     pub fn at_chunk_ending(&self) -> bool {
-        matches!(self.state, ChunkState::Ending(0))
+        matches!(
+            self.state,
+            ChunkState::Ending {
+                terminal: false,
+                ..
+            }
+        )
+    }
+
+    pub fn stop_at_chunk_boundary(&mut self, input: &mut &[u8]) -> io::Result<()> {
+        if let ChunkState::Ending {
+            matched,
+            terminal: false,
+        } = self.state
+        {
+            self.read_ending(input, matched, false)?;
+        }
+        Ok(())
+    }
+
+    fn read_ending(&mut self, input: &mut &[u8], matched: usize, terminal: bool) -> io::Result<()> {
+        let expected = &b"\r\n"[matched..];
+        let count = expected.len().min(input.len());
+        if input[..count] != expected[..count] {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid HTTP chunk ending",
+            ));
+        }
+        *input = &input[count..];
+        self.state = if count < expected.len() {
+            ChunkState::Ending {
+                matched: matched + count,
+                terminal,
+            }
+        } else if terminal {
+            ChunkState::End
+        } else {
+            ChunkState::Header
+        };
+        Ok(())
     }
 
     pub fn is_finished(&self) -> bool {
@@ -182,11 +212,32 @@ impl ChunkDecoder {
         let message = match self.state {
             ChunkState::Header => "incomplete HTTP chunk header",
             ChunkState::Data(_) => "incomplete HTTP chunk data",
-            ChunkState::Ending(_) => "incomplete HTTP chunk ending",
-            ChunkState::Trailers => "incomplete HTTP chunk trailer",
+            ChunkState::Ending {
+                terminal: false, ..
+            } => "incomplete HTTP chunk ending",
+            ChunkState::Ending { terminal: true, .. } => "incomplete HTTP chunk terminator",
             ChunkState::End => return Ok(()),
         };
         Err(io::Error::new(io::ErrorKind::UnexpectedEof, message))
+    }
+}
+
+impl<R: BufRead> Body<R> {
+    pub fn stop_at_chunk_boundary(&mut self) -> io::Result<()> {
+        let Some(decoder) = &mut self.chunked else {
+            return Ok(());
+        };
+        while decoder.at_chunk_ending() {
+            let mut input = self.input.fill_buf()?;
+            if input.is_empty() {
+                return decoder.finish();
+            }
+            let length = input.len();
+            decoder.stop_at_chunk_boundary(&mut input)?;
+            let consumed = length - input.len();
+            self.input.consume(consumed);
+        }
+        Ok(())
     }
 }
 
@@ -232,29 +283,8 @@ impl<R: BufRead> Read for Body<R> {
     }
 }
 
-fn trailer_is_end(line: &[u8]) -> io::Result<bool> {
-    if line.is_empty() {
-        return Ok(true);
-    }
-    let valid = line
-        .iter()
-        .position(|&byte| byte == b':')
-        .is_some_and(|colon| {
-            colon > 0
-                && line[..colon]
-                    .iter()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^`_|~".contains(byte))
-                && line[colon + 1..]
-                    .iter()
-                    .all(|&byte| byte == b'\t' || (byte >= b' ' && byte != 127))
-        });
-    if !valid {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid chunk trailer field",
-        ));
-    }
-    Ok(false)
+fn invalid_chunk_header() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "invalid HTTP chunk size line")
 }
 
 #[cfg(test)]
@@ -336,18 +366,50 @@ mod tests {
     }
 
     #[test]
-    fn chunk_decoder_accepts_a_chunk_header_with_an_extension() {
+    fn chunk_decoder_rejects_a_terminal_header_without_digits() {
         let mut decoder = ChunkDecoder::default();
-        let mut wire = b"5;ext=1\r\nhello\r\n0\r\n\r\n".as_slice();
-        assert_eq!(decoder.decode(&mut wire).unwrap(), b"hello");
-        assert!(decoder.decode(&mut wire).unwrap().is_empty());
-        decoder.finish().unwrap();
-        assert!(wire.is_empty());
+        let mut wire = b"\r\n\r\n".as_slice();
+        assert_eq!(
+            decoder.decode(&mut wire).unwrap_err().kind(),
+            io::ErrorKind::InvalidData,
+        );
+    }
+
+    #[test]
+    fn chunk_decoder_rejects_a_trailer_after_the_terminal_header() {
+        let mut decoder = ChunkDecoder::default();
+        let mut wire = b"0\r\nX-Extra: yes\r\n\r\n".as_slice();
+        assert_eq!(
+            decoder.decode(&mut wire).unwrap_err().kind(),
+            io::ErrorKind::InvalidData,
+        );
+    }
+
+    #[test]
+    fn chunk_decoder_rejects_a_chunk_header_with_an_extension() {
+        let mut decoder = ChunkDecoder::default();
+        let mut wire = b"5;ext=1\r\n".as_slice();
+        assert_eq!(
+            decoder.decode(&mut wire).unwrap_err().kind(),
+            io::ErrorKind::InvalidData,
+        );
+    }
+
+    #[test]
+    fn chunk_body_rejects_a_bad_chunk_ending_when_stopping_at_the_boundary() {
+        let mut body = Body::new(b"5\r\nhelloXX".as_slice(), true);
+        let mut payload = [0; 5];
+        body.read_exact(&mut payload).unwrap();
+        assert_eq!(&payload, b"hello");
+        assert_eq!(
+            body.stop_at_chunk_boundary().unwrap_err().kind(),
+            io::ErrorKind::InvalidData,
+        );
     }
 
     #[test]
     fn chunk_decoder_accepts_one_byte_at_a_time() {
-        let wire = b"3;fixture=yes\r\nabc\r\n2\r\nde\r\n0\r\nX-Fixture: trailer\r\n\r\n";
+        let wire = b"3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
         let decode = |fragment_size| {
             let mut decoder = ChunkDecoder::default();
             let mut body = Vec::new();

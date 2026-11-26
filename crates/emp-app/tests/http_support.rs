@@ -89,9 +89,7 @@ fn chunked_sse_requires_the_final_empty_line_even_after_completion() {
         )
         .unwrap();
         server.write_all(event).unwrap();
-        server
-            .write_all(b"\r\n0\r\nX-Fixture: trailer\r\n")
-            .unwrap();
+        server.write_all(b"\r\n0\r\n").unwrap();
         if complete {
             server.write_all(b"\r\n").unwrap();
         }

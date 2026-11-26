@@ -272,6 +272,7 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
             }
         }
     }
+    stop_sse_at_chunk_boundary(&mut reader);
     server.state.backend.usage.stop();
     assert!(post(&server, "/api/usage/scan", b"{}", &[&session]).starts_with("HTTP/1.1 503"));
     server.state.request_shutdown();
