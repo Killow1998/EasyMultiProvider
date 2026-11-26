@@ -9,7 +9,7 @@ use crate::{
     http::request::{module_runtime_target, request_body_timeout},
     modules::{process::DataEndpoint, registry::HttpRoute},
     server::{
-        connection::{ConnectionContext, ForwardCancellation},
+        connection::{ConnectionContext, ForwardCancellation, wait_for_read_close},
         head::RawRequestHead,
         run_blocking,
     },
@@ -155,7 +155,7 @@ async fn forward(
     request: Request,
     target: Uri,
     raw: RawRequestHead,
-    mut endpoint: DataEndpoint,
+    endpoint: DataEndpoint,
     route: &HttpRoute,
     public: &ConnectionContext,
     length: usize,
@@ -163,6 +163,11 @@ async fn forward(
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, endpoint.port.get()));
     let deadline = Instant::now() + request_body_timeout(length);
     let forwarding = public.module_forwarding();
+    let read_probe = forwarding
+        .read_probe
+        .lock()
+        .expect("module read probe")
+        .take();
     let (mut parts, body) = request.into_parts();
     let has_content_length = parts.headers.contains_key(header::CONTENT_LENGTH);
     parts.uri = target;
@@ -263,6 +268,7 @@ async fn forward(
         ForwardCancellation::ResponseTimeout
     };
     let signal = forwarding.signal.clone();
+    let mut disconnected = endpoint.disconnected.clone();
     let (ready, sender) = oneshot::channel::<http1::SendRequest<Body>>();
     let exchange = async move {
         let socket = TcpStream::connect(address).await?;
@@ -276,15 +282,18 @@ async fn forward(
     };
     let mut driver = JoinSet::new();
     driver.spawn(async move {
+        let exchange = async {
+            let _ = exchange.await;
+            pending::<Infallible>().await
+        };
+        tokio::pin!(exchange);
         let cause = tokio::select! {
             biased;
             _ = signal.cancelled() => return,
-            _ = endpoint.disconnected.wait_for(|closed| *closed) => ForwardCancellation::Generation,
+            _ = disconnected.wait_for(|closed| *closed) => ForwardCancellation::Generation,
+            _ = wait_for_read_close(read_probe) => ForwardCancellation::Peer,
             cause = deadlines => cause,
-            never = async {
-                let _ = exchange.await;
-                pending::<Infallible>().await
-            } => match never {},
+            never = &mut exchange => match never {},
         };
         signal.cancel(cause);
     });
@@ -304,8 +313,20 @@ async fn forward(
                         .take()
                         .map_or(BAD_GATEWAY, EntryError::from)
                 })
-        } => response?,
+        } => response,
     };
+    let response = response.map_err(|error| {
+        forwarding.signal.cause().map_or_else(
+            || {
+                if *endpoint.disconnected.borrow() {
+                    UNAVAILABLE
+                } else {
+                    error
+                }
+            },
+            EntryError::from,
+        )
+    })?;
     let (mut parts, body) = response.into_parts();
     if parts.status.is_informational()
         || parts.status.is_redirection() && parts.status != StatusCode::NOT_MODIFIED

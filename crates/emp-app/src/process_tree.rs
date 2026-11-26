@@ -103,7 +103,7 @@ impl ProcessTree {
             }
         }
         #[cfg(windows)]
-        self.terminate();
+        self.request_group_stop();
     }
 
     pub(crate) fn has_exited(&self, child: &mut Child) -> io::Result<bool> {
@@ -150,7 +150,7 @@ impl ProcessTree {
         #[cfg(windows)]
         {
             let status = child.wait();
-            self.terminate();
+            self.request_group_stop();
             status
         }
     }
@@ -167,7 +167,7 @@ impl ProcessTree {
 
     #[cfg(unix)]
     fn terminate_and_reap(&self, child: &mut Child) -> io::Result<ExitStatus> {
-        self.terminate();
+        self.request_group_stop();
         child.wait()
     }
 
@@ -175,7 +175,7 @@ impl ProcessTree {
         *self.stopped.lock().unwrap()
     }
 
-    fn terminate(&self) {
+    pub(crate) fn request_group_stop(&self) {
         let mut stopped = self.stopped.lock().unwrap();
         if *stopped {
             return;
@@ -195,7 +195,7 @@ impl ProcessTree {
 
 impl Drop for ProcessTree {
     fn drop(&mut self) {
-        self.terminate();
+        self.request_group_stop();
     }
 }
 

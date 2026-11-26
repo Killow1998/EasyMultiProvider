@@ -10,14 +10,24 @@ use crate::{
         http::tests::{assert_status, assert_wire, read_chunk_data, request},
         raw_tcp::head as read_head,
     },
+    tests::{flushed_journal, wait_for},
 };
 use emp_modules::{
     handshake::{INITIALIZE, Initialize, Initialized, ROUTE_ID_HEADER},
     manifest::ModuleManifest,
     peer::Handlers,
 };
-use emp_test_support::{http::ChunkDecoder, test_timeout};
-use std::{fs::File, future::pending, io, net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
+use emp_test_support::{Deadline, http::ChunkDecoder, test_timeout};
+use socket2::SockRef;
+use std::{
+    fs::File,
+    future::pending,
+    io,
+    net::{Ipv4Addr, Shutdown},
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpSocket, TcpStream},
@@ -283,6 +293,7 @@ fn data_channel_preserves_body_and_header_bytes_across_the_trust_boundary() {
                 assert_wire(server.local_addr(), &wire, false, status).await;
             }
             let origin = format!("Origin: http://localhost:{}", server.local_addr().port());
+            let external_request_id = "0123456789abcdef";
             let wire = public_request(
                 server,
                 "PUT",
@@ -304,7 +315,7 @@ fn data_channel_preserves_body_and_header_bytes_across_the_trust_boundary() {
                     "X-EMP-Route-ID: forged",
                     "X-EMP-Peer-IP: 192.0.2.1",
                     "X-EMP-Caller-ID: forged",
-                    "X-EMP-Request-ID: forged",
+                    &format!("X-EMP-Request-ID: {external_request_id}"),
                     "X-Forwarded-For: 192.0.2.2",
                     "Forwarded: for=192.0.2.3",
                     "X-Aero-Caller-Key: forged",
@@ -347,6 +358,8 @@ fn data_channel_preserves_body_and_header_bytes_across_the_trust_boundary() {
             assert_eq!(request_ids.len(), 1);
             assert_eq!(request_ids[0].len(), 16);
             assert!(request_ids[0].iter().all(u8::is_ascii_hexdigit));
+            assert_ne!(request_ids[0], external_request_id.as_bytes());
+            let module_request_id = request_ids[0];
             assert_eq!(fields(&head, "connection"), [b"close".as_slice()]);
             let mut received = [0; 2];
             side.read_exact(&mut received).await.unwrap();
@@ -383,6 +396,27 @@ fn data_channel_preserves_body_and_header_bytes_across_the_trust_boundary() {
             let mut reply = Vec::new();
             client.read_to_end(&mut reply).await.unwrap();
             assert_eq!(reply, b"\0\xff\r\n\x80\x01");
+            wait_for(
+                &Deadline::after(test_timeout(Duration::from_secs(5))),
+                || {
+                    let journal = flushed_journal(root, &server.state);
+                    let Some(observation) = journal.iter().find(|entry| {
+                        entry["event"] == "http_request_completed"
+                            && entry["fields"]["method"] == "PUT"
+                            && entry["fields"]["status"] == 201
+                    }) else {
+                        return false;
+                    };
+                    assert_eq!(
+                        module_request_id,
+                        observation["fields"]["request_id"]
+                            .as_str()
+                            .unwrap()
+                            .as_bytes()
+                    );
+                    true
+                },
+            );
         })
         .await
         .unwrap();
@@ -454,10 +488,17 @@ fn a_backpressured_response_does_not_block_another_stream() {
             );
             let (fast, release) = start_sse(server, &side, "/sse?fast").await;
             finish_sse(fast, release).await;
-            let bytes = tokio::io::copy(&mut slow, &mut tokio::io::sink())
-                .await
-                .unwrap();
-            assert!(bytes >= SLOW_RESPONSE_BYTES as u64);
+            let mut decoder = ChunkDecoder::default();
+            let mut payload = Vec::new();
+            while !decoder.is_finished() {
+                read_chunk_data(&mut slow, &mut decoder, &mut payload)
+                    .await
+                    .expect("slow response must include a complete HTTP terminal chunk");
+            }
+            let padding = payload.iter().take_while(|&&byte| byte == b'x').count();
+            assert_eq!(padding, SLOW_RESPONSE_BYTES);
+            assert_eq!(&payload[padding..], b"data:z\n\n");
+            assert_eq!(slow.read(&mut [0]).await.unwrap(), 0);
             assert_eq!(hold.read_u8().await.unwrap(), b'd');
         })
         .await
@@ -504,7 +545,7 @@ fn client_disconnect_closes_the_private_upload_and_both_response_phases() {
 }
 
 #[test]
-fn losing_control_closes_the_old_listener_and_stream_before_replacement() {
+fn losing_control_cancels_only_the_old_generations_requests() {
     with_registry_server(async |server, root| {
         let (old, old_side) = start(server, root, 1).await;
         let new = timeout(budget(), async {
@@ -516,10 +557,19 @@ fn losing_control_closes_the_old_listener_and_stream_before_replacement() {
             let bearer = format!("Authorization: {old_key}");
             let probe = request(old_port, "GET", "/probe", &[&bearer], b"");
             assert_wire(old_address, &probe, false, 200).await;
+            let mut old_waiting =
+                send(server, &public_request(server, "GET", "/wait", &[], b"")).await;
+            let mut old_waiting_event = BufReader::new(accept_sideband(&old_side).await);
+            read_head(&mut old_waiting_event).await.unwrap();
+
+            let (new, new_side) = start(server, root, 2).await;
+            let (new_response, new_event) = start_sse(server, &new_side, "/sse?new").await;
+
             old_event.write_all(b"c").await.unwrap();
             let mut tail = Vec::new();
             old_response.read_to_end(&mut tail).await.unwrap();
             assert!(tail.is_empty());
+            assert_status(&read_head(&mut old_waiting).await.unwrap(), 503);
             let mut replay_reply = Vec::new();
             let replay_result = async {
                 let mut socket = TcpStream::connect(old_address).await?;
@@ -545,10 +595,7 @@ fn losing_control_closes_the_old_listener_and_stream_before_replacement() {
             );
             assert_eq!(old_event.read(&mut [0]).await.unwrap(), 0);
             let wire = public_request(server, "GET", "/probe", &[], b"");
-            assert_wire(server.local_addr(), &wire, false, 503).await;
 
-            let (new, new_side) = start(server, root, 2).await;
-            let (new_response, new_event) = start_sse(server, &new_side, "/sse?new").await;
             let endpoint = new.data_endpoint.as_ref().unwrap();
             let address = (Ipv4Addr::LOCALHOST, endpoint.port.get()).into();
             let replay = request(endpoint.port.get(), "GET", "/probe", &[&bearer], b"");
@@ -567,7 +614,21 @@ fn losing_control_closes_the_old_listener_and_stream_before_replacement() {
 }
 
 #[test]
-fn a_disconnected_backpressured_upload_releases_its_admission_slot() {
+fn a_reset_backpressured_upload_releases_its_admission_slot() {
+    check_backpressured_upload_disconnect(UploadDisconnect::Reset);
+}
+
+#[test]
+fn a_half_closed_backpressured_upload_releases_its_admission_slot() {
+    check_backpressured_upload_disconnect(UploadDisconnect::Fin);
+}
+
+enum UploadDisconnect {
+    Reset,
+    Fin,
+}
+
+fn check_backpressured_upload_disconnect(disconnect: UploadDisconnect) {
     with_registry_server(async |server, root| {
         let (process, side) = start(server, root, 1).await;
         let length = 5 * 1024 * 1024;
@@ -607,8 +668,13 @@ fn a_disconnected_backpressured_upload_releases_its_admission_slot() {
         assert!(sent > 0);
         let admission = &server.state.lifecycle.admission;
         assert_eq!(admission.active_requests(), 1);
-        client.set_zero_linger().unwrap();
-        drop(client);
+        match disconnect {
+            UploadDisconnect::Reset => {
+                client.set_zero_linger().unwrap();
+                drop(client);
+            }
+            UploadDisconnect::Fin => SockRef::from(&client).shutdown(Shutdown::Write).unwrap(),
+        }
         assert!(
             admission.quiesce(0, budget()).is_some(),
             "the disconnected upload still holds its admission slot"

@@ -2,13 +2,16 @@ use super::{budget, fixture};
 use crate::{
     http::request::{MAX_HEADER_BYTES, request_head_end},
     lifecycle::ServerHandle,
-    modules::{process::ModuleProcess, registry::shortest_credential_header},
+    modules::{
+        process::{ModuleProcess, ValidatedManifest},
+        registry::shortest_credential_header,
+    },
     server::http::tests::{
         assert_status, assert_wire, connect_wire_from, json_body, json_request, request,
     },
 };
 use emp_modules::{
-    manifest::{HookPhase, ModuleManifest, RouteAuth},
+    manifest::{HookPhase, RouteAuth},
     peer::{CallError, Handlers},
 };
 use emp_test_support::{fixture_dir, test_timeout};
@@ -22,7 +25,7 @@ async fn start(
     state_dir: &Path,
     id: &str,
     contributions: Value,
-) -> (ModuleProcess, ModuleManifest) {
+) -> (ModuleProcess, ValidatedManifest) {
     let manifest = json!({
         "id": id, "module_version": "1.0.0",
         "host_api": {"major": 3, "min_minor": 0}, "contributions": contributions,

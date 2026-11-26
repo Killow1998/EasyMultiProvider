@@ -244,7 +244,7 @@ async fn connect_passes_the_host_api_and_state_dir_and_accepts_a_valid_manifest(
     assert_eq!(initialize.module_bearer.len(), 64);
     assert_eq!(initialize.core_bearer.len(), 64);
     assert!(initialize.module_bearer != initialize.core_bearer);
-    assert_eq!(manifest.id, "fixture-module");
+    assert_eq!(manifest.id(), "fixture-module");
     process.stop().await.unwrap();
 }
 

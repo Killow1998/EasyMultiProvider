@@ -69,9 +69,9 @@ impl std::error::Error for ManifestDecodeError {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Contribution {
+pub enum Contribution<RouteId = String> {
     HttpRoute {
-        id: String,
+        id: RouteId,
         method: String,
         path: String,
         auth: RouteAuth,

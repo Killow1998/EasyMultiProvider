@@ -1,11 +1,11 @@
-use super::process::{DataEndpoint, ModuleProcess};
+use super::process::{DataEndpoint, ModuleProcess, ValidatedManifest};
 use crate::http::{
     auth::SESSION_HEADER,
     request::{MODULE_RUNTIME_PREFIX, REQUEST_VERSION, request_head_end},
 };
 use axum::http::HeaderValue;
 use emp_modules::{
-    manifest::{Contribution, HookPhase, ModuleManifest, RouteAuth},
+    manifest::{Contribution, HookPhase, RouteAuth},
     peer::PeerHandle,
 };
 use std::{
@@ -51,14 +51,15 @@ pub(crate) fn shortest_credential_header(auth: RouteAuth, local_proxy_key_len: u
 impl ModuleRegistry {
     pub fn publish(
         &self,
-        manifest: ModuleManifest,
+        manifest: ValidatedManifest,
         generation: u64,
         process: &ModuleProcess,
         port: u16,
         local_proxy_key_len: usize,
     ) -> Result<(), String> {
+        let (id, contributions) = manifest.into_parts();
         let mut module = ActiveModule {
-            id: Arc::from(manifest.id),
+            id: Arc::from(id),
             generation,
             connection: process.connection(),
             data_endpoint: process.data_endpoint.clone(),
@@ -67,7 +68,7 @@ impl ModuleRegistry {
             panels: BTreeMap::new(),
             routes: BTreeMap::new(),
         };
-        for contribution in manifest.contributions {
+        for contribution in contributions {
             match contribution {
                 Contribution::HttpRoute {
                     id,
@@ -84,10 +85,10 @@ impl ModuleRegistry {
                         || !matches!(request_head_end(head.as_bytes(), 0), Ok(Some(_)))
                     {
                         return Err(format!(
-                            "route {id} cannot be represented in an HTTP request"
+                            "route {} cannot be represented in an HTTP request",
+                            String::from_utf8_lossy(id.as_bytes())
                         ));
                     }
-                    let id = HeaderValue::try_from(id).expect("validated route ID");
                     module
                         .routes
                         .entry(path)

@@ -2,7 +2,7 @@ use crate::{process_tree::ProcessTree, util::random_hex};
 use axum::http::HeaderValue;
 use emp_modules::{
     handshake::{INITIALIZE, Initialize, Initialized},
-    manifest::{HOST_API_V3, ManifestError, ModuleManifest},
+    manifest::{Contribution, HOST_API_V3, ManifestError, ModuleManifest},
     peer::{CallError, Handlers, Peer, PeerHandle, Side},
 };
 use std::{
@@ -40,10 +40,68 @@ impl Generation {
             if *closed {
                 return false;
             }
+            self.tree.request_group_stop();
             *closed = true;
-            self.tree.request_stop();
             true
         });
+    }
+}
+
+pub struct ValidatedManifest {
+    id: String,
+    contributions: Vec<Contribution<HeaderValue>>,
+}
+
+impl ValidatedManifest {
+    fn validate(manifest: ModuleManifest) -> Result<Self, Vec<ManifestError>> {
+        manifest.validate(HOST_API_V3)?;
+        let contributions = manifest
+            .contributions
+            .into_iter()
+            .enumerate()
+            .map(|(index, contribution)| {
+                Ok(match contribution {
+                    Contribution::HttpRoute {
+                        id,
+                        method,
+                        path,
+                        auth,
+                    } => {
+                        let id = HeaderValue::from_str(&id)
+                            .map_err(|_| vec![ManifestError::InvalidRouteId { index, id }])?;
+                        Contribution::HttpRoute {
+                            id,
+                            method,
+                            path,
+                            auth,
+                        }
+                    }
+                    Contribution::Hook { phase } => Contribution::Hook { phase },
+                    Contribution::Catalog => Contribution::Catalog,
+                    Contribution::Panel {
+                        id,
+                        entry,
+                        revision,
+                    } => Contribution::Panel {
+                        id,
+                        entry,
+                        revision,
+                    },
+                })
+            })
+            .collect::<Result<_, Vec<ManifestError>>>()?;
+        Ok(Self {
+            id: manifest.id,
+            contributions,
+        })
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(super) fn into_parts(self) -> (String, Vec<Contribution<HeaderValue>>) {
+        (self.id, self.contributions)
     }
 }
 
@@ -87,7 +145,7 @@ impl ModuleProcess {
         state_dir: &Path,
         handlers: Handlers,
         timeout: Duration,
-    ) -> Result<(Self, ModuleManifest), StartError> {
+    ) -> Result<(Self, ValidatedManifest), StartError> {
         Self::start_with_connector(command, state_dir, handlers, timeout, Peer::connect, || {})
             .await
     }
@@ -99,7 +157,7 @@ impl ModuleProcess {
         timeout: Duration,
         connect: impl FnOnce(Side, BufReader<Reader>, Writer, Handlers) -> io::Result<Peer>,
         process_exited: impl FnOnce() + Send + 'static,
-    ) -> Result<(Self, ModuleManifest), StartError> {
+    ) -> Result<(Self, ValidatedManifest), StartError> {
         let initialize = Initialize {
             host_api: HOST_API_V3,
             state_dir: state_dir.to_path_buf(),
@@ -186,22 +244,18 @@ impl ModuleProcess {
             let value = connection
                 .call(INITIALIZE, params, timeout)
                 .map_err(StartError::Handshake)?;
-            let initialized: Initialized =
-                serde_json::from_value(value).map_err(StartError::InvalidManifest)?;
-            initialized
-                .manifest
-                .validate(HOST_API_V3)
-                .map_err(StartError::Manifest)?;
-            Ok(initialized)
+            let Initialized {
+                manifest,
+                data_port,
+            } = serde_json::from_value(value).map_err(StartError::InvalidManifest)?;
+            let manifest = ValidatedManifest::validate(manifest).map_err(StartError::Manifest)?;
+            Ok((manifest, data_port))
         })
         .await
         .map_err(|error| StartError::Io(io::Error::other(error)))
         .and_then(|result| result);
         match result {
-            Ok(Initialized {
-                manifest,
-                data_port,
-            }) => {
+            Ok((manifest, data_port)) => {
                 process.data_endpoint = data_port.map(|port| DataEndpoint {
                     port,
                     authorization,

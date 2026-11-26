@@ -90,6 +90,7 @@ struct Connection {
 pub(super) struct ModuleForwarding {
     pub(super) signal: ForwardSignal,
     pub(super) driver: OnceLock<JoinSet<()>>,
+    pub(super) read_probe: Mutex<Option<TcpStream>>,
 }
 
 #[derive(Clone, Copy)]
@@ -112,6 +113,10 @@ impl ForwardSignal {
             *current = Some(reason);
             true
         });
+    }
+
+    pub(super) fn cause(&self) -> Option<ForwardCancellation> {
+        *self.0.borrow()
     }
 
     pub(super) async fn cancelled(&self) -> ForwardCancellation {
@@ -338,7 +343,7 @@ pub(super) async fn drive(
     drive_connection(io, peer, router, control, permit, head, None).await;
 }
 
-async fn wait_for_read_close(socket: Option<TcpStream>) {
+pub(super) async fn wait_for_read_close(socket: Option<TcpStream>) {
     #[cfg(unix)]
     if let Some(socket) = socket
         && let Ok(probe) =
@@ -356,16 +361,9 @@ async fn wait_for_read_close(socket: Option<TcpStream>) {
     pending().await
 }
 
-async fn wait_for_forwarding_cancel(
-    forwarding: Option<&ModuleForwarding>,
-    read_probe: Option<TcpStream>,
-) {
+async fn wait_for_forwarding_cancel(forwarding: Option<&ModuleForwarding>) {
     if let Some(forwarding) = forwarding {
-        tokio::select! {
-            biased;
-            _ = wait_for_read_close(read_probe) => forwarding.signal.cancel(ForwardCancellation::Peer),
-            _ = forwarding.signal.cancelled() => {}
-        }
+        forwarding.signal.cancelled().await;
         if forwarding.driver.get().is_some() {
             return;
         }
@@ -446,6 +444,7 @@ async fn drive_connection(
         module_forwarding: module_runtime.then(|| ModuleForwarding {
             signal: ForwardSignal(watch::Sender::new(None)),
             driver: OnceLock::new(),
+            read_probe: Mutex::new(read_probe),
         }),
         shutdown_after_response: Mutex::default(),
     }));
@@ -568,7 +567,7 @@ async fn drive_connection(
             .with_upgrades();
         tokio::select! {
             biased;
-            _ = wait_for_forwarding_cancel(context.0.module_forwarding.as_ref(), read_probe) => {
+            _ = wait_for_forwarding_cancel(context.0.module_forwarding.as_ref()) => {
                 Err(std::io::ErrorKind::ConnectionAborted.into())
             }
             result = connection => result.map_err(std::io::Error::other),
