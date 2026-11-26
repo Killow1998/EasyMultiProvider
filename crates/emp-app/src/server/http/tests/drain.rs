@@ -1265,6 +1265,78 @@ fn drain_native_accounts_for_a_read_terminal_before_previous_frame_flush() {
 }
 
 #[cfg(unix)]
+#[test]
+fn http_delivery_write_failure_preserves_activity_and_upstream_receipt() {
+    use super::inference::fixture;
+    use crate::tests::OneShotUpstream;
+
+    let upstream = OneShotUpstream::start_repeated_wire(
+        200,
+        "text/event-stream",
+        None,
+        1,
+        vec![ACCOUNTED_TERMINAL.to_vec()],
+    );
+    fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+        let backend = &fixture.server.state.backend;
+        backend
+            .usage
+            .ledger
+            .query(0.0, 1.0, "all", 1.0, None)
+            .unwrap();
+        let db = rusqlite::Connection::open(fixture.directory.path().join("state/usage.sqlite3"))
+            .unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER reject_delivery BEFORE UPDATE OF delivery ON call_records
+             BEGIN SELECT RAISE(ABORT, 'fixture rejected delivery'); END;",
+        )
+        .unwrap();
+
+        let probe = Probe::arm(fixture, "/v1/responses", None);
+        let wire = json_request(
+            fixture.port(),
+            "/v1/responses",
+            &[&fixture.session(), "Authorization: Bearer caller"],
+            br#"{"model":"native/alias","stream":true,"input":"fixture"}"#,
+        );
+        let reply = exchange_wire(address, &wire, false).await;
+        assert_status(&reply, 200);
+        let reply = String::from_utf8_lossy(&reply);
+        assert!(reply.contains("event: response.completed"), "{reply}");
+        let id = receive(probe.id, "request ID").await;
+        wait_for_diagnostic(fixture, &id, "request_finished", |fields| {
+            fields["delivery"] == "terminal_written"
+        });
+        assert!(fixture.flushed_journal().await.iter().any(|row| {
+            row["event"] == "call_delivery_save_failed" && row["fields"]["request_id"] == id
+        }));
+
+        let activity = backend.activity.snapshot(crate::util::system_now() as u64);
+        let request = activity["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|request| request["request_id"] == id)
+            .expect("activity for the same HTTP request");
+        assert_eq!(request["state"], "completed");
+        assert!(request["finished_at"].is_number());
+        let (state, facts, delivery): (String, String, Option<String>) = db
+            .query_row(
+                "SELECT state,facts,delivery FROM call_records WHERE request_id=? AND operation=?",
+                [id.as_str(), "responses"],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "completed");
+        let facts: Value = serde_json::from_str(&facts).unwrap();
+        assert_eq!(facts["response_status"], "completed");
+        assert_eq!(facts["input_tokens"], 3);
+        assert_eq!(facts["output_tokens"], 2);
+        assert_eq!(delivery, None);
+    });
+}
+
+#[cfg(unix)]
 const PREFIXED_LEARNING_MODEL: &str = "demo/upstream-model";
 
 #[cfg(unix)]

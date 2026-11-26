@@ -179,7 +179,7 @@ pub(super) async fn open(
     ),
     monitor: &mut DisconnectMonitor,
 ) -> Result<Upstream, RelayError> {
-    observation.diagnostic_only("aero");
+    observation.aero_parent();
     observation.phase(Phase::ValidateInput);
     let anchor =
         emp_context::request_history_anchor(body.as_object().expect("request body"), incoming).ok();

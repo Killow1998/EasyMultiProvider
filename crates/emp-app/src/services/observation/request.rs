@@ -1,7 +1,6 @@
-//! Passive receipts end at the downstream boundary and cannot access routing, retries,
-//! accounts or accounting; model outcomes retain their separate upstream boundary.
 use crate::services::observation::diagnostics::{Diagnostics, schema};
 use crate::services::request_facts::reasoning_effort;
+use crate::services::usage::DeliveryRecorder;
 use emp_context::HistoryError;
 use emp_domain::ResolvedRoute;
 use serde_json::{Value, json};
@@ -164,8 +163,7 @@ impl Drop for FrameDiagnostics {
 pub(crate) struct RequestObservation {
     delivery: Arc<RequestDelivery>,
     errors: crate::services::error_presentation::ErrorPresentation,
-    ledger: Option<Arc<emp_state::usage::ledger::UsageLedger>>,
-    reports_changed: Option<Arc<crate::services::management_events::ManagementEvents>>,
+    delivery_recorder: Option<DeliveryRecorder>,
     started: Instant,
     phase_started: Instant,
     execution_started: Option<Instant>,
@@ -201,8 +199,7 @@ impl RequestObservation {
                 facts: Mutex::default(),
             }),
             errors: Default::default(),
-            ledger: None,
-            reports_changed: None,
+            delivery_recorder: None,
             started: now,
             phase_started: now,
             execution_started: None,
@@ -222,19 +219,13 @@ impl RequestObservation {
     pub(crate) fn errors(&self) -> &crate::services::error_presentation::ErrorPresentation {
         &self.errors
     }
-    pub(crate) fn diagnostic_only(&mut self, route: &str) {
-        self.ledger = None;
-        self.reports_changed = None;
-        self.fields["route"] = json!(route);
+    pub(crate) fn aero_parent(&mut self) {
+        self.delivery_recorder = None;
+        self.fields["route"] = json!("aero");
     }
 
-    pub(crate) fn with_ledger(
-        mut self,
-        ledger: Arc<emp_state::usage::ledger::UsageLedger>,
-        events: Arc<crate::services::management_events::ManagementEvents>,
-    ) -> Self {
-        self.ledger = Some(ledger);
-        self.reports_changed = Some(events);
+    pub(crate) fn with_delivery_recorder(mut self, recorder: DeliveryRecorder) -> Self {
+        self.delivery_recorder = Some(recorder);
         self
     }
 
@@ -528,52 +519,49 @@ impl RequestObservation {
             self.fields["native_continuation"]["byte_scope"] = json!("websocket_text_payload");
         }
         self.close_phase();
-        self.fields["last_phase"] = json!(self.phase.name());
-        self.fields["duration_ms"] = json!(self.started.elapsed().as_millis() as u64);
+        let duration_ms = self.started.elapsed().as_millis() as u64;
         self.fields["handler_panicked"] = json!(std::thread::panicking());
-        {
+        let mut delivery = {
             let facts = self.delivery.facts.lock().expect("request delivery");
-            self.fields["writes_completed"] = json!(facts.writes_completed);
             self.fields["write_failed"] = json!(facts.write_failed);
             self.fields["terminal_written"] = json!(facts.terminal_written);
-            self.fields["downstream_terminal"] =
-                json!(facts.downstream_terminal.unwrap_or("unknown"));
+            let mut delivery = json!({
+                "last_phase":self.phase.name(),
+                "duration_ms":duration_ms,
+                "response_status":self.fields["response_status"],
+                "writes_completed":facts.writes_completed,
+                "downstream_terminal":facts.downstream_terminal.unwrap_or("unknown"),
+                "delivery":if facts.write_failed {
+                    "write_failed"
+                } else if facts.terminal_written {
+                    "terminal_written"
+                } else if facts.writes_completed > 0 {
+                    "partial"
+                } else {
+                    "not_observed"
+                },
+            });
             if let Some(origin) = facts.error_origin {
-                self.fields["error_origin"] = json!(origin);
+                delivery["error_origin"] = json!(origin);
             }
             if let Some(code) = &facts.error_code {
-                self.fields["error_code"] = json!(code);
+                delivery["error_code"] = json!(code);
             }
-            self.fields["delivery"] = json!(if facts.write_failed {
-                "write_failed"
-            } else if facts.terminal_written {
-                "terminal_written"
-            } else if facts.writes_completed > 0 {
-                "partial"
-            } else {
-                "not_observed"
-            });
-        }
-        if let Some(ledger) = &self.ledger
+            delivery
+        };
+        if let Some(recorder) = &self.delivery_recorder
             && let Some(id) = self.fields["request_id"].as_str()
         {
-            match ledger.record_call_delivery(
+            recorder.record(
                 id,
                 self.fields["operation"].as_str().unwrap_or("responses"),
-                &self.fields,
-            ) {
-                Ok(()) => {
-                    if let Some(events) = &self.reports_changed {
-                        events.publish(crate::services::management_events::Change::Usage);
-                    }
-                }
-                Err(_) => self.delivery.diagnostics.journal.event(
-                    "error",
-                    "call_delivery_save_failed",
-                    &json!({"request_id":id}),
-                ),
-            }
+                &delivery,
+            );
         }
+        self.fields
+            .as_object_mut()
+            .unwrap()
+            .append(delivery.as_object_mut().unwrap());
         self.delivery
             .diagnostics
             .journal

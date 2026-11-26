@@ -2,14 +2,14 @@
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::services::observation::diagnostics::Diagnostics;
+use crate::services::usage::DeliveryRecorder;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Instant;
 
 pub(crate) struct HttpObservation {
     diagnostics: Arc<Diagnostics>,
-    ledger: Arc<emp_state::usage::ledger::UsageLedger>,
-    events: Arc<crate::services::management_events::ManagementEvents>,
+    delivery_recorder: DeliveryRecorder,
     errors: crate::services::error_presentation::ErrorPresentation,
     started: Instant,
     fields: Value,
@@ -26,8 +26,10 @@ impl HttpObservation {
             .event("info", "http_request_started", &fields);
         Self {
             diagnostics: Arc::clone(&state.backend.diagnostics),
-            ledger: Arc::clone(&state.backend.usage.ledger),
-            events: Arc::clone(&state.backend.management_events),
+            delivery_recorder: state
+                .backend
+                .usage
+                .delivery_recorder(&state.backend.diagnostics),
             errors: crate::services::error_presentation::ErrorPresentation::new(state),
             started: Instant::now(),
             fields,
@@ -50,7 +52,7 @@ impl HttpObservation {
                         "responses"
                     },
                 )
-                .with_ledger(Arc::clone(&self.ledger), Arc::clone(&self.events))
+                .with_delivery_recorder(self.delivery_recorder.clone())
                 .with_errors(self.errors.clone()),
             );
         }
@@ -128,7 +130,7 @@ impl HttpObservation {
             Some("/v1/decisions" | "/v1/systemone")
         ) && let Some(id) = self.request_id()
         {
-            let _ = self.ledger.record_call_delivery(
+            self.delivery_recorder.record(
                 id,
                 "decisions",
                 &json!({

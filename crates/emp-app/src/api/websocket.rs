@@ -312,9 +312,11 @@ async fn responses_turns(
             "websocket",
             "responses",
         )
-        .with_ledger(
-            Arc::clone(&state.backend.usage.ledger),
-            Arc::clone(&state.backend.management_events),
+        .with_delivery_recorder(
+            state
+                .backend
+                .usage
+                .delivery_recorder(&state.backend.diagnostics),
         );
         let mut presentation = crate::services::error_presentation::ErrorPresentation::new(state);
         presentation.thread(incoming.get("thread-id").map(String::as_str));
@@ -379,7 +381,7 @@ async fn responses_turns(
         if let Some(config) = crate::api::aero::selected_config(state, &request_body) {
             let generate = request_body.as_object_mut().unwrap().remove("generate");
             if generate == Some(Value::Bool(false)) {
-                websocket.observation.diagnostic_only("aero");
+                websocket.observation.aero_parent();
                 let result = if state.backend.modules.active(emp_modules::Module::Aero) {
                     websocket.warmup().await
                 } else {

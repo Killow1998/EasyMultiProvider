@@ -14,13 +14,40 @@ use std::sync::{Arc, Condvar, Mutex, atomic::Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use super::management_events::{Change, ManagementEvents};
+use super::observation::diagnostics::Diagnostics;
+
+#[derive(Clone)]
+pub(crate) struct DeliveryRecorder {
+    ledger: Arc<UsageLedger>,
+    events: Arc<ManagementEvents>,
+    diagnostics: Arc<Diagnostics>,
+}
+
+impl DeliveryRecorder {
+    pub(crate) fn record(&self, request_id: &str, operation: &str, delivery: &Value) {
+        match self
+            .ledger
+            .record_call_delivery(request_id, operation, delivery)
+        {
+            Ok(()) if operation != "decisions" => self.events.publish(Change::Usage),
+            Ok(()) => {}
+            Err(_) => self.diagnostics.journal.event(
+                "error",
+                "call_delivery_save_failed",
+                &json!({"request_id":request_id}),
+            ),
+        }
+    }
+}
+
 pub(crate) struct UsageState {
     pub(crate) ledger: Arc<UsageLedger>,
     pub(crate) sessions: emp_codex::session_directory::SessionDirectory,
     pub(crate) tool_timings: emp_codex::history::tool_timing::ToolTimings,
     pub(crate) history: UsageHistoryScanner,
     progress: Mutex<ScanProgress>,
-    events: Arc<super::management_events::ManagementEvents>,
+    events: Arc<ManagementEvents>,
     scan_wake: Condvar,
     price_wake: Condvar,
 }
@@ -31,10 +58,7 @@ struct ScanProgress {
     completed: u64,
 }
 impl UsageState {
-    pub(crate) fn new(
-        root: &Path,
-        events: Arc<super::management_events::ManagementEvents>,
-    ) -> Self {
+    pub(crate) fn new(root: &Path, events: Arc<ManagementEvents>) -> Self {
         let prices = Arc::new(PriceCatalog::new(
             root.join("api_prices.json"),
             system_now(),
@@ -50,6 +74,14 @@ impl UsageState {
             price_wake: Condvar::new(),
         }
     }
+    pub(crate) fn delivery_recorder(&self, diagnostics: &Arc<Diagnostics>) -> DeliveryRecorder {
+        DeliveryRecorder {
+            ledger: Arc::clone(&self.ledger),
+            events: Arc::clone(&self.events),
+            diagnostics: Arc::clone(diagnostics),
+        }
+    }
+
     pub(super) fn record_completion(
         &self,
         event: &Value,
@@ -59,7 +91,7 @@ impl UsageState {
     ) -> Result<(), UsageError> {
         self.ledger
             .record_completion(event, now, started, finished)?;
-        self.events.publish(super::management_events::Change::Usage);
+        self.events.publish(Change::Usage);
         Ok(())
     }
     pub(crate) fn queue_scan(&self, state: &ServerState) -> Option<u64> {
@@ -110,7 +142,7 @@ impl UsageState {
         self.notify_scan();
     }
     fn notify_scan(&self) {
-        self.events.publish(super::management_events::Change::Usage);
+        self.events.publish(Change::Usage);
     }
     pub(crate) fn stop(&self) {
         let _guard = self.progress.lock().expect("usage wakeup");
