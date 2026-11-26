@@ -3,7 +3,7 @@ use crate::{
     server::raw_tcp::{RawClient, wire_timeout},
     tests::{OneShotUpstream, flushed_journal, live_journal, wait_for},
 };
-use emp_test_support::{Deadline, http::ChunkDecoder, sse, test_timeout};
+use emp_test_support::{Deadline, sse, test_timeout};
 use std::{collections::BTreeMap, io::Read, sync::mpsc};
 
 const RESPONSE: &[u8] = br#"{ "id":"resp_fixture","object":"response","status":"completed","model":"upstream","output":[], "z":1.2300e+2, "a":null }"#;
@@ -654,8 +654,7 @@ fn inference_projects_upstream_4xx_5xx_and_connection_failure() {
 
 pub(super) struct SseClient<R = TcpStream> {
     io: tokio::io::BufReader<R>,
-    chunked: ChunkDecoder,
-    pending: Vec<u8>,
+    chunks: SseChunks,
 }
 
 impl SseClient {
@@ -671,8 +670,7 @@ impl SseClient {
         head.assert_security();
         Self {
             io: tokio::io::BufReader::new(io),
-            chunked: ChunkDecoder::default(),
-            pending: Vec::new(),
+            chunks: SseChunks::default(),
         }
     }
 }
@@ -688,38 +686,42 @@ impl<R: tokio::io::AsyncRead + Unpin> SseClient<R> {
     }
 
     pub(super) async fn next_frame(&mut self) -> Option<sse::Frame> {
+        self.chunks.guard.resume();
         loop {
-            let ended = self.chunked.is_finished();
-            let mut available = self.pending.as_slice();
+            let ended = self.chunks.decoder.is_finished();
+            let mut available = self.chunks.pending.as_slice();
             if !ended {
                 available = available.strip_suffix(b"\r").unwrap_or(available);
             }
             match sse::read_frame(&mut available) {
                 Ok(Some(frame)) => {
-                    self.pending.drain(..frame.raw().len());
+                    self.chunks.pending.drain(..frame.raw().len());
                     if frame.is_comment_or_empty() {
                         continue;
                     }
                     return Some(frame);
                 }
-                Ok(None) if ended => return None,
+                Ok(None) if ended => {
+                    self.chunks.guard.finish();
+                    return None;
+                }
                 Ok(None) => {}
                 Err(error) if !ended && error.kind() == std::io::ErrorKind::UnexpectedEof => {}
                 Err(error) => panic!("read SSE frame: {error}"),
             }
 
-            read_chunk_data(&mut self.io, &mut self.chunked, &mut self.pending)
+            self.chunks
+                .read_more(&mut self.io)
                 .await
                 .expect("read chunked HTTP body");
         }
     }
 
     pub(super) async fn stop_at_chunk_boundary(&mut self) {
-        if self.pending.is_empty() {
-            stop_at_chunk_boundary(&mut self.io, &mut self.chunked)
-                .await
-                .expect("validate SSE chunk ending before disconnect");
-        }
+        self.chunks
+            .stop_at_chunk_boundary(&mut self.io)
+            .await
+            .expect("validate SSE chunk ending before disconnect");
     }
 
     async fn first_output(&mut self, deadline: &Deadline) -> Vec<Value> {
@@ -750,8 +752,7 @@ async fn sse_client_delivers_delta_before_the_rest_of_the_chunk_arrives() {
     let (mut sender, receiver) = tokio::io::duplex(1024);
     let mut client = SseClient {
         io: tokio::io::BufReader::new(receiver),
-        chunked: ChunkDecoder::default(),
-        pending: Vec::new(),
+        chunks: SseChunks::default(),
     };
     let deadline = Deadline::after(wire_timeout());
     let first_chunk = format!("{:x}\r\n{payload}", payload.len() + tail.len());

@@ -218,6 +218,7 @@ fn truncated_sse_never_fabricates_a_successful_completion() {
                         ),
                         "{model}: truncated stream must fail or close promptly: {error}"
                     );
+                    client.abandon("deliberately truncated upstream produced the expected downstream read error");
                     break;
                 }
             }

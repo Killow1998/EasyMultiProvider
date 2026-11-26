@@ -73,6 +73,7 @@ fn both_chunk_readers_reject_invalid_trailer_fields() {
         reader.expect_eof(&deadline).unwrap_err().kind(),
         io::ErrorKind::InvalidData
     );
+    reader.abandon("fixture deliberately sends an invalid chunk terminator");
 }
 
 #[test]
@@ -110,9 +111,35 @@ fn chunked_sse_requires_the_final_empty_line_even_after_completion() {
             eof.unwrap();
         } else {
             assert_eq!(eof.unwrap_err().kind(), io::ErrorKind::TimedOut);
+            client
+                .abandon("fixture keeps the socket open without the terminator's final empty line");
         }
         drop(server);
     }
+}
+
+#[test]
+fn done_marker_leaves_its_chunk_ending_for_expect_eof() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut server, _) = listener.accept().unwrap();
+    server
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\ne\r\ndata: [DONE]\n\n",
+        )
+        .unwrap();
+    drop(server);
+
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let mut client = SseClient::read_head(client, &deadline);
+    assert!(client.next_event(&deadline).unwrap().is_none());
+    assert_eq!(
+        client.expect_eof(&deadline).unwrap_err().kind(),
+        io::ErrorKind::UnexpectedEof
+    );
+    client.abandon(
+        "fixture deliberately closes after the done frame without sending the chunk ending",
+    );
 }
 
 #[test]

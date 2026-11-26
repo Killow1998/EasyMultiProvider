@@ -19,8 +19,7 @@ const ACCEPT: &str = "Accept: text/event-stream";
 struct Stream {
     io: BufReader<TcpStream>,
     headers: BTreeMap<String, String>,
-    chunked: ChunkDecoder,
-    pending: Vec<u8>,
+    chunks: SseChunks,
 }
 
 impl Stream {
@@ -46,28 +45,35 @@ impl Stream {
         Self {
             io: BufReader::new(io),
             headers,
-            chunked: ChunkDecoder::default(),
-            pending: Vec::new(),
+            chunks: SseChunks::default(),
         }
     }
 
     async fn next(&mut self, deadline: Duration) -> Option<String> {
+        self.chunks.guard.resume();
         timeout(deadline, async {
             loop {
-                if let Some(end) = self.pending.windows(2).position(|bytes| bytes == b"\n\n") {
+                if let Some(end) = self
+                    .chunks
+                    .pending
+                    .windows(2)
+                    .position(|bytes| bytes == b"\n\n")
+                {
                     return Some(
-                        String::from_utf8(self.pending.drain(..end + 2).collect()).unwrap(),
+                        String::from_utf8(self.chunks.pending.drain(..end + 2).collect()).unwrap(),
                     );
                 }
-                if self.chunked.is_finished() {
+                if self.chunks.decoder.is_finished() {
                     break;
                 }
-                read_chunk_data(&mut self.io, &mut self.chunked, &mut self.pending)
+                self.chunks
+                    .read_more(&mut self.io)
                     .await
                     .expect("read management SSE body");
             }
-            assert!(self.pending.is_empty(), "partial SSE event");
+            assert!(self.chunks.pending.is_empty(), "partial SSE event");
             assert!(self.io.fill_buf().await.unwrap().is_empty());
+            self.chunks.guard.finish();
             None
         })
         .await
@@ -75,15 +81,13 @@ impl Stream {
     }
 
     async fn stop_at_chunk_boundary(&mut self) {
-        if self.pending.is_empty() {
-            timeout(
-                wire_timeout().duration(),
-                stop_at_chunk_boundary(&mut self.io, &mut self.chunked),
-            )
-            .await
-            .expect("management SSE chunk ending before deadline")
-            .expect("validate management SSE chunk ending before disconnect");
-        }
+        timeout(
+            wire_timeout().duration(),
+            self.chunks.stop_at_chunk_boundary(&mut self.io),
+        )
+        .await
+        .expect("management SSE chunk ending before deadline")
+        .expect("validate management SSE chunk ending before disconnect");
     }
 }
 

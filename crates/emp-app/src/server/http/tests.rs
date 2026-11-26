@@ -25,6 +25,8 @@ use axum::{
     extract::{Request, State},
     routing::{any, get, post},
 };
+#[cfg(unix)]
+use emp_test_support::http::SseReadGuard;
 use emp_test_support::{
     Deadline,
     http::{Body, ChunkDecoder},
@@ -259,6 +261,30 @@ async fn stop_at_chunk_boundary(
         io.consume(consumed);
     }
     Ok(())
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct SseChunks {
+    decoder: ChunkDecoder,
+    pending: Vec<u8>,
+    guard: SseReadGuard,
+}
+
+#[cfg(unix)]
+impl SseChunks {
+    async fn read_more(&mut self, io: &mut (impl AsyncBufRead + Unpin)) -> std::io::Result<()> {
+        read_chunk_data(io, &mut self.decoder, &mut self.pending).await
+    }
+
+    async fn stop_at_chunk_boundary(
+        &mut self,
+        io: &mut (impl AsyncBufRead + Unpin),
+    ) -> std::io::Result<()> {
+        stop_at_chunk_boundary(io, &mut self.decoder).await?;
+        self.guard.finish();
+        Ok(())
+    }
 }
 
 #[cfg(unix)]

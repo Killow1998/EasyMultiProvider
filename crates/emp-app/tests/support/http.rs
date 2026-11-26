@@ -1,5 +1,5 @@
 pub(crate) use emp_test_support::http::read_message;
-use emp_test_support::http::{Body, parse_head};
+use emp_test_support::http::{SseBody, parse_head};
 use emp_test_support::{Deadline, DeadlineIo, sse, test_timeout};
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, BufReader, Write};
@@ -126,7 +126,7 @@ pub(super) fn send_request(
 }
 
 pub struct SseClient {
-    body: BufReader<Body<BufReader<DeadlineIo<TcpStream>>>>,
+    body: SseBody<BufReader<DeadlineIo<TcpStream>>>,
 }
 
 impl SseClient {
@@ -170,23 +170,15 @@ impl SseClient {
         let chunked = headers
             .get("transfer-encoding")
             .is_some_and(|value| value.eq_ignore_ascii_case("chunked"));
-        deadline
-            .accept(
-                Self {
-                    body: BufReader::new(Body::new(input, chunked)),
-                },
-                "SSE response head",
-            )
-            .unwrap()
+        deadline.accept((), "SSE response head").unwrap();
+        Self {
+            body: SseBody::new(input, chunked),
+        }
     }
 
     #[allow(dead_code, reason = "Used by the standalone HTTP and Linux Aero tests")]
     pub fn expect_eof(&mut self, deadline: &Deadline) -> io::Result<()> {
-        self.body
-            .get_mut()
-            .get_mut()
-            .get_mut()
-            .set_deadline(deadline);
+        self.body.get_mut().get_mut().set_deadline(deadline);
         if !self.body.fill_buf()?.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -197,16 +189,11 @@ impl SseClient {
     }
 
     pub fn next_event(&mut self, deadline: &Deadline) -> io::Result<Option<Value>> {
-        self.body
-            .get_mut()
-            .get_mut()
-            .get_mut()
-            .set_deadline(deadline);
+        self.body.get_mut().get_mut().set_deadline(deadline);
         while let Some(frame) = sse::read_frame(&mut self.body)? {
             if let Some(data) = frame.data().filter(|data| !data.is_empty()) {
                 if data.trim() == "[DONE]" {
-                    self.stop_at_chunk_boundary()?;
-                    return deadline.accept(None, "SSE done marker");
+                    return Ok(None);
                 }
                 let event = serde_json::from_str(&data)
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -217,9 +204,10 @@ impl SseClient {
     }
 
     pub fn stop_at_chunk_boundary(&mut self) -> io::Result<()> {
-        if self.body.buffer().is_empty() {
-            self.body.get_mut().stop_at_chunk_boundary()?;
-        }
-        Ok(())
+        self.body.stop_at_chunk_boundary()
+    }
+
+    pub fn abandon(&mut self, reason: &str) {
+        self.body.abandon(reason);
     }
 }

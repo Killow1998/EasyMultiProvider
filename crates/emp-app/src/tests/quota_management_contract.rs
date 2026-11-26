@@ -90,7 +90,13 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
     );
 
     let mut streams = (0..QUOTA_EVENT_SLOT_LIMIT)
-        .map(|_| open_quota_events(&server, &session))
+        .map(|index| {
+            let mut stream = open_quota_events(&server, &session);
+            if index != 0 {
+                stop_sse_at_chunk_boundary(&mut stream);
+            }
+            stream
+        })
         .collect::<Vec<_>>();
     let excess = request(&server, "/api/accounts/events", &[&session]);
     assert!(

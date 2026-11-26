@@ -83,6 +83,97 @@ pub struct Body<R> {
 }
 
 #[derive(Default)]
+pub struct SseReadGuard {
+    finished: bool,
+}
+
+impl SseReadGuard {
+    pub fn resume(&mut self) {
+        self.finished = false;
+    }
+
+    pub fn finish(&mut self) {
+        self.finished = true;
+    }
+
+    pub fn abandon(&mut self, reason: &str) {
+        assert!(!reason.trim().is_empty(), "give a reason to abandon SSE");
+        self.finish();
+    }
+}
+
+impl Drop for SseReadGuard {
+    fn drop(&mut self) {
+        if !self.finished && !std::thread::panicking() {
+            crate::drop_check(
+                Err::<(), _>("test stopped reading SSE without validating the chunk ending"),
+                "SSE reader dropped",
+            );
+        }
+    }
+}
+
+pub struct SseBody<R> {
+    body: BufReader<Body<R>>,
+    guard: SseReadGuard,
+}
+
+impl<R: BufRead> SseBody<R> {
+    pub fn new(input: R, chunked: bool) -> Self {
+        Self {
+            body: BufReader::new(Body::new(input, chunked)),
+            guard: SseReadGuard::default(),
+        }
+    }
+
+    pub fn get_mut(&mut self) -> &mut R {
+        self.body.get_mut().get_mut()
+    }
+
+    pub fn stop_at_chunk_boundary(&mut self) -> io::Result<()> {
+        self.body.get_mut().stop_at_chunk_boundary()?;
+        self.guard.finish();
+        Ok(())
+    }
+
+    pub fn abandon(&mut self, reason: &str) {
+        self.guard.abandon(reason);
+    }
+}
+
+impl<R: BufRead> Read for SseBody<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        self.guard.resume();
+        let count = self.body.read(buffer)?;
+        if count == 0 {
+            self.guard.finish();
+        }
+        Ok(count)
+    }
+}
+
+impl<R: BufRead> BufRead for SseBody<R> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        self.guard.resume();
+        let buffer = self.body.fill_buf()?;
+        if buffer.is_empty() {
+            self.guard.finish();
+        }
+        Ok(buffer)
+    }
+
+    fn consume(&mut self, amount: usize) {
+        if amount != 0 {
+            self.guard.resume();
+        }
+        self.body.consume(amount);
+    }
+}
+
+#[derive(Default)]
 pub struct ChunkDecoder {
     state: ChunkState,
     line: Vec<u8>,
@@ -330,13 +421,52 @@ mod tests {
             ),
         ] {
             let wire = format!("{:x}\r\n{payload}{ending}", payload.len());
-            let mut body = BufReader::new(Body::new(wire.as_bytes(), true));
+            let mut body = SseBody::new(wire.as_bytes(), true);
             let frame = sse::read_frame(&mut body).unwrap().unwrap();
             assert_eq!(frame.raw(), payload);
             let error = sse::read_frame(&mut body).unwrap_err();
             assert_eq!(error.kind(), kind);
             assert_eq!(error.to_string(), message);
+            body.abandon("fixture deliberately omits or corrupts the chunk ending");
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "test stopped reading SSE without validating the chunk ending")]
+    fn sse_body_requires_an_explicit_stop_or_eof() {
+        let mut body = SseBody::new(b"9\r\ndata: x\n\n\r\n0\r\n\r\n".as_slice(), true);
+        assert!(sse::read_frame(&mut body).unwrap().is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "test stopped reading SSE without validating the chunk ending")]
+    fn sse_body_requires_another_stop_after_reading_resumes() {
+        let mut body = SseBody::new(
+            b"12\r\ndata: x\n\ndata: y\n\n\r\n0\r\n\r\n".as_slice(),
+            true,
+        );
+        assert!(sse::read_frame(&mut body).unwrap().is_some());
+        body.stop_at_chunk_boundary().unwrap();
+        assert!(sse::read_frame(&mut body).unwrap().is_some());
+    }
+
+    #[test]
+    fn sse_body_can_drop_after_stopping_reaching_eof_or_abandoning() {
+        let wire = b"9\r\ndata: x\n\n\r\n0\r\n\r\n";
+        let mut stopped = SseBody::new(wire.as_slice(), true);
+        assert!(sse::read_frame(&mut stopped).unwrap().is_some());
+        stopped.stop_at_chunk_boundary().unwrap();
+        drop(stopped);
+
+        let mut finished = SseBody::new(wire.as_slice(), true);
+        assert!(sse::read_frame(&mut finished).unwrap().is_some());
+        assert!(sse::read_frame(&mut finished).unwrap().is_none());
+        drop(finished);
+
+        let mut truncated = SseBody::new(b"9\r\ndata: x\n\n".as_slice(), true);
+        assert!(sse::read_frame(&mut truncated).unwrap().is_some());
+        truncated.abandon("fixture deliberately truncates the HTTP chunk ending");
+        drop(truncated);
     }
 
     #[test]

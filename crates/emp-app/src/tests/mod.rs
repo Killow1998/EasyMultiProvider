@@ -4,7 +4,7 @@ mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
 use base64::engine::general_purpose::STANDARD;
 use emp_test_support::{
-    Deadline, DeadlineIo, Observation, Probe, TestBudget, accept_blocking, http::Body, sse,
+    Deadline, DeadlineIo, Observation, Probe, TestBudget, accept_blocking, http::SseBody, sse,
     test_timeout,
 };
 
@@ -285,23 +285,30 @@ fn delete(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
     complete_response(&mut stream)
 }
 
-struct SseBody<R> {
-    decoded: Body<R>,
+struct SseReader<R = BufReader<DeadlineIo<TcpStream>>> {
+    body: SseBody<R>,
     deadline: Deadline,
 }
 
-impl<R: BufRead> Read for SseBody<R> {
+impl<R: BufRead> Read for SseReader<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.decoded.read(buffer)
+        self.body.read(buffer)
     }
 }
 
-type SseReader<R = BufReader<DeadlineIo<TcpStream>>> = BufReader<SseBody<R>>;
+impl<R: BufRead> BufRead for SseReader<R> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.body.fill_buf()
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.body.consume(amount);
+    }
+}
 
 fn set_sse_deadline(reader: &mut SseReader, deadline: &Deadline) {
-    let body = reader.get_mut();
-    body.decoded.get_mut().get_mut().set_deadline(deadline);
-    body.deadline = *deadline;
+    reader.body.get_mut().get_mut().set_deadline(deadline);
+    reader.deadline = *deadline;
 }
 
 fn read_sse_head<R: BufRead>(mut input: R, deadline: &Deadline) -> (String, SseReader<R>) {
@@ -321,10 +328,10 @@ fn read_sse_head<R: BufRead>(mut input: R, deadline: &Deadline) -> (String, SseR
         .unwrap();
     (
         head,
-        BufReader::new(SseBody {
-            decoded: Body::new(input, true),
+        SseReader {
+            body: SseBody::new(input, true),
             deadline: *deadline,
-        }),
+        },
     )
 }
 
@@ -332,21 +339,14 @@ fn read_sse_frame<R: BufRead>(reader: &mut SseReader<R>) -> sse::Frame {
     let frame = sse::read_frame(reader)
         .expect("read SSE frame")
         .expect("SSE stream ended before the next frame");
-    reader
-        .get_ref()
-        .deadline
-        .accept(frame, "complete SSE frame")
-        .unwrap()
+    reader.deadline.accept(frame, "complete SSE frame").unwrap()
 }
 
 fn stop_sse_at_chunk_boundary<R: BufRead>(reader: &mut SseReader<R>) {
-    if reader.buffer().is_empty() {
-        reader
-            .get_mut()
-            .decoded
-            .stop_at_chunk_boundary()
-            .expect("validate SSE chunk ending before disconnect");
-    }
+    reader
+        .body
+        .stop_at_chunk_boundary()
+        .expect("validate SSE chunk ending before disconnect");
 }
 
 fn read_sse_frames<R: BufRead>(reader: &mut SseReader<R>) -> impl Iterator<Item = sse::Frame> {
