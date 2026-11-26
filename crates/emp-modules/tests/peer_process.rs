@@ -106,6 +106,9 @@ fn module_fixture() {
         Ok(reply)
     });
     handlers.register("module.panic", |_, _, _| panic!("fixture handler panic"));
+    handlers.register("module.oversized", |_, _, _| {
+        Ok(Value::String("x".repeat(16 * 1024 * 1024)))
+    });
     let gates = Arc::new(Mutex::new(HashMap::new()));
     let waiting = gates.clone();
     handlers.register("module.gated", move |params, token, peer| {
@@ -195,6 +198,46 @@ fn out_of_order_responses_reach_the_correct_waiters() {
     assert_eq!(fast.wait(budget()).unwrap(), json!(2));
     host.call("module.release", json!(1), budget()).unwrap();
     assert_eq!(slow.wait(budget()).unwrap(), json!(1));
+}
+
+#[test]
+fn an_oversized_reply_fails_only_its_request() {
+    let mut handlers = Handlers::default();
+    let (started, starting) = mpsc::channel();
+    handlers.register("host.started", move |params, _, _| {
+        started.send(params).unwrap();
+        Ok(Value::Null)
+    });
+    let (peer, _child) = module("peer", handlers);
+    let host = peer.handle();
+    let first = host.start_request("module.gated", json!(1)).unwrap();
+    assert_eq!(starting.recv_timeout(budget()).unwrap(), json!(1));
+    let second = host.start_request("module.gated", json!(2)).unwrap();
+    assert_eq!(starting.recv_timeout(budget()).unwrap(), json!(2));
+
+    let Err(CallError::Remote(error)) = host.call("module.oversized", Value::Null, budget()) else {
+        panic!("an oversized reply must return an RPC error");
+    };
+    assert_eq!(error.code, ErrorCode::InternalError as i32);
+    assert_eq!(error.message, "invalid frame length");
+    assert_eq!(error.data, None);
+
+    host.call("module.release", json!(2), budget()).unwrap();
+    assert_eq!(second.wait(budget()).unwrap(), json!(2));
+    host.call("module.release", json!(1), budget()).unwrap();
+    assert_eq!(first.wait(budget()).unwrap(), json!(1));
+}
+
+#[test]
+fn an_oversized_notification_reports_a_disconnected_peer() {
+    let (peer, _child) = module("peer", Handlers::default());
+    let host = peer.handle();
+    host.close();
+    let oversized = Value::String("x".repeat(16 * 1024 * 1024));
+    assert!(matches!(
+        host.notify("module.echo", oversized),
+        Err(CallError::Disconnected)
+    ));
 }
 
 #[test]

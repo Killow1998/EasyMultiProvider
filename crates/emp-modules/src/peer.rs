@@ -13,7 +13,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
@@ -124,8 +124,7 @@ struct Connection {
 
 enum Outgoing {
     Request(RequestId, Frame),
-    Notification(Frame),
-    Control(Message),
+    Control(Frame),
 }
 
 struct Frame {
@@ -158,6 +157,16 @@ impl Frame {
 }
 
 impl Connection {
+    fn writer(&self) -> Result<&mpsc::Sender<Outgoing>, CallError> {
+        self.writer.as_ref().ok_or(CallError::Disconnected)
+    }
+
+    fn send_control(&self, frame: Frame) -> Result<(), CallError> {
+        self.writer()?
+            .send(Outgoing::Control(frame))
+            .map_err(|_| CallError::Disconnected)
+    }
+
     fn disconnect(mut self, result: io::Result<()>) {
         for (_, pending) in self.pending.drain() {
             pending.reply.complete(Err(CallError::Disconnected));
@@ -265,9 +274,7 @@ impl Peer {
         let writer = thread::Builder::new()
             .name("emp-peer-writer".into())
             .spawn(move || {
-                if let Err(error) = output.write_loop(&mut writer, frames) {
-                    output.disconnect(Err(error));
-                }
+                output.write_loop(&mut writer, frames);
                 writer_exiting();
             })?;
         let input = handle.clone();
@@ -328,50 +335,38 @@ impl PeerHandle {
         method: impl Into<String>,
         params: Value,
     ) -> Result<PendingRequest, CallError> {
-        let id = {
-            let mut state = self.connection.lock().unwrap();
-            let connection = state
-                .as_mut()
-                .filter(|connection| connection.writer.is_some())
-                .ok_or(CallError::Disconnected)?;
+        self.prepare_request(method, params)?.enqueue(None)
+    }
+
+    pub fn prepare_request(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+    ) -> Result<PreparedRequest, CallError> {
+        let method = method.into();
+        let (frame, id) = self.prepare_outgoing(move |connection| {
             let id = RequestId::from(format!("{}{}", self.side.prefix(), connection.next_id));
             connection.next_id += 1;
-            id
-        };
-        let frame = Frame::encode(
-            &Request {
+            let request = Request {
                 id: id.clone(),
-                method: method.into(),
+                method,
                 params,
-            }
-            .into(),
-        )
-        .map_err(|_| CallError::InvalidFrame)?;
-        let mut state = self.connection.lock().unwrap();
-        let connection = state.as_mut().ok_or(CallError::Disconnected)?;
-        let writer = connection.writer.as_ref().ok_or(CallError::Disconnected)?;
-        writer
-            .send(Outgoing::Request(id.clone(), frame))
-            .map_err(|_| CallError::Disconnected)?;
-        let reply = Arc::new(Reply::default());
-        connection.pending.insert(
-            id.clone(),
-            PendingReply {
-                reply: reply.clone(),
-                sent: false,
-            },
-        );
-        Ok(PendingRequest {
-            reply,
-            canceller: RequestCanceller {
-                peer: self.clone(),
-                id,
-            },
+            };
+            (request.into(), id)
+        })?;
+        Ok(PreparedRequest {
+            peer: self.clone(),
+            id,
+            frame,
         })
     }
 
     pub fn call(&self, method: impl Into<String>, params: Value, timeout: Duration) -> CallResult {
-        self.start_request(method, params)?.wait(timeout)
+        let started = Instant::now();
+        let deadline = started.checked_add(timeout);
+        self.prepare_request(method, params)?
+            .enqueue(deadline)?
+            .wait(timeout.saturating_sub(started.elapsed()))
     }
 
     pub fn notify(&self, method: impl Into<String>, params: Value) -> Result<(), CallError> {
@@ -379,15 +374,47 @@ impl PeerHandle {
             method: method.into(),
             params,
         };
-        let frame = Frame::encode(&notification.into()).map_err(|_| CallError::InvalidFrame)?;
+        let (frame, ()) = self.prepare_outgoing(|_| (notification.into(), ()))?;
         let state = self.connection.lock().unwrap();
-        let connection = state.as_ref().ok_or(CallError::Disconnected)?;
-        connection
-            .writer
+        state
             .as_ref()
             .ok_or(CallError::Disconnected)?
-            .send(Outgoing::Notification(frame))
-            .map_err(|_| CallError::Disconnected)
+            .send_control(frame)
+    }
+
+    fn prepare_outgoing<T>(
+        &self,
+        build: impl FnOnce(&mut Connection) -> (Message, T),
+    ) -> Result<(Frame, T), CallError> {
+        let (message, metadata) = {
+            let mut state = self.connection.lock().unwrap();
+            let connection = state.as_mut().ok_or(CallError::Disconnected)?;
+            connection.writer()?;
+            build(connection)
+        };
+        let frame = Frame::encode(&message).or_else(|error| match message {
+            Message::Response(response) => Frame::encode(
+                &Response::new_err(
+                    response.id,
+                    ErrorCode::InternalError as i32,
+                    "invalid frame length".into(),
+                )
+                .into(),
+            ),
+            _ => Err(error),
+        });
+        Ok((frame.map_err(|_| CallError::InvalidFrame)?, metadata))
+    }
+
+    fn send_response(&self, response: Response) {
+        let id = response.id.clone();
+        let prepared = self.prepare_outgoing(|_| (response.into(), ()));
+        if let Some(connection) = self.connection.lock().unwrap().as_mut() {
+            connection.incoming.remove(&id);
+            if let Ok((frame, ())) = prepared {
+                let _ = connection.send_control(frame);
+            }
+        }
     }
 
     pub fn close(&self) {
@@ -413,19 +440,14 @@ impl PeerHandle {
         }
     }
 
-    fn write_loop(
-        &self,
-        writer: &mut impl Write,
-        frames: mpsc::Receiver<Outgoing>,
-    ) -> io::Result<()> {
+    fn write_loop(&self, writer: &mut impl Write, frames: mpsc::Receiver<Outgoing>) {
         for message in frames {
             if self.connection.lock().unwrap().is_none() {
                 break;
             }
             let (request_id, frame) = match message {
                 Outgoing::Request(id, frame) => (Some(id), frame),
-                Outgoing::Notification(frame) => (None, frame),
-                Outgoing::Control(message) => (None, Frame::encode(&message)?),
+                Outgoing::Control(frame) => (None, frame),
             };
             if let Err(error) = writer
                 .write_all(frame.header.as_bytes())
@@ -452,7 +474,6 @@ impl PeerHandle {
                 pending.sent = true;
             }
         }
-        Ok(())
     }
 
     fn read_loop(&self, reader: &mut impl BufRead, handlers: &Handlers) -> io::Result<()> {
@@ -495,16 +516,12 @@ impl PeerHandle {
                         continue;
                     }
                     let Some(handler) = handlers.0.get(&request.method).cloned() else {
-                        if let Some(writer) = &connection.writer {
-                            let _ = writer.send(Outgoing::Control(
-                                Response::new_err(
-                                    request.id,
-                                    ErrorCode::MethodNotFound as i32,
-                                    request.method,
-                                )
-                                .into(),
-                            ));
-                        }
+                        drop(state);
+                        self.send_response(Response::new_err(
+                            request.id,
+                            ErrorCode::MethodNotFound as i32,
+                            request.method,
+                        ));
                         continue;
                     };
                     let token = CancellationToken::default();
@@ -547,25 +564,51 @@ struct HandlerReply {
 
 impl Drop for HandlerReply {
     fn drop(&mut self) {
-        if let Some(connection) = self.peer.connection.lock().unwrap().as_mut() {
-            connection.incoming.remove(&self.id);
-            let response_result = self.result.take().unwrap_or_else(|| {
-                Err(ResponseError {
-                    code: ErrorCode::InternalError as i32,
-                    message: "request handler panicked".into(),
-                    data: None,
-                })
-            });
-            if let Some(writer) = &connection.writer {
-                let _ = writer.send(Outgoing::Control(
-                    Response {
-                        id: self.id.clone(),
-                        response_result,
-                    }
-                    .into(),
-                ));
-            }
+        let response_result = self.result.take().unwrap_or_else(|| {
+            Err(ResponseError {
+                code: ErrorCode::InternalError as i32,
+                message: "request handler panicked".into(),
+                data: None,
+            })
+        });
+        self.peer.send_response(Response {
+            id: self.id.clone(),
+            response_result,
+        });
+    }
+}
+
+pub struct PreparedRequest {
+    peer: PeerHandle,
+    id: RequestId,
+    frame: Frame,
+}
+
+impl PreparedRequest {
+    pub fn enqueue(self, deadline: Option<Instant>) -> Result<PendingRequest, CallError> {
+        let Self { peer, id, frame } = self;
+        let mut state = peer.connection.lock().unwrap();
+        let connection = state.as_mut().ok_or(CallError::Disconnected)?;
+        let writer = connection.writer()?;
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(CallError::TimedOut);
         }
+        writer
+            .send(Outgoing::Request(id.clone(), frame))
+            .map_err(|_| CallError::Disconnected)?;
+        let reply = Arc::new(Reply::default());
+        connection.pending.insert(
+            id.clone(),
+            PendingReply {
+                reply: reply.clone(),
+                sent: false,
+            },
+        );
+        drop(state);
+        Ok(PendingRequest {
+            reply,
+            canceller: RequestCanceller { peer, id },
+        })
     }
 }
 
@@ -631,15 +674,28 @@ impl RequestCanceller {
     }
 
     fn finish(&self, error: CallError) {
+        if !self
+            .peer
+            .connection
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|connection| connection.pending.contains_key(&self.id))
+        {
+            return;
+        }
+        let notification = Notification {
+            method: CANCEL_REQUEST.into(),
+            params: json!({"id": self.id}),
+        };
+        let prepared = self.peer.prepare_outgoing(|_| (notification.into(), ()));
         let mut state = self.peer.connection.lock().unwrap();
         if let Some(connection) = state.as_mut()
             && let Some(pending) = connection.pending.remove(&self.id)
         {
             pending.reply.complete(Err(error));
-            if let Some(writer) = &connection.writer {
-                let _ = writer.send(Outgoing::Control(
-                    Notification::new(CANCEL_REQUEST.into(), json!({"id": self.id})).into(),
-                ));
+            if let Ok((frame, ())) = prepared {
+                let _ = connection.send_control(frame);
             }
         }
     }

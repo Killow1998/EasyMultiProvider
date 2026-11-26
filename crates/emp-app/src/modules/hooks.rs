@@ -1,7 +1,7 @@
 use crate::services::observation::diagnostics::Diagnostics;
 use emp_modules::manifest::HookPhase;
 use emp_modules::peer::{CallError, RequestCanceller};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::{
     sync::{Arc, Mutex, OnceLock},
@@ -27,11 +27,26 @@ struct Cancellation {
     pending: Option<RequestCanceller>,
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 enum Reply<T> {
-    Claimed { value: T },
-    Declined {},
+    Claimed(T),
+    Declined,
+}
+
+impl<T: DeserializeOwned> Reply<T> {
+    fn decode(reply: Value) -> Result<Self, Failure> {
+        let Value::Object(mut reply) = reply else {
+            return Err(Failure::InvalidReply);
+        };
+        match reply.remove("status").as_ref().and_then(Value::as_str) {
+            Some("claimed") if reply.len() == 1 => reply
+                .remove("value")
+                .ok_or(Failure::InvalidReply)
+                .and_then(|value| serde_json::from_value(value).map_err(|_| Failure::InvalidReply))
+                .map(Self::Claimed),
+            Some("declined") if reply.is_empty() => Ok(Self::Declined),
+            _ => Err(Failure::InvalidReply),
+        }
+    }
 }
 
 enum Outcome<T> {
@@ -89,9 +104,12 @@ impl HookOperation {
     }
 
     pub(crate) fn cancel(&self) {
-        let mut cancellation = self.cancellation.lock().expect("hook cancellation");
-        cancellation.cancelled = true;
-        if let Some(pending) = cancellation.pending.take() {
+        let pending = {
+            let mut cancellation = self.cancellation.lock().expect("hook cancellation");
+            cancellation.cancelled = true;
+            cancellation.pending.take()
+        };
+        if let Some(pending) = pending {
             pending.cancel();
         }
     }
@@ -126,25 +144,32 @@ impl HookOperation {
                     .map_err(Failure::from)
             } else {
                 let pending = (|| {
-                    let mut cancellation = self.cancellation.lock().expect("hook cancellation");
-                    if cancellation.cancelled {
+                    if self
+                        .cancellation
+                        .lock()
+                        .expect("hook cancellation")
+                        .cancelled
+                    {
                         return Err(Failure::Cancelled);
                     }
                     if Instant::now() >= deadline {
                         return Err(Failure::Timeout);
                     }
-                    let pending = module
+                    let prepared = module
                         .connection
-                        .start_request(phase.method(), params.clone())?;
+                        .prepare_request(phase.method(), params.clone())?;
+                    let mut cancellation = self.cancellation.lock().expect("hook cancellation");
+                    if cancellation.cancelled {
+                        return Err(Failure::Cancelled);
+                    }
+                    let pending = prepared.enqueue(Some(deadline))?;
                     cancellation.pending = Some(pending.canceller());
                     Ok(pending)
                 })();
                 pending.and_then(|pending| {
                     let result = pending.wait(deadline.saturating_duration_since(Instant::now()));
                     self.cancellation.lock().expect("hook cancellation").pending = None;
-                    serde_json::from_value(result?)
-                        .map(Some)
-                        .map_err(|_| Failure::InvalidReply)
+                    Reply::decode(result?).map(Some)
                 })
             };
             let failed = |reason| Outcome::Failed {
@@ -153,8 +178,8 @@ impl HookOperation {
             };
             let outcome = match result {
                 Ok(None) => Outcome::Claimed(None),
-                Ok(Some(Reply::Declined {})) => Outcome::Declined,
-                Ok(Some(Reply::Claimed { value })) => match claim(module, value) {
+                Ok(Some(Reply::Declined)) => Outcome::Declined,
+                Ok(Some(Reply::Claimed(value))) => match claim(module, value) {
                     Ok(value) => Outcome::Claimed(value),
                     Err(()) => failed(Failure::InvalidReply),
                 },

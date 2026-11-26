@@ -4,7 +4,7 @@ use crate::{
     services::observation::diagnostics::Diagnostics,
 };
 use emp_modules::{
-    manifest::HookPhase::{self, CallFinished, CheckAccess, ProjectCatalog},
+    manifest::HookPhase::{self, CallFinished, CheckAccess, ProjectCatalog, ResolveRoute},
     peer::{CallError, Handlers, Peer, Side},
 };
 use emp_storage::diagnostics::ServiceOwner;
@@ -14,10 +14,14 @@ use std::{
     fs::File,
     io::{self, BufReader},
     sync::{Arc, Mutex, mpsc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tempfile::TempDir;
-use tokio::{sync::mpsc as events, task::JoinHandle, time::timeout};
+use tokio::{
+    sync::mpsc as events,
+    task::JoinHandle,
+    time::{sleep_until, timeout, timeout_at},
+};
 
 pub(super) fn child(output: File) {
     let manifest: Value =
@@ -27,8 +31,7 @@ pub(super) fn child(output: File) {
     let (release, gated) = mpsc::channel();
     let gated = Arc::new(Mutex::new(gated));
     let mut handlers = Handlers::default();
-    for contribution in manifest["contributions"].as_array().unwrap() {
-        let phase: HookPhase = serde_json::from_value(contribution["phase"].clone()).unwrap();
+    for phase in [CallFinished, CheckAccess, ProjectCatalog, ResolveRoute] {
         let method = phase.method();
         let behavior = behaviors[method].clone();
         let gated = gated.clone();
@@ -55,10 +58,10 @@ pub(super) fn child(output: File) {
                 )
                 .unwrap();
             }
-            if behavior.is_object() {
-                Ok(behavior.clone())
-            } else {
+            if behavior.is_null() || behavior == "block" {
                 Ok(json!({"status":"declined"}))
+            } else {
+                Ok(behavior.clone())
             }
         });
     }
@@ -201,7 +204,7 @@ async fn hooks_follow_id_order_and_allow_callbacks_during_dispatch() {
         .install(
             "zeta",
             1,
-            &[CheckAccess, CallFinished],
+            &[CheckAccess],
             json!({(CheckAccess.method()):{"status":"claimed","value":false}}),
         )
         .await;
@@ -229,14 +232,6 @@ async fn hooks_follow_id_order_and_allow_callbacks_during_dispatch() {
             })
         );
     }
-    operation.notify_finished(json!({"result":"success"}));
-    assert_eq!(
-        fixture.event().await,
-        json!({
-            "module_id":"zeta", "method":CallFinished.method(),
-            "params":{"operation_id":"ordered", "caller_id":"fixture", "input":{"result":"success"}}
-        })
-    );
     assert!(fixture.seen.try_recv().is_err());
     assert!(fixture.failures("ordered").is_empty());
     alpha.stop().await.unwrap();
@@ -245,9 +240,48 @@ async fn hooks_follow_id_order_and_allow_callbacks_during_dispatch() {
 }
 
 #[tokio::test]
+async fn call_finished_reaches_a_live_subscriber_after_the_first_exits() {
+    let mut fixture = Fixture::new();
+    let first = fixture
+        .install("alpha", 1, &[CallFinished], Value::Null)
+        .await;
+    let unsubscribed = fixture
+        .install("observer", 1, &[CheckAccess], Value::Null)
+        .await;
+    let later = fixture
+        .install("zeta", 1, &[CallFinished], Value::Null)
+        .await;
+    let operation = fixture.capture("finished");
+    first.stop().await.unwrap();
+
+    operation.notify_finished(json!({"result":"success"}));
+    assert_eq!(
+        fixture.event().await,
+        json!({
+            "module_id":"zeta", "method":CallFinished.method(),
+            "params":{"operation_id":"finished", "caller_id":null, "input":{"result":"success"}}
+        })
+    );
+    assert!(
+        timeout(
+            test_timeout(Duration::from_millis(250)).duration(),
+            fixture.seen.recv(),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        fixture.failures("finished"),
+        [("alpha".into(), "Exited".into())]
+    );
+    unsubscribed.stop().await.unwrap();
+    later.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn hooks_share_a_phase_deadline_and_report_timeout() {
     let mut fixture = Fixture::new();
-    let slow = fixture
+    let first = fixture
         .install(
             "alpha",
             1,
@@ -260,48 +294,75 @@ async fn hooks_share_a_phase_deadline_and_report_timeout() {
             "zeta",
             1,
             &[ProjectCatalog],
-            json!({(ProjectCatalog.method()):{"status":"claimed","value":true}}),
+            json!({(ProjectCatalog.method()):"block"}),
         )
         .await;
-    let running = dispatch(fixture.capture("deadline"), ProjectCatalog, Value::Null);
-    assert_eq!(fixture.event().await["module_id"], "alpha");
-    assert_eq!(running.await.unwrap(), Ok(None));
+    let phase_budget = test_timeout(Duration::from_secs(4))
+        .duration()
+        .min(Duration::from_secs(4));
+    let deadline = Instant::now() + phase_budget;
+    let operation = HookOperation::capture(
+        &fixture.registry,
+        &fixture.diagnostics,
+        Some("deadline"),
+        Some(deadline),
+    )
+    .unwrap();
+    let running = dispatch(operation, ProjectCatalog, Value::Null);
+    let entered = fixture.event().await;
+    assert_eq!(entered["module_id"], "alpha");
+    assert_eq!(entered["method"], ProjectCatalog.method());
+    sleep_until((deadline - phase_budget / 2).into()).await;
+    release(&first).await.unwrap();
+    assert_eq!(
+        fixture.event().await,
+        json!({"module_id":"alpha","method":"cancelled","params":false})
+    );
+    let entered = fixture.event().await;
+    assert_eq!(entered["module_id"], "zeta");
+    assert_eq!(entered["method"], ProjectCatalog.method());
+    let observation_end = deadline + phase_budget / 4;
+    assert_eq!(
+        timeout_at(observation_end.into(), running)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(None)
+    );
+    assert!(Instant::now() >= deadline);
     assert_eq!(
         fixture.failures("deadline"),
-        [
-            ("alpha".into(), "Timeout".into()),
-            ("zeta".into(), "Timeout".into()),
-        ]
+        [("zeta".into(), "Timeout".into())]
     );
-    release(&slow).await.unwrap();
-    let cancelled = fixture.event().await;
-    assert_eq!(cancelled["method"], "cancelled");
-    assert_eq!(cancelled["params"], true);
-    assert!(fixture.seen.try_recv().is_err());
-    slow.stop().await.unwrap();
+    release(&later).await.unwrap();
+    assert_eq!(
+        fixture.event().await,
+        json!({"module_id":"zeta","method":"cancelled","params":true})
+    );
+    first.stop().await.unwrap();
     later.stop().await.unwrap();
 }
 
 #[tokio::test]
-async fn hook_exit_fails_the_snapshot_without_revoking_the_new_generation() {
+async fn resolve_route_exit_fails_closed_without_revoking_the_new_generation() {
     let mut fixture = Fixture::new();
     let old = fixture
         .install(
             "router",
             1,
-            &[CheckAccess],
-            json!({(CheckAccess.method()):"exit"}),
+            &[ResolveRoute],
+            json!({(ResolveRoute.method()):"exit"}),
         )
         .await;
-    let running = dispatch(fixture.capture("old"), CheckAccess, Value::Null);
+    let running = dispatch(fixture.capture("old"), ResolveRoute, Value::Null);
     assert_eq!(fixture.event().await["params"]["operation_id"], "old");
 
     let new = fixture
         .install(
             "router",
             2,
-            &[CheckAccess],
-            json!({(CheckAccess.method()):{"status":"claimed","value":true}}),
+            &[ResolveRoute],
+            json!({(ResolveRoute.method()):{"status":"claimed","value":true}}),
         )
         .await;
     assert!(matches!(
@@ -316,7 +377,7 @@ async fn hook_exit_fails_the_snapshot_without_revoking_the_new_generation() {
     );
 
     assert_eq!(fixture.registry.get("router").unwrap().generation, 2);
-    let running = dispatch(fixture.capture("new"), CheckAccess, Value::Null);
+    let running = dispatch(fixture.capture("new"), ResolveRoute, Value::Null);
     assert_eq!(fixture.event().await["params"]["operation_id"], "new");
     assert_eq!(running.await.unwrap(), Ok(Some(true)));
     new.stop().await.unwrap();
@@ -351,27 +412,33 @@ async fn cancelling_a_hook_sends_the_peer_cancellation() {
 }
 
 #[tokio::test]
-async fn hook_decline_with_extra_fields_fails() {
-    let mut fixture = Fixture::new();
-    let process = fixture
-        .install(
-            "access",
-            1,
-            &[CheckAccess],
-            json!({(CheckAccess.method()):{"status":"declined","value":true}}),
-        )
-        .await;
-    let running = dispatch(fixture.capture("invalid-reply"), CheckAccess, Value::Null);
-    assert_eq!(
-        fixture.event().await["params"]["operation_id"],
-        "invalid-reply"
-    );
-    assert_eq!(running.await.unwrap(), Err(()));
-    assert_eq!(
-        fixture.failures("invalid-reply"),
-        [("access".into(), "InvalidReply".into())]
-    );
-    process.stop().await.unwrap();
+async fn malformed_hook_replies_fail_closed() {
+    for reply in [
+        json!({"status":"declined","value":true}),
+        json!(["declined"]),
+        json!(["claimed", true]),
+    ] {
+        let mut fixture = Fixture::new();
+        let process = fixture
+            .install(
+                "access",
+                1,
+                &[CheckAccess],
+                json!({(CheckAccess.method()):reply}),
+            )
+            .await;
+        let running = dispatch(fixture.capture("invalid-reply"), CheckAccess, Value::Null);
+        assert_eq!(
+            fixture.event().await["params"]["operation_id"],
+            "invalid-reply"
+        );
+        assert_eq!(running.await.unwrap(), Err(()), "{reply}");
+        assert_eq!(
+            fixture.failures("invalid-reply"),
+            [("access".into(), "InvalidReply".into())]
+        );
+        process.stop().await.unwrap();
+    }
 }
 
 #[tokio::test]
