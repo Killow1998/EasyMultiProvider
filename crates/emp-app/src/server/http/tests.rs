@@ -281,10 +281,48 @@ impl SseChunks {
         &mut self,
         io: &mut (impl AsyncBufRead + Unpin),
     ) -> std::io::Result<()> {
-        stop_at_chunk_boundary(io, &mut self.decoder).await?;
+        if self
+            .decoder
+            .needs_chunk_ending_validation(self.pending.is_empty())
+        {
+            stop_at_chunk_boundary(io, &mut self.decoder).await?;
+        }
         self.guard.finish();
         Ok(())
     }
+}
+
+#[cfg(unix)]
+#[tokio::test(start_paused = true)]
+async fn sse_chunks_stop_before_chunk_ending_when_body_is_buffered() {
+    let (mut peer, io) = tokio::io::duplex(1024);
+    let (stopped, wait_for_stop) = tokio::sync::oneshot::channel();
+    let reader = async {
+        let mut io = tokio::io::BufReader::new(io);
+        let mut chunks = SseChunks::default();
+        let deadline = Deadline::after(wire_timeout());
+        timeout(deadline.remaining(), async {
+            chunks.read_more(&mut io).await.unwrap();
+            let frame = emp_test_support::sse::read_frame(&mut chunks.pending.as_slice())
+                .unwrap()
+                .unwrap();
+            assert_eq!(frame.data().as_deref(), Some("x"));
+            chunks.pending.drain(..frame.raw().len());
+            chunks.stop_at_chunk_boundary(&mut io).await.unwrap();
+        })
+        .await
+        .expect("stop while the peer still holds the chunk ending");
+        stopped.send(()).unwrap();
+        drop(chunks);
+    };
+    let writer = async {
+        peer.write_all(b"12\r\ndata: x\n\ndata: y\n\n")
+            .await
+            .unwrap();
+        wait_for_stop.await.unwrap();
+        drop(peer);
+    };
+    tokio::join!(reader, writer);
 }
 
 #[cfg(unix)]

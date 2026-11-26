@@ -131,7 +131,10 @@ impl<R: BufRead> SseBody<R> {
     }
 
     pub fn stop_at_chunk_boundary(&mut self) -> io::Result<()> {
-        self.body.get_mut().stop_at_chunk_boundary()?;
+        let body_buffer_empty = self.body.buffer().is_empty();
+        self.body
+            .get_mut()
+            .stop_at_chunk_boundary(body_buffer_empty)?;
         self.guard.finish();
         Ok(())
     }
@@ -261,6 +264,10 @@ impl ChunkDecoder {
         )
     }
 
+    pub fn needs_chunk_ending_validation(&self, body_buffer_empty: bool) -> bool {
+        body_buffer_empty && self.at_chunk_ending()
+    }
+
     pub fn stop_at_chunk_boundary(&mut self, input: &mut &[u8]) -> io::Result<()> {
         if let ChunkState::Ending {
             matched,
@@ -314,11 +321,11 @@ impl ChunkDecoder {
 }
 
 impl<R: BufRead> Body<R> {
-    pub fn stop_at_chunk_boundary(&mut self) -> io::Result<()> {
+    fn stop_at_chunk_boundary(&mut self, body_buffer_empty: bool) -> io::Result<()> {
         let Some(decoder) = &mut self.chunked else {
             return Ok(());
         };
-        while decoder.at_chunk_ending() {
+        while decoder.needs_chunk_ending_validation(body_buffer_empty) {
             let mut input = self.input.fill_buf()?;
             if input.is_empty() {
                 return decoder.finish();
@@ -451,6 +458,35 @@ mod tests {
     }
 
     #[test]
+    fn sse_body_stops_before_chunk_ending_when_body_is_buffered() {
+        use crate::{Deadline, Observation, accept_blocking, test_timeout};
+        use std::{io::Write, net::TcpListener, time::Duration};
+
+        const WIRE: &[u8] = b"12\r\ndata: x\n\ndata: y\n\n";
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut client = deadline.io(deadline.connect(listener.local_addr().unwrap()).unwrap());
+        let (peer, _) = accept_blocking(&listener).unwrap();
+        deadline.io(&peer).write_all(WIRE).unwrap();
+        let mut prefix = [0; WIRE.len()];
+        client.read_exact(&mut prefix).unwrap();
+
+        let close_peer = Observation::spawn(move |probe| {
+            probe.observe(|_| drop(peer));
+        });
+        let mut body = SseBody::new(prefix.as_slice().chain(BufReader::new(client)), true);
+        let frame = sse::read_frame(&mut body).unwrap().unwrap();
+        assert_eq!(frame.data().as_deref(), Some("x"));
+        body.stop_at_chunk_boundary()
+            .expect("stop while the peer still holds the chunk ending");
+        close_peer
+            .begin(deadline, "close peer after SSE stop")
+            .wait()
+            .unwrap();
+        drop(body);
+    }
+
+    #[test]
     fn sse_body_can_drop_after_stopping_reaching_eof_or_abandoning() {
         let wire = b"9\r\ndata: x\n\n\r\n0\r\n\r\n";
         let mut stopped = SseBody::new(wire.as_slice(), true);
@@ -532,7 +568,7 @@ mod tests {
         body.read_exact(&mut payload).unwrap();
         assert_eq!(&payload, b"hello");
         assert_eq!(
-            body.stop_at_chunk_boundary().unwrap_err().kind(),
+            body.stop_at_chunk_boundary(true).unwrap_err().kind(),
             io::ErrorKind::InvalidData,
         );
     }
