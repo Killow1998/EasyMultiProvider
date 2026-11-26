@@ -1138,7 +1138,7 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
     });
 }
 
-async fn receive_event(client: &mut RawClient, kind: &str) -> Value {
+pub(super) async fn receive_event(client: &mut RawClient, kind: &str) -> Value {
     let deadline = Deadline::after(wire_timeout());
     loop {
         let (flags, payload) = read_websocket_frame(&mut client.io, false, &deadline).await;

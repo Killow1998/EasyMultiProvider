@@ -34,7 +34,6 @@ pub(crate) fn complete(
     let router = &router;
     let mut outcome =
         RequestGuard::new(state, route, body, incoming, None, "responses").started_at(started);
-    outcome.track_route();
     let execution = Execution { state, route, body };
     let (result, candidate) = state.backend.transport.runtime.block_on(execution.run(
         None,
@@ -56,43 +55,26 @@ pub(crate) fn complete(
     Ok(result)
 }
 
-pub(crate) fn open_stream<'a>(
-    state: &'a ServerState,
+pub(crate) async fn open_stream(
+    state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     monitor: Option<&mut DisconnectMonitor>,
-) -> Result<(ExternalStream, ResolvedRoute, RequestGuard<'a>), ExternalRequestError> {
-    state.backend.transport.runtime.block_on(open_stream_async(
-        state, route, body, incoming, ids, monitor,
-    ))
-}
-
-pub(crate) async fn open_stream_async<'a>(
-    state: &'a ServerState,
-    route: &ResolvedRoute,
-    body: &Value,
-    incoming: &BTreeMap<String, String>,
-    ids: &ProjectionIds,
-    monitor: Option<&mut DisconnectMonitor>,
-) -> Result<(ExternalStream, ResolvedRoute, RequestGuard<'a>), ExternalRequestError> {
-    let started = Instant::now();
+    outcome: &mut RequestGuard<'_>,
+) -> Result<(ExternalStream, ResolvedRoute), ExternalRequestError> {
     let router = ExternalRouter::new(
         &state.backend.transport.client,
         state.backend.configuration.official_models,
     )
     .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
     let router = &router;
-    let mut outcome =
-        RequestGuard::new(state, route, body, incoming, None, "responses").started_at(started);
-    outcome.track_route();
-    let (stream, candidate) = Execution { state, route, body }
-        .run(monitor, &mut outcome, |candidate| async move {
+    Execution { state, route, body }
+        .run(monitor, outcome, |candidate| async move {
             router.open_stream(&candidate, body, incoming, ids).await
         })
-        .await?;
-    Ok((stream, candidate, outcome))
+        .await
 }
 
 struct Execution<'a> {

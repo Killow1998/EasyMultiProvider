@@ -1,5 +1,166 @@
 use super::*;
 use emp_domain::{RouteSource, resolved_route_from_parts};
+use tokio::sync::Notify;
+
+#[derive(Default)]
+pub(super) struct PublicationLog(Mutex<Option<Arc<Publications>>>);
+
+impl PublicationLog {
+    pub(super) fn record(&self, state: &ActivityState, now: u64) {
+        if let Some(log) = self.0.lock().unwrap().as_ref() {
+            log.history
+                .lock()
+                .unwrap()
+                .snapshots
+                .push(state.snapshot(now));
+            log.changed.notify_one();
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct Publications {
+    history: Mutex<History>,
+    changed: Notify,
+}
+
+#[derive(Default)]
+struct History {
+    snapshots: Vec<Value>,
+    terminal_written: Option<usize>,
+}
+
+impl ActivityService {
+    pub(crate) fn record_publications(&self) -> Arc<Publications> {
+        let log = Arc::new(Publications::default());
+        *self.publications.0.lock().unwrap() = Some(log.clone());
+        log
+    }
+}
+
+fn same_route(left: &Value, right: &Value) -> bool {
+    ["model_id", "provider_id", "account_id"]
+        .into_iter()
+        .all(|key| left[key] == right[key])
+}
+
+impl Publications {
+    pub(crate) fn latest(&self) -> Value {
+        self.history
+            .lock()
+            .unwrap()
+            .snapshots
+            .last()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn wait_for_idle_route(&self) {
+        loop {
+            let route = &self.latest()["routes"][0];
+            if route["in_flight"] == 0 && route["last_finished"].is_number() {
+                return;
+            }
+            self.changed.notified().await;
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn terminal_written(&self) {
+        let mut history = self.history.lock().unwrap();
+        history.terminal_written = Some(history.snapshots.len());
+    }
+
+    pub(crate) fn assert_intervals(&self, request_ids: &[&str], check_delivery: bool) {
+        let history = self.history.lock().unwrap();
+        let mut last_revision = history.snapshots[0]["revision"].as_u64().unwrap() - 1;
+        let mut went_idle = false;
+        for (index, snapshot) in history.snapshots.iter().enumerate() {
+            last_revision += 1;
+            assert_eq!(
+                snapshot["revision"], last_revision,
+                "missing activity publication"
+            );
+            let routes = snapshot["routes"].as_array().unwrap();
+            let requests = snapshot["requests"].as_array().unwrap();
+            for request in requests
+                .iter()
+                .filter(|request| request["state"] == "active")
+            {
+                assert!(
+                    routes.iter().any(|route| same_route(route, request)
+                        && route["in_flight"].as_u64().unwrap() >= 1),
+                    "active request without a route count: {snapshot}"
+                );
+            }
+            for route in routes {
+                if route["in_flight"] != 0 || !route["last_finished"].is_number() {
+                    continue;
+                }
+                went_idle = true;
+                for id in request_ids {
+                    assert!(
+                        requests.iter().any(|request| same_route(route, request)
+                            && request["request_id"] == *id
+                            && request["finished_at"].is_number()),
+                        "{id} missing a terminal receipt when the route became idle: {snapshot}"
+                    );
+                }
+                if check_delivery {
+                    assert!(
+                        history
+                            .terminal_written
+                            .is_some_and(|written| written <= index),
+                        "route became idle before the terminal write: {snapshot}"
+                    );
+                }
+            }
+        }
+        assert!(went_idle, "no route release was recorded");
+    }
+
+    pub(crate) fn assert_overlap(&self, first: &str, second: &str) {
+        let history = self.history.lock().unwrap();
+        let second_started = history
+            .snapshots
+            .iter()
+            .find(|snapshot| {
+                snapshot["requests"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|request| request["request_id"] == second && request["state"] == "active")
+            })
+            .expect("second request became active");
+        assert_eq!(
+            second_started["routes"][0]["in_flight"], 2,
+            "{second_started}"
+        );
+        let transition = history
+            .snapshots
+            .windows(2)
+            .find(|pair| {
+                pair[0]["routes"][0]["in_flight"] == 2 && pair[1]["routes"][0]["in_flight"] == 1
+            })
+            .expect("overlapping requests must release one route count at a time");
+        for snapshot in transition {
+            let requests = snapshot["requests"].as_array().unwrap();
+            assert!(
+                requests.iter().any(
+                    |request| request["request_id"] == first && request["state"] == "completed"
+                ),
+                "{snapshot}"
+            );
+            assert!(
+                requests
+                    .iter()
+                    .any(|request| request["request_id"] == second && request["state"] == "active"),
+                "{snapshot}"
+            );
+        }
+    }
+}
 
 fn identity(model_id: &str, account_id: Option<&str>) -> ActivityIdentity {
     ActivityIdentity::new(

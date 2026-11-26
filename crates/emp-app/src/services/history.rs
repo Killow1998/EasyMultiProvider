@@ -166,7 +166,7 @@ pub(crate) fn prepare_destination_context(
             let mut summary_headers = incoming.clone();
             summary_headers.retain(|name, _| !name.eq_ignore_ascii_case("x-emp-request-id"));
             summary_headers.insert("x-emp-request-id".into(), request_id);
-            let mut usage = crate::services::request_outcome::RequestGuard::new(
+            let mut usage = crate::services::request_outcome::RequestGuard::deferred(
                 state,
                 &candidate,
                 summary_body,

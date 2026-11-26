@@ -130,7 +130,6 @@ impl NativeSession {
             .started_at(websocket.observation.execution_started())
             .transport("websocket");
             usage.native_credentials(route, &plan.headers, native_account.as_deref());
-            usage.track_route();
             let payload = if let Some(prefill) = prefill::Prefill::plan(&plan.payload, &plan.url) {
                 let result = prefill
                     .run(

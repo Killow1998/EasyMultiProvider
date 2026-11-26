@@ -18,7 +18,7 @@ pub(super) async fn serve_native(
     turn: &Turn,
     websocket: &mut super::ObservedWebSocket<'_>,
     monitor: &mut crate::services::disconnect::DisconnectMonitor,
-    previous_usage: Option<RequestGuard<'_>>,
+    usage: &mut RequestGuard<'_>,
 ) -> TurnResult {
     let Turn {
         route,
@@ -30,7 +30,7 @@ pub(super) async fn serve_native(
     } = turn;
     let mut sent_output = false;
     let execution_started = websocket.observation.execution_started();
-    let (mut upstream, usage) = match native::open_stream_result_with_monitor(
+    let mut upstream = match native::open_stream(
         state,
         route,
         config,
@@ -38,15 +38,14 @@ pub(super) async fn serve_native(
         request_headers,
         ids,
         Some(monitor),
-        Some(native::NativeWebSocketFallback {
-            execution_started,
-            previous_usage,
-        }),
+        usage,
     )
     .await
     {
-        Ok(native::CancellableNativeStreamOpen::Opened(stream)) => *stream,
-        Ok(native::CancellableNativeStreamOpen::Disconnected) => {
+        Ok(Some(stream)) => stream,
+        Ok(None) => {
+            usage.websocket(execution_started);
+            native::record_open_disconnect(usage, monitor);
             return if monitor.is_interrupted() {
                 TurnResult::Finished
             } else {
@@ -54,11 +53,12 @@ pub(super) async fn serve_native(
             };
         }
         Err(error) => {
+            usage.finish();
             let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]})).await;
             return TurnResult::Finished;
         }
     };
-    let mut usage = usage.started_at(execution_started).transport("websocket");
+    usage.websocket(execution_started);
     let state_headers = upstream
         .headers
         .iter()
@@ -124,6 +124,7 @@ pub(super) async fn serve_external(
     turn: &Turn,
     websocket: &mut super::ObservedWebSocket<'_>,
     monitor: &mut crate::services::disconnect::DisconnectMonitor,
+    usage: &mut RequestGuard<'_>,
 ) -> TurnResult {
     let Turn {
         route,
@@ -133,13 +134,14 @@ pub(super) async fn serve_external(
         ..
     } = turn;
     let mut sent_output = false;
-    let (mut upstream, candidate, usage) = match crate::services::external::open_stream_async(
+    let (mut upstream, candidate) = match crate::services::external::open_stream(
         state,
         route,
         request_body,
         request_headers,
         ids,
         Some(monitor),
+        usage,
     )
     .await
     {
@@ -156,13 +158,12 @@ pub(super) async fn serve_external(
                 };
             }
             let event = crate::api::failure_response::external_websocket_error(error);
+            usage.finish();
             let _ = websocket.send_json(&event).await;
             return TurnResult::Finished;
         }
     };
-    let mut usage = usage
-        .started_at(websocket.observation.execution_started())
-        .transport("websocket");
+    usage.websocket(websocket.observation.execution_started());
     loop {
         let polled = monitor.race(upstream.next_event()).await;
         usage.upstream_observation(&upstream.observation);

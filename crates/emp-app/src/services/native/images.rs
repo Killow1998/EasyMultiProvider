@@ -73,7 +73,6 @@ pub(crate) fn execute(
             "image_generation"
         },
     );
-    usage.track_route();
     let result = (|| {
         let mut incoming = incoming.clone();
         if route.provider.value().get("implicit_native") == Some(&Value::Bool(true)) {

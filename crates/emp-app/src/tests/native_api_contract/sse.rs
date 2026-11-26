@@ -509,7 +509,7 @@ fn assert_prewarm_outcome(
 ) {
     let db = settlement_db(&canonical_root(directory), &server);
     let session = session_header(&server);
-    let mut events = open_quota_events(&server, &session);
+    let publications = server.state.backend.activity.record_publications();
     let deadline = Deadline::after(response_timeout());
     let body = json!({"model":model,"input":input,"generate":false,"stream":true}).to_string();
     let downstream = open_post_stream(
@@ -520,16 +520,19 @@ fn assert_prewarm_outcome(
     );
     let request_id = exercise(downstream, &deadline);
 
-    set_sse_deadline(&mut events, &deadline);
-    let finished = next_activity_snapshot(&mut events, |snapshot| {
+    wait_for(&deadline, || {
+        let snapshot = publications.latest();
         snapshot["routes"][0]["in_flight"] == 0
             && snapshot["routes"][0]["last_finished"].is_number()
     });
+    let terminal_ids = [request_id.as_str()];
+    publications.assert_intervals(if cancelled { &terminal_ids } else { &[] }, false);
+    let finished = publications.latest();
     let requests = finished["requests"].as_array().unwrap();
     assert_eq!(
         requests.len(),
         usize::from(cancelled),
-        "{model} prewarm activity at the first finished route snapshot: {requests:?}"
+        "{model} prewarm activity after route release: {requests:?}"
     );
     if cancelled {
         let activity = &requests[0];

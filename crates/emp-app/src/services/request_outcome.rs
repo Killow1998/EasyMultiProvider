@@ -1,4 +1,4 @@
-use super::activity::{ActivityGuard, ActivityIdentity, ActivityService};
+use super::activity::{ActivityGuard, ActivityIdentity};
 use super::request_facts;
 use crate::app::ServerState;
 use crate::services::observation::diagnostics::schema;
@@ -25,8 +25,17 @@ pub(crate) struct RequestGuard<'a> {
 }
 
 enum RequestActivity<'a> {
-    Route { _guard: ActivityGuard<'a> },
-    History { _guard: Arc<ActivityGuard<'a>> },
+    Route(ActivityGuard<'a>),
+    History(Arc<ActivityGuard<'a>>),
+}
+
+impl RequestActivity<'_> {
+    fn guard(&self) -> &ActivityGuard<'_> {
+        match self {
+            Self::Route(guard) => guard,
+            Self::History(guard) => guard,
+        }
+    }
 }
 
 struct PendingRequest {
@@ -83,6 +92,19 @@ impl<'a> RequestGuard<'a> {
     }
 
     pub(crate) fn new(
+        state: &'a ServerState,
+        route: &ResolvedRoute,
+        body: &Value,
+        incoming: &BTreeMap<String, String>,
+        owner: Option<&str>,
+        operation: &str,
+    ) -> Self {
+        let mut request = Self::deferred(state, route, body, incoming, owner, operation);
+        request.track_route();
+        request
+    }
+
+    pub(crate) fn deferred(
         state: &'a ServerState,
         route: &ResolvedRoute,
         body: &Value,
@@ -230,7 +252,6 @@ impl<'a> RequestGuard<'a> {
             buffered: crate::services::claude_cli::selected(route),
             prewarm_cancellation: None,
         };
-        pending.publish_active(services.activity);
         Self {
             services,
             pending: Some(pending),
@@ -240,9 +261,10 @@ impl<'a> RequestGuard<'a> {
 
     pub(crate) fn track_route(&mut self) {
         let identity = self.pending_mut().identity.clone();
-        self.route_activity = Some(RequestActivity::Route {
-            _guard: self.services.activity.begin(identity),
-        });
+        self.route_activity = Some(RequestActivity::Route(
+            self.services.activity.begin(identity),
+        ));
+        self.publish_active();
     }
 
     pub(super) fn track_history_route(&mut self, batch: &mut Option<Arc<ActivityGuard<'a>>>) {
@@ -250,9 +272,14 @@ impl<'a> RequestGuard<'a> {
             let identity = self.pending_mut().identity.clone();
             Arc::new(self.services.activity.begin(identity))
         });
-        self.route_activity = Some(RequestActivity::History {
-            _guard: Arc::clone(guard),
-        });
+        self.route_activity = Some(RequestActivity::History(Arc::clone(guard)));
+        self.publish_active();
+    }
+
+    fn publish_active(&self) {
+        if let Some(pending) = &self.pending {
+            pending.publish_active(self.route_activity.as_ref());
+        }
     }
 
     fn pending_mut(&mut self) -> &mut PendingRequest {
@@ -270,7 +297,7 @@ impl<'a> RequestGuard<'a> {
     }
     fn observe_event(&mut self, event: &Value, origin: Option<&str>) {
         if let Some(pending) = &mut self.pending
-            && pending.observe_event(self.services.activity, event, origin)
+            && pending.observe_event(self.route_activity.as_ref(), event, origin)
         {
             self.finish();
         }
@@ -289,7 +316,7 @@ impl<'a> RequestGuard<'a> {
         pending.models.observe(event, !pending.buffered);
         pending.first_token = pending.models.first_output;
         pending.update_model_facts();
-        pending.publish_active(self.services.activity);
+        self.publish_active();
     }
 
     pub(crate) fn upstream_observation(
@@ -305,16 +332,24 @@ impl<'a> RequestGuard<'a> {
         if pending.models != *observation {
             pending.models = observation.clone();
             pending.update_model_facts();
-            pending.publish_active(self.services.activity);
+            self.publish_active();
         }
     }
 
     pub(crate) fn transport(mut self, transport: &str) -> Self {
-        let activity = self.services.activity;
+        self.set_transport(transport);
+        self
+    }
+
+    pub(crate) fn websocket(&mut self, started: Instant) {
+        self.pending_mut().started = started;
+        self.set_transport("websocket");
+    }
+
+    fn set_transport(&mut self, transport: &str) {
         let pending = self.pending_mut();
         pending.event["transport"] = json!(transport);
-        pending.publish_active(activity);
-        self
+        self.publish_active();
     }
 
     pub(crate) fn status(&mut self, status: u16, error: &str) {
@@ -419,10 +454,7 @@ impl<'a> RequestGuard<'a> {
 
     pub(crate) fn finish(&mut self) {
         if let Some(pending) = self.pending.take() {
-            let route_activity = self.route_activity.take();
-            tokio::task::block_in_place(|| {
-                finish_request(&self.services, pending.freeze(), route_activity)
-            });
+            tokio::task::block_in_place(|| finish_request(&self.services, pending.freeze()));
         }
     }
 }
@@ -436,7 +468,7 @@ impl Drop for RequestGuard<'_> {
 impl PendingRequest {
     fn observe_event(
         &mut self,
-        activity: &ActivityService,
+        activity: Option<&RequestActivity<'_>>,
         event: &Value,
         origin: Option<&str>,
     ) -> bool {
@@ -582,9 +614,11 @@ impl PendingRequest {
         }
     }
 
-    fn publish_active(&self, activity: &ActivityService) {
-        if self.event["route"] != "prewarm" {
-            activity.observe_request(&self.event, self.identity.as_ref());
+    fn publish_active(&self, activity: Option<&RequestActivity<'_>>) {
+        if let Some(activity) = activity
+            && self.event["route"] != "prewarm"
+        {
+            activity.guard().observe_request(&self.event);
         }
     }
 }

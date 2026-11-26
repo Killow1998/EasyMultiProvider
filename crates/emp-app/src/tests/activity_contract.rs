@@ -172,6 +172,7 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
     let upstream = HeldUpstream::start(2);
     let (_directory, server) =
         configured_protocol_server(&upstream.worker().base_url(), "responses", "api_key");
+    let publications = server.state.backend.activity.record_publications();
     let session = session_header(&server);
     let mut events = open_quota_events(&server, &session);
     let body = activity_request_body(false);
@@ -189,6 +190,7 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
     assert_eq!(path, "/v1/responses");
     assert_eq!(headers["authorization"], "Bearer upstream-secret");
     assert_eq!(upstream_body["model"], "upstream-model");
+    let first_id = &headers["x-emp-request-id"];
 
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     set_sse_deadline(&mut events, &deadline);
@@ -199,9 +201,10 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
         &body,
         &[&session, "Content-Type: application/json"],
     );
-    let (second_index, path, _, _) = observed.wait().unwrap();
+    let (second_index, path, headers, _) = observed.wait().unwrap();
     assert_eq!(second_index, 1);
     assert_eq!(path, "/v1/responses");
+    let second_id = &headers["x-emp-request-id"];
 
     let active = next_activity_snapshot(&mut events, |snapshot| {
         snapshot["routes"][0]["in_flight"] == 2
@@ -221,21 +224,9 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     set_sse_deadline(&mut events, &deadline);
     upstream.worker().release(0, 200, success_response_body());
+    assert!(response_until_close(&mut first).starts_with("HTTP/1.1 200 OK\r\n"));
     upstream.worker().release(1, 200, success_response_body());
-    let first_response = thread::spawn(move || response_until_close(&mut first));
-    let second_response = thread::spawn(move || response_until_close(&mut second));
-    assert!(
-        first_response
-            .join()
-            .expect("join first request")
-            .starts_with("HTTP/1.1 200 OK\r\n")
-    );
-    assert!(
-        second_response
-            .join()
-            .expect("join second request")
-            .starts_with("HTTP/1.1 200 OK\r\n")
-    );
+    assert!(response_until_close(&mut second).starts_with("HTTP/1.1 200 OK\r\n"));
 
     let finished = next_activity_snapshot(&mut events, |snapshot| {
         snapshot["routes"][0]["in_flight"] == 0
@@ -243,6 +234,8 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
     });
     assert_eq!(only_route(&finished)["in_flight"], 0);
     assert!(only_route(&finished)["last_finished"].as_u64().is_some());
+    publications.assert_intervals(&[first_id, second_id], false);
+    publications.assert_overlap(first_id, second_id);
     server.shutdown().expect("shutdown activity test server");
 }
 

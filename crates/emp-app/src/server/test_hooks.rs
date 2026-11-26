@@ -113,8 +113,13 @@ mod implementation {
         }
 
         #[inline]
-        pub(in crate::server) fn poll(&self, _: &mut Context<'_>, _: &[u8]) -> Poll<()> {
-            Poll::Ready(())
+        pub(in crate::server) fn write(
+            &self,
+            cx: &mut Context<'_>,
+            _: &[u8],
+            write: impl FnOnce(&mut Context<'_>) -> Poll<io::Result<usize>>,
+        ) -> Poll<io::Result<usize>> {
+            write(cx)
         }
 
         #[inline]
@@ -142,11 +147,11 @@ mod implementation {
     pub(in crate::server) struct WriteProbe {
         pub(in crate::server) trigger: WriteTrigger,
         pub(in crate::server) reached: Option<oneshot::Sender<Option<Vec<u8>>>>,
-        pub(in crate::server) release: oneshot::Receiver<()>,
+        pub(in crate::server) release: Option<oneshot::Receiver<()>>,
     }
 
     pub(in crate::server) enum WriteTrigger {
-        Bytes(&'static [u8]),
+        Bytes(&'static [u8], Option<OutputProbe>),
         Output,
         Frame(FrameMatcher),
     }
@@ -378,12 +383,17 @@ mod implementation {
             None
         }
 
-        pub(in crate::server) fn poll(&self, cx: &mut Context<'_>, buf: &[u8]) -> Poll<()> {
+        pub(in crate::server) fn write(
+            &self,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+            write: impl FnOnce(&mut Context<'_>) -> Poll<io::Result<usize>>,
+        ) -> Poll<io::Result<usize>> {
             let mut armed = self.0.lock().unwrap();
             if let Some(probe) = armed.as_mut()
                 && (probe.reached.is_none()
                     || match &probe.trigger {
-                        WriteTrigger::Bytes(marker) => {
+                        WriteTrigger::Bytes(marker, _) => {
                             buf.windows(marker.len()).any(|bytes| bytes == *marker)
                         }
                         WriteTrigger::Output | WriteTrigger::Frame(_) => false,
@@ -392,10 +402,28 @@ mod implementation {
                 if let Some(reached) = probe.reached.take() {
                     let _ = reached.send(None);
                 }
-                let _ = ready!(Pin::new(&mut probe.release).poll(cx));
+                if let Some(release) = &mut probe.release {
+                    let _ = ready!(Pin::new(release).poll(cx));
+                    probe.release = None;
+                }
+                if matches!(probe.trigger, WriteTrigger::Bytes(_, Some(_))) {
+                    let result = ready!(write(cx));
+                    if result.is_err() || result.as_ref().is_ok_and(|written| *written == buf.len())
+                    {
+                        if let WriteTrigger::Bytes(_, written) = &mut probe.trigger
+                            && result.is_ok()
+                            && let Some(written) = written.take()
+                        {
+                            written();
+                        }
+                        armed.take();
+                    }
+                    return Poll::Ready(result);
+                }
                 armed.take();
             }
-            Poll::Ready(())
+            drop(armed);
+            write(cx)
         }
 
         pub(in crate::server) fn cancel(&self) {

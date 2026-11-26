@@ -8,7 +8,7 @@ use std::{
     net::{Shutdown, TcpStream as StdStream},
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard},
-    task::{Context, Poll, ready},
+    task::{Context, Poll},
 };
 use std::{io::Read, time::Instant};
 use tokio::{
@@ -64,8 +64,9 @@ impl AsyncWrite for ConnectionIo {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        ready!(self.write_hook.poll(cx, buf));
-        Pin::new(&mut *self.stream()).poll_write(cx, buf)
+        self.write_hook.write(cx, buf, |cx| {
+            Pin::new(&mut *self.stream()).poll_write(cx, buf)
+        })
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

@@ -12,7 +12,6 @@ use emp_router::native_http::{NativeCompleteResponse, NativeHttpError};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use std::time::Instant;
 mod auth;
 use auth::resolve_headers;
 pub(crate) mod images;
@@ -28,87 +27,22 @@ fn replace_catalog_etag(state: &ServerState, headers: &mut BTreeMap<String, Stri
     }
 }
 
-pub(crate) fn open_stream_result<'a>(
-    state: &'a ServerState,
-    route: &ResolvedRoute,
-    config: &Value,
-    body: &Value,
-    incoming: &BTreeMap<String, String>,
-    ids: &ProjectionIds,
-) -> Result<(NativeStream, RequestGuard<'a>), NativeHttpError> {
-    match state
-        .backend
-        .transport
-        .runtime
-        .block_on(open_stream_result_with_monitor(
-            state, route, config, body, incoming, ids, None, None,
-        ))? {
-        CancellableNativeStreamOpen::Opened(stream) => Ok(*stream),
-        CancellableNativeStreamOpen::Disconnected => {
-            unreachable!("non-cancellable native open cannot observe a disconnect")
-        }
-    }
-}
-
-pub(crate) struct NativeWebSocketFallback<'a> {
-    pub(crate) execution_started: Instant,
-    pub(crate) previous_usage: Option<RequestGuard<'a>>,
-}
-
-pub(crate) enum CancellableNativeStreamOpen<'a> {
-    Opened(Box<(NativeStream, RequestGuard<'a>)>),
-    Disconnected,
-}
-
-pub(crate) fn open_stream_cancellable<'a>(
-    state: &'a ServerState,
-    route: &ResolvedRoute,
-    config: &Value,
-    body: &Value,
-    incoming: &BTreeMap<String, String>,
-    ids: &ProjectionIds,
-    monitor: &mut DisconnectMonitor,
-) -> Result<CancellableNativeStreamOpen<'a>, NativeHttpError> {
-    state
-        .backend
-        .transport
-        .runtime
-        .block_on(open_stream_result_with_monitor(
-            state,
-            route,
-            config,
-            body,
-            incoming,
-            ids,
-            Some(monitor),
-            None,
-        ))
-}
-
 #[expect(
     clippy::too_many_arguments,
-    reason = "Native WS fallback must transfer its existing receipt alongside the stream inputs"
+    reason = "Stream open uses the caller's request receipt and disconnect monitor"
 )]
-pub(crate) async fn open_stream_result_with_monitor<'a>(
-    state: &'a ServerState,
+pub(crate) async fn open_stream(
+    state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
     body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
-    mut monitor: Option<&mut DisconnectMonitor>,
-    fallback: Option<NativeWebSocketFallback<'a>>,
-) -> Result<CancellableNativeStreamOpen<'a>, NativeHttpError> {
-    let websocket_started = fallback.as_ref().map(|fallback| fallback.execution_started);
-    let mut usage = fallback
-        .and_then(|fallback| fallback.previous_usage)
-        .unwrap_or_else(|| {
-            let mut usage = RequestGuard::new(state, route, body, incoming, None, "responses");
-            usage.track_route();
-            usage
-        });
+    monitor: Option<&mut DisconnectMonitor>,
+    usage: &mut RequestGuard<'_>,
+) -> Result<Option<NativeStream>, NativeHttpError> {
     let result = {
-        let receipt = Mutex::new(&mut usage);
+        let receipt = Mutex::new(&mut *usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();
         let on_retry = |decision| receipt.lock().unwrap().native_retry(decision);
         let router = NativeRouter::new(&state.backend.transport.client)
@@ -131,34 +65,32 @@ pub(crate) async fn open_stream_result_with_monitor<'a>(
                 Ok(headers.headers)
             },
         );
-        crate::services::disconnect::race(monitor.as_deref_mut(), open).await
+        crate::services::disconnect::race(monitor, open).await
     };
     let result = match result {
         DisconnectRace::Ready(result) => result,
-        DisconnectRace::Disconnected => {
-            if let Some(started) = websocket_started {
-                usage = usage.started_at(started).transport("websocket");
-            }
-            match monitor {
-                Some(monitor) if monitor.is_draining() => usage.drained(),
-                Some(monitor) if monitor.is_interrupted() => usage.interrupted(),
-                _ => usage.disconnected_before_delivery(),
-            }
-            return Ok(CancellableNativeStreamOpen::Disconnected);
-        }
+        DisconnectRace::Disconnected => return Ok(None),
     };
     match result {
         Ok(mut stream) => {
             replace_catalog_etag(state, &mut stream.headers);
-            Ok(CancellableNativeStreamOpen::Opened(Box::new((
-                stream, usage,
-            ))))
+            Ok(Some(stream))
         }
         Err(mut error) => {
             usage.native_error(&error);
             crate::services::failure_feedback::annotate_native(&mut error, route);
             Err(error)
         }
+    }
+}
+
+pub(crate) fn record_open_disconnect(usage: &mut RequestGuard<'_>, monitor: &DisconnectMonitor) {
+    if monitor.is_draining() {
+        usage.drained();
+    } else if monitor.is_interrupted() {
+        usage.interrupted();
+    } else {
+        usage.disconnected_before_delivery();
     }
 }
 
@@ -191,9 +123,6 @@ fn buffered(
     operation: &str,
 ) -> Result<NativeCompleteResponse, NativeHttpError> {
     let mut usage = RequestGuard::new(state, route, body, incoming, None, operation);
-    if operation == "responses" {
-        usage.track_route();
-    }
     let result = {
         let receipt = Mutex::new(&mut usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();

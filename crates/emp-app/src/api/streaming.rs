@@ -87,6 +87,10 @@ impl<'a, 'state> ObservedSse<'a, 'state> {
         )
     }
 
+    pub(crate) fn hold_request(&mut self, request: RequestGuard<'state>) {
+        self.sink.hold_request(request);
+    }
+
     fn upstream_event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
         self.write_frames(
             frames,
@@ -133,19 +137,29 @@ pub(crate) fn serve_external_stream<'a>(
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {
     let mut monitor = downstream.sink.disconnect().ok();
-    let (upstream, candidate, usage) = match crate::services::external::open_stream(
-        state,
-        route,
-        body,
-        incoming,
-        ids,
-        monitor.as_mut(),
-    ) {
-        Ok(opened) => opened,
-        Err(error) => {
-            return crate::api::failure_response::external_open_error(error).map_or(Ok(()), Err);
-        }
-    };
+    let started = std::time::Instant::now();
+    let mut usage =
+        RequestGuard::new(state, route, body, incoming, None, "responses").started_at(started);
+    let (upstream, candidate) =
+        match state
+            .backend
+            .transport
+            .runtime
+            .block_on(crate::services::external::open_stream(
+                state,
+                route,
+                body,
+                incoming,
+                ids,
+                monitor.as_mut(),
+                &mut usage,
+            )) {
+            Ok(opened) => opened,
+            Err(error) => {
+                return crate::api::failure_response::external_open_error(error)
+                    .map_or(Ok(()), Err);
+            }
+        };
     let mut learned = None;
     let result = relay_stream(
         &mut downstream,
@@ -153,8 +167,8 @@ pub(crate) fn serve_external_stream<'a>(
             state,
             route: &candidate,
             response_headers: BTreeMap::new(),
-            usage,
         },
+        usage,
         ExternalRelay { upstream },
         monitor,
         |usage, event| {
@@ -182,29 +196,27 @@ pub(crate) fn serve_native_stream<'a>(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {
-    let monitor = downstream.sink.disconnect().ok();
-    let (upstream, monitor) = match monitor {
-        Some(mut monitor) => match native::open_stream_cancellable(
+    let mut monitor = downstream.sink.disconnect().ok();
+    let mut usage = RequestGuard::new(state, route, body, incoming, None, "responses");
+    let Some(upstream) = state
+        .backend
+        .transport
+        .runtime
+        .block_on(native::open_stream(
             state,
             route,
             config,
             body,
             incoming,
             ids,
-            &mut monitor,
-        )
+            monitor.as_mut(),
+            &mut usage,
+        ))
         .map_err(crate::api::native_response::error_reply)?
-        {
-            native::CancellableNativeStreamOpen::Opened(upstream) => (*upstream, Some(monitor)),
-            native::CancellableNativeStreamOpen::Disconnected => return Ok(()),
-        },
-        None => (
-            native::open_stream_result(state, route, config, body, incoming, ids)
-                .map_err(crate::api::native_response::error_reply)?,
-            None,
-        ),
+    else {
+        native::record_open_disconnect(&mut usage, monitor.as_ref().expect("disconnect monitor"));
+        return Ok(());
     };
-    let (upstream, usage) = upstream;
     let response_headers = upstream.headers.clone();
     relay_stream(
         &mut downstream,
@@ -212,8 +224,8 @@ pub(crate) fn serve_native_stream<'a>(
             state,
             route,
             response_headers,
-            usage,
         },
+        usage,
         NativeRelay { upstream },
         monitor,
         |usage, event| {
@@ -306,12 +318,12 @@ struct RelayContext<'a> {
     state: &'a ServerState,
     route: &'a ResolvedRoute,
     response_headers: BTreeMap<String, String>,
-    usage: RequestGuard<'a>,
 }
 
-fn relay_stream(
-    downstream: &mut ObservedSse<'_, '_>,
+fn relay_stream<'a>(
+    downstream: &mut ObservedSse<'_, 'a>,
     context: RelayContext<'_>,
+    mut usage: RequestGuard<'a>,
     mut source: impl RelaySource,
     monitor: Option<DisconnectMonitor>,
     mut observe: impl FnMut(&mut RequestGuard<'_>, &Value),
@@ -320,14 +332,13 @@ fn relay_stream(
         state,
         route,
         response_headers,
-        mut usage,
     } = context;
     let mut monitor = monitor.or_else(|| downstream.sink.disconnect().ok());
     let runtime = &state.backend.transport.runtime;
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
     let mut started = false;
-    loop {
+    let result = loop {
         let event = source.next(runtime, monitor.as_mut());
         usage.upstream_observation(source.observation());
         match event {
@@ -423,7 +434,9 @@ fn relay_stream(
                 }
             }
         }
-    }
+    };
+    downstream.hold_request(usage);
+    result
 }
 
 pub(crate) fn serve_generated_response(

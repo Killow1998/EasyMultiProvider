@@ -23,7 +23,6 @@ impl RequestGuard<'_> {
         }
     }
     pub(crate) fn dispatch(&mut self) {
-        let activity = self.services.activity;
         let journal = &self.services.diagnostics.journal;
         let pending = self.pending_mut();
         pending.event["attempts"] = json!(
@@ -49,11 +48,10 @@ impl RequestGuard<'_> {
                 "router_dispatch"
             },
         );
-        pending.publish_active(activity);
+        self.publish_active();
     }
 
     pub(crate) fn candidate(&mut self, route: &ResolvedRoute) {
-        let activity = self.services.activity;
         let pending = self.pending_mut();
         pending.event["resolved_protocol"] = json!(route.protocol);
         pending.event["dialect"] = json!(route.dialect);
@@ -61,7 +59,7 @@ impl RequestGuard<'_> {
         pending.event["deployment_identity"] = json!(route.deployment_identity);
         pending.event["upstream_model"] = json!(route.upstream_model);
         pending.identity = crate::services::activity::ActivityIdentity::from_route(route);
-        pending.publish_active(activity);
+        self.publish_active();
     }
 
     pub(crate) fn owner(&mut self, owner: &str) {
@@ -77,7 +75,6 @@ impl RequestGuard<'_> {
         delay: Option<std::time::Duration>,
         retry_after: Option<u64>,
     ) {
-        let activity = self.services.activity;
         let pending = self.pending_mut();
         let retries = pending.event["retries"].as_array_mut().unwrap();
         if retries.len() < 16 {
@@ -87,7 +84,7 @@ impl RequestGuard<'_> {
                     "retry_after_seconds":retry_after}),
             );
         }
-        pending.publish_active(activity);
+        self.publish_active();
     }
 
     pub(crate) fn retry(

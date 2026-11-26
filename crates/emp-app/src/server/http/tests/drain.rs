@@ -44,7 +44,7 @@ impl Probe {
                 Some(WriteProbe {
                     trigger,
                     reached: Some(reached),
-                    release,
+                    release: Some(release),
                 }),
             )
         });
@@ -174,6 +174,95 @@ async fn receive<T>(
         .await
         .unwrap_or_else(|_| panic!("waiting for {event}"))
         .unwrap_or_else(|_| panic!("sender dropped before {event}"))
+}
+
+#[cfg(unix)]
+#[test]
+fn external_route_stays_busy_until_the_terminal_frame_is_written() {
+    use super::{
+        inference::{FIRST, LAST, STREAM_REQUEST, SseClient, fixture},
+        websocket::{receive_event, upgrade},
+    };
+    use crate::{server::raw_tcp::websocket_frame, tests::OneShotUpstream};
+
+    for websocket in [false, true] {
+        let upstream = OneShotUpstream::start_repeated_wire(
+            200,
+            "text/event-stream",
+            None,
+            1,
+            vec![FIRST.to_vec(), LAST.to_vec()],
+        );
+        fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+            let publications = fixture.server.state.backend.activity.record_publications();
+            let marker: &[u8] = if websocket {
+                br#""type":"response.completed""#
+            } else {
+                b"event: response.completed\n"
+            };
+            let written = publications.clone();
+            let probe = Probe::arm(
+                fixture,
+                "/v1/responses",
+                Some(WriteTrigger::Bytes(
+                    marker,
+                    Some(Box::new(move || written.terminal_written())),
+                )),
+            );
+            let session = fixture.session();
+            let wire = if websocket {
+                upgrade(fixture.port(), "/v1/responses", &session, &[], b"")
+            } else {
+                json_request(fixture.port(), "/v1/responses", &[&session], STREAM_REQUEST)
+            };
+            let mut client = RawClient::request(address, &wire).await;
+            if websocket {
+                assert!(client.head.starts_with("HTTP/1.1 101"), "{}", client.head);
+                client
+                    .io
+                    .write_all(&websocket_frame(
+                        0x81,
+                        Some([11, 12, 13, 14]),
+                        br#"{"type":"response.create","model":"demo/model","input":"fixture"}"#,
+                    ))
+                    .await
+                    .unwrap();
+            }
+            let (reached, release) = probe.write.unwrap();
+            receive(reached, "terminal frame blocked in downstream write").await;
+            let (_, headers, _) = upstream.observed();
+            let id = &headers["x-emp-request-id"];
+            let blocked = publications.latest();
+            release.send(()).unwrap();
+
+            let terminal = if websocket {
+                receive_event(&mut client, "response.completed").await
+            } else {
+                let mut client = SseClient::from_raw(client);
+                timeout(wire_timeout().duration(), async {
+                    loop {
+                        let event = client.next().await.expect("terminal SSE event");
+                        if event["type"] == "response.completed" {
+                            break event;
+                        }
+                    }
+                })
+                .await
+                .expect("terminal SSE write completes")
+            };
+            assert_eq!(terminal["response"]["status"], "completed");
+            timeout(
+                wire_timeout().duration(),
+                publications.wait_for_idle_route(),
+            )
+            .await
+            .expect("route can become idle after downstream delivery");
+            publications.assert_intervals(&[id], true);
+            assert_eq!(blocked["routes"][0]["in_flight"], 1, "{blocked}");
+            assert_eq!(blocked["requests"][0]["request_id"], *id);
+            assert_eq!(blocked["requests"][0]["state"], "completed", "{blocked}");
+        });
+    }
 }
 
 async fn submit(address: SocketAddr, wire: &[u8]) -> TcpStream {
@@ -533,7 +622,7 @@ fn drain_websocket_session() {
                         fixture,
                         "/v1/responses",
                         (phase == BusyAtDeadline)
-                            .then_some(WriteTrigger::Bytes(b"EMP connection is draining")),
+                            .then_some(WriteTrigger::Bytes(b"EMP connection is draining", None)),
                     );
                     let mut client = RawClient::request(
                         fixture.server.local_addr(),
@@ -590,7 +679,8 @@ fn drain_management_subscription() {
                     let probe = Probe::arm(
                         fixture,
                         path,
-                        (phase == Sending).then_some(WriteTrigger::Bytes(b"event: quota-updated")),
+                        (phase == Sending)
+                            .then_some(WriteTrigger::Bytes(b"event: quota-updated", None)),
                     );
                     let client = RawClient::request(
                         fixture.server.local_addr(),

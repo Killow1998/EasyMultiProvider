@@ -201,12 +201,11 @@ History budgeting and all wire projections therefore observe one output cap.
 [`external.rs`](../crates/emp-app/src/services/external.rs) now owns complete
 Responses execution and stream opening. The two operations share a private
 attempt implementation: candidate selection, retry bounds/delay, context-error
-feedback and retry receipts no longer live in the HTTP adapter. Complete
-execution owns one outcome and its activity guard; an opened stream transfers
-completion accounting to its existing relay. HTTP and WebSocket relays own one
-activity guard across opening, delivery and cancellation, so the shared attempt
-loop must not start a second guard while waiting for upstream headers. Optional disconnect monitoring
-replaces the two previous opening wrappers and duplicated SSE caller branches.
+feedback and retry receipts no longer live in the HTTP adapter. Streaming adapters
+own the request guard from upstream opening through downstream delivery. The route
+count is acquired before the first `active` publication and held until the request
+has settled and downstream delivery has completed or failed. Retries and protocol
+fallback share that count.
 
 Its interface returns the existing response/stream and typed failures. It does
 not impose a new message schema on native or external data. Native forwarding,
@@ -1607,8 +1606,8 @@ state normalization/settings/migration tests and `quota_catalog_download`.
 Execution facts now belong to the request's `RequestOutcome`: each dispatch
 increments its own attempt count and records its protocol/model; scheduled
 retries append bounded, content-free facts. HTTP and Claude execution create the
-outcome before entering the executor. Successful stream opening transfers that
-same outcome to the SSE or WebSocket relay. A native WebSocket 1009 fallback
+outcome before entering the executor. Stream opening and relay use the same
+request guard. A native WebSocket 1009 fallback
 also transfers its outcome into HTTP opening, preserving both attempts in one
 completed receipt. The 128-row activity buffer is only a UI projection;
 persistence never snapshots it to reconstruct execution history.

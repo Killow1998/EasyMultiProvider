@@ -565,22 +565,45 @@ async fn responses_turns(
         body.insert("stream".to_owned(), Value::Bool(true));
         let (control, mut monitor) = control::TurnControl::start(state, &mut websocket);
         let result = if crate::services::claude_cli::selected(&turn.route) {
-            claude::serve(state, turn, &mut websocket, monitor).await
-        } else if turn.route.dialect == emp_domain::Dialect::CodexNative {
-            http_stream::serve_native(
+            claude::serve(
                 state,
-                &turn,
+                turn,
                 &mut websocket,
-                &mut monitor,
-                native_usage.map(|usage| *usage),
+                monitor,
+                control,
+                &mut native_session.pending_request,
             )
             .await
         } else {
-            http_stream::serve_external(state, &turn, &mut websocket, &mut monitor).await
+            let started = std::time::Instant::now();
+            let native = turn.route.dialect == emp_domain::Dialect::CodexNative;
+            let mut usage = native_usage.map(|usage| *usage).unwrap_or_else(|| {
+                let usage = crate::services::request_outcome::RequestGuard::new(
+                    state,
+                    &turn.route,
+                    &turn.body,
+                    &turn.headers,
+                    None,
+                    "responses",
+                );
+                if native {
+                    usage
+                } else {
+                    usage.started_at(started)
+                }
+            });
+            let result = if native {
+                http_stream::serve_native(state, &turn, &mut websocket, &mut monitor, &mut usage)
+                    .await
+            } else {
+                http_stream::serve_external(state, &turn, &mut websocket, &mut monitor, &mut usage)
+                    .await
+            };
+            usage.finish();
+            control
+                .finish(&mut websocket, &mut native_session.pending_request, result)
+                .await
         };
-        let result = control
-            .finish(&mut websocket, &mut native_session.pending_request, result)
-            .await;
         if matches!(result, TurnResult::Closed) {
             return;
         }

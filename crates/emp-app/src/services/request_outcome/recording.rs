@@ -1,4 +1,4 @@
-use super::{RequestActivity, RequestOutcome};
+use super::RequestOutcome;
 use crate::services::{
     activity::ActivityService,
     auto_review::ReviewState,
@@ -21,11 +21,7 @@ pub(super) struct CompletionServices<'a> {
     pub(super) usage: &'a UsageState,
 }
 
-pub(super) fn finish_request(
-    services: &CompletionServices<'_>,
-    outcome: RequestOutcome,
-    route_activity: Option<RequestActivity<'_>>,
-) {
+pub(super) fn finish_request(services: &CompletionServices<'_>, outcome: RequestOutcome) {
     let event = &outcome.event;
     if event["route"] == "prewarm" {
         services.diagnostics.journal.event(
@@ -49,7 +45,6 @@ pub(super) fn finish_request(
             .finish_request(event, outcome.identity.as_ref());
         notify_projected_call_finished();
     }
-    drop(route_activity);
 }
 
 fn record_billing(services: &CompletionServices<'_>, outcome: &RequestOutcome) {

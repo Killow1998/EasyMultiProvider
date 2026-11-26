@@ -9,6 +9,7 @@ use crate::{
         gateway_clients::Caller,
         modules::aero::{Call, CallLease, CallParent, Callers},
         observation::request::FrameDiagnostics,
+        request_outcome::RequestGuard,
     },
 };
 use axum::{
@@ -130,6 +131,7 @@ pub(crate) struct BodyOutput<'a> {
     stream: Option<StreamFrames>,
     work: Option<ResponseWork>,
     after_handoff: Option<Box<dyn FnOnce() + Send + 'a>>,
+    request_activity: Option<RequestGuard<'a>>,
     frame_pending: bool,
     hooks: ServerHooksHandle,
 }
@@ -164,6 +166,7 @@ impl<'a> BodyOutput<'a> {
             stream: None,
             work: Some(ResponseWork::Request(business)),
             after_handoff: None,
+            request_activity: None,
             frame_pending: false,
             hooks,
         }
@@ -247,6 +250,11 @@ impl<'a> BodyOutput<'a> {
 
     pub(crate) fn after_handoff(&mut self, effect: impl FnOnce() + Send + 'a) {
         self.after_handoff = Some(Box::new(effect));
+    }
+
+    pub(crate) fn hold_request(&mut self, mut request: RequestGuard<'a>) {
+        request.finish();
+        self.request_activity = Some(request);
     }
 
     pub(super) fn finish(mut self, response: impl FnOnce() -> Response) -> io::Result<()> {

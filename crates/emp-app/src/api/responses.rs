@@ -100,7 +100,7 @@ pub(crate) fn execute<'a>(
     observation.phase(Phase::Execute);
     if route.dialect != emp_domain::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
         let started = std::time::Instant::now();
-        let mut usage = crate::services::request_outcome::RequestGuard::new(
+        let mut usage = crate::services::request_outcome::RequestGuard::deferred(
             state,
             &route,
             &body,
@@ -188,7 +188,8 @@ pub(crate) fn execute<'a>(
         usage.finish();
         save_learned_protocol(state, learned);
         if body.get("stream").is_some_and(json_truthy) {
-            let downstream = ObservedSse::new(downstream, observation, &incoming);
+            let mut downstream = ObservedSse::new(downstream, observation, &incoming);
+            downstream.hold_request(usage);
             return serve_generated_response(downstream, compacted, &ids)
                 .err()
                 .map_or(InferenceOutcome::Streamed, Into::into);
@@ -217,14 +218,9 @@ pub(crate) fn execute<'a>(
             "responses",
         )
         .started_at(started);
-        usage.track_route();
-        let mut downstream =
-            stream_requested.then(|| ObservedSse::new(downstream, observation, &incoming));
+        let mut downstream = ObservedSse::new(downstream, observation, &incoming);
         let mut live =
             crate::api::claude_stream::LiveText::new(&ids, false, |event: &serde_json::Value| {
-                let Some(downstream) = downstream.as_mut() else {
-                    return Ok(());
-                };
                 if event["type"] == "response.created" {
                     downstream.head()?;
                 }
@@ -259,6 +255,7 @@ pub(crate) fn execute<'a>(
                     let _ = live.event(&crate::api::claude_response::websocket_value_for_route(
                         &error, &route,
                     ));
+                    downstream.hold_request(usage);
                     return InferenceOutcome::Streamed;
                 }
                 return crate::api::claude_response::http_response_for_route(&error, &route).into();
@@ -282,6 +279,7 @@ pub(crate) fn execute<'a>(
         save_learned_protocol(state, learned);
         if stream_requested {
             let _ = live.finish(response_value);
+            downstream.hold_request(usage);
             return InferenceOutcome::Streamed;
         }
         let body = serde_json::to_vec(&response_value).expect("validated Claude response");

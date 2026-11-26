@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 mod requests;
+use tests::PublicationLog;
 
 pub(crate) const ACTIVITY_RECENT_FOR_SECONDS: u64 = 60;
 const ACTIVITY_RETENTION_SECONDS: u64 = 300;
@@ -88,6 +89,7 @@ struct ActivityState {
 pub(crate) struct ActivityService {
     state: Mutex<ActivityState>,
     events: Arc<ManagementEvents>,
+    publications: PublicationLog,
 }
 
 pub(super) struct ActivityGuard<'a> {
@@ -110,6 +112,7 @@ impl ActivityService {
         Self {
             state: Mutex::default(),
             events,
+            publications: Default::default(),
         }
     }
 
@@ -153,11 +156,7 @@ impl ActivityService {
         }
 
         if changed {
-            state.revision = state.revision.wrapping_add(1);
-        }
-        drop(state);
-        if changed {
-            self.events.publish(Change::Activity);
+            self.publish(state, now);
         }
 
         ActivityGuard {
@@ -169,7 +168,45 @@ impl ActivityService {
     /// Public snapshot omits finished rows retained only for capacity management.
     pub(crate) fn snapshot(&self, observed_at: u64) -> Value {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let routes = state
+        state.snapshot(observed_at)
+    }
+
+    pub(super) fn finish_request(&self, event: &Value, identity: Option<&ActivityIdentity>) {
+        self.update_request(event, identity, true);
+    }
+
+    fn update_request(&self, event: &Value, identity: Option<&ActivityIdentity>, finished: bool) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let now = unix_seconds();
+        let changed = state.requests.observe(event, identity, finished, now);
+        if changed {
+            self.publish(state, now);
+        }
+    }
+
+    fn finish(&self, identity: &ActivityIdentity) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(activity) = state.routes.get_mut(identity)
+            && activity.in_flight > 0
+        {
+            let now = unix_seconds();
+            activity.in_flight -= 1;
+            activity.last_finished = Some(now);
+            self.publish(state, now);
+        }
+    }
+
+    fn publish(&self, mut state: std::sync::MutexGuard<'_, ActivityState>, now: u64) {
+        state.revision = state.revision.wrapping_add(1);
+        self.publications.record(&state, now);
+        drop(state);
+        self.events.publish(Change::Activity);
+    }
+}
+
+impl ActivityState {
+    fn snapshot(&self, observed_at: u64) -> Value {
+        let routes = self
             .routes
             .iter()
             .filter(|(_, activity)| {
@@ -189,47 +226,19 @@ impl ActivityService {
             })
             .collect::<Vec<_>>();
         json!({
-            "revision": state.revision,
+            "revision": self.revision,
             "observed_at": observed_at,
             "recent_for_seconds": ACTIVITY_RECENT_FOR_SECONDS,
             "routes": routes,
-            "requests": state.requests.snapshot(observed_at),
+            "requests": self.requests.snapshot(observed_at),
         })
     }
+}
 
-    pub(crate) fn observe_request(&self, event: &Value, identity: Option<&ActivityIdentity>) {
-        self.update_request(event, identity, false);
-    }
-
-    pub(super) fn finish_request(&self, event: &Value, identity: Option<&ActivityIdentity>) {
-        self.update_request(event, identity, true);
-    }
-
-    fn update_request(&self, event: &Value, identity: Option<&ActivityIdentity>, finished: bool) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let changed = state
-            .requests
-            .observe(event, identity, finished, unix_seconds());
-        if changed {
-            state.revision = state.revision.wrapping_add(1);
-        }
-        drop(state);
-        if changed {
-            self.events.publish(Change::Activity);
-        }
-    }
-
-    fn finish(&self, identity: &ActivityIdentity) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(activity) = state.routes.get_mut(identity)
-            && activity.in_flight > 0
-        {
-            activity.in_flight -= 1;
-            activity.last_finished = Some(unix_seconds());
-            state.revision = state.revision.wrapping_add(1);
-            drop(state);
-            self.events.publish(Change::Activity);
-        }
+impl ActivityGuard<'_> {
+    pub(super) fn observe_request(&self, event: &Value) {
+        self.service
+            .update_request(event, self.identity.as_ref(), false);
     }
 }
 
@@ -261,3 +270,14 @@ fn unix_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(not(test))]
+mod tests {
+    #[derive(Default)]
+    pub(super) struct PublicationLog;
+
+    impl PublicationLog {
+        #[inline]
+        pub(super) fn record(&self, _: &super::ActivityState, _: u64) {}
+    }
+}
