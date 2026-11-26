@@ -71,7 +71,7 @@ pub(super) fn prepare_http_error(
         PrepareFailure::Destination(DestinationPrepareError::Disconnected, _)
             if !matches!(output, PreparationOutput::Compact) =>
         {
-            return InferenceOutcome::Streamed;
+            return InferenceOutcome::NoBufferedReply;
         }
         PrepareFailure::Destination(error, _) => {
             return destination_error_response(error, observation).into();
@@ -88,7 +88,7 @@ pub(super) fn prepare_http_error(
     } else if !at_destination {
         return HttpReply::error(500, "internal server error", None).into();
     }
-    InferenceOutcome::Streamed
+    InferenceOutcome::NoBufferedReply
 }
 
 fn history_error_detail(error: &HistoryError) -> Value {

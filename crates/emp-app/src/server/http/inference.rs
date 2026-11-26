@@ -3,7 +3,7 @@ use super::{
     error::{EntryError, HttpReply, no_response},
     proxy::{AdmittedCallback, RequestAccess, request_source, require_proxy},
     raw_head,
-    stream::{BodyOutput, StreamConnection},
+    stream::{BodyOutput, SseHandoff, StreamConnection},
 };
 use crate::{
     api::{compact, decisions, images, responses, search},
@@ -42,7 +42,8 @@ pub(crate) enum InferenceRoute {
 pub(crate) enum InferenceOutcome {
     Buffered(HttpReply),
     Closed,
-    Streamed,
+    NoBufferedReply,
+    Streamed(SseHandoff),
 }
 
 impl From<HttpReply> for InferenceOutcome {
@@ -246,7 +247,8 @@ async fn submit(
                     let _ = inference.receipt.set(BufferedReceipt::Closed);
                     no_response()
                 }
-                InferenceOutcome::Streamed => no_response(),
+                InferenceOutcome::NoBufferedReply => no_response(),
+                InferenceOutcome::Streamed(_handoff) => no_response(),
             });
             *inference.model.lock().expect("model observation") = observation;
         }

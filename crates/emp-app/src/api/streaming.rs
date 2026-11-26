@@ -3,7 +3,7 @@ use crate::api::failure_response::pre_output_router_error_response_for_route;
 use crate::api::failure_response::stream_failure_value_for_route;
 use crate::app::ServerState;
 use crate::http::response::is_security_header;
-use crate::server::http::{error::HttpReply, stream::BodyOutput};
+use crate::server::http::{error::HttpReply, inference::InferenceOutcome, stream::BodyOutput};
 use crate::services::context;
 use crate::services::disconnect::DisconnectMonitor;
 use crate::services::disconnect::DisconnectRace;
@@ -87,8 +87,16 @@ impl<'a, 'state> ObservedSse<'a, 'state> {
         )
     }
 
-    pub(crate) fn hold_request(&mut self, request: RequestGuard<'state>) {
-        self.sink.hold_request(request);
+    pub(crate) fn finish(
+        &mut self,
+        request: RequestGuard<'state>,
+        result: Result<(), HttpReply>,
+    ) -> InferenceOutcome {
+        match (self.sink.handoff_sse(request), result) {
+            (Some(handoff), _) => InferenceOutcome::Streamed(handoff),
+            (None, Err(reply)) => reply.into(),
+            (None, Ok(())) => InferenceOutcome::NoBufferedReply,
+        }
     }
 
     fn upstream_event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
@@ -135,7 +143,7 @@ pub(crate) fn serve_external_stream<'a>(
     body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
-) -> Result<(), HttpReply> {
+) -> InferenceOutcome {
     let mut monitor = downstream.sink.disconnect().ok();
     let started = std::time::Instant::now();
     let mut usage =
@@ -157,7 +165,7 @@ pub(crate) fn serve_external_stream<'a>(
             Ok(opened) => opened,
             Err(error) => {
                 return crate::api::failure_response::external_open_error(error)
-                    .map_or(Ok(()), Err);
+                    .map_or(InferenceOutcome::NoBufferedReply, Into::into);
             }
         };
     let mut learned = None;
@@ -195,10 +203,10 @@ pub(crate) fn serve_native_stream<'a>(
     body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
-) -> Result<(), HttpReply> {
+) -> InferenceOutcome {
     let mut monitor = downstream.sink.disconnect().ok();
     let mut usage = RequestGuard::new(state, route, body, incoming, None, "responses");
-    let Some(upstream) = state
+    let upstream = match state
         .backend
         .transport
         .runtime
@@ -211,11 +219,16 @@ pub(crate) fn serve_native_stream<'a>(
             ids,
             monitor.as_mut(),
             &mut usage,
-        ))
-        .map_err(crate::api::native_response::error_reply)?
-    else {
-        native::record_open_disconnect(&mut usage, monitor.as_ref().expect("disconnect monitor"));
-        return Ok(());
+        )) {
+        Ok(Some(upstream)) => upstream,
+        Ok(None) => {
+            native::record_open_disconnect(
+                &mut usage,
+                monitor.as_ref().expect("disconnect monitor"),
+            );
+            return InferenceOutcome::NoBufferedReply;
+        }
+        Err(error) => return crate::api::native_response::error_reply(error).into(),
     };
     let response_headers = upstream.headers.clone();
     relay_stream(
@@ -327,7 +340,7 @@ fn relay_stream<'a>(
     mut source: impl RelaySource,
     monitor: Option<DisconnectMonitor>,
     mut observe: impl FnMut(&mut RequestGuard<'_>, &Value),
-) -> Result<(), HttpReply> {
+) -> InferenceOutcome {
     let RelayContext {
         state,
         route,
@@ -435,28 +448,34 @@ fn relay_stream<'a>(
             }
         }
     };
-    downstream.hold_request(usage);
-    result
+    downstream.finish(usage, result)
 }
 
-pub(crate) fn serve_generated_response(
-    mut downstream: ObservedSse<'_, '_>,
+pub(crate) fn serve_generated_response<'a>(
+    mut downstream: ObservedSse<'_, 'a>,
+    usage: RequestGuard<'a>,
     response_value: Value,
     ids: &ProjectionIds,
-) -> Result<(), HttpReply> {
-    let events = emp_router::response_json_stream_events(response_value, ids, false)
-        .map_err(crate::api::failure_response::router_error_reply)?;
-    if downstream.head().is_err() {
-        return Ok(());
-    }
-    for event in events {
-        let kind = event["type"].as_str().unwrap_or("message");
-        let Ok(frame) = sse_frame(kind, &event) else {
-            return Ok(());
-        };
-        if downstream.event(&event, &[frame]).is_err() {
-            return Ok(());
+) -> InferenceOutcome {
+    let events = match emp_router::response_json_stream_events(response_value, ids, false) {
+        Ok(events) => events,
+        Err(error) => {
+            return downstream.finish(
+                usage,
+                Err(crate::api::failure_response::router_error_reply(error)),
+            );
+        }
+    };
+    if downstream.head().is_ok() {
+        for event in events {
+            let kind = event["type"].as_str().unwrap_or("message");
+            let Ok(frame) = sse_frame(kind, &event) else {
+                break;
+            };
+            if downstream.event(&event, &[frame]).is_err() {
+                break;
+            }
         }
     }
-    Ok(())
+    downstream.finish(usage, Ok(()))
 }

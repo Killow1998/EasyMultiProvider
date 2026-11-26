@@ -89,7 +89,7 @@ pub(crate) fn relay(
     });
     let (mut upstream, mut monitor) = match upstream {
         Ok(upstream) => upstream,
-        Err(RelayError::Disconnected) => return InferenceOutcome::Streamed,
+        Err(RelayError::Disconnected) => return InferenceOutcome::NoBufferedReply,
         Err(RelayError::History(error)) => {
             return InferenceOutcome::Buffered(crate::api::history_response::history_http_error(
                 &error,
@@ -113,7 +113,7 @@ pub(crate) fn relay(
         )
         .is_err()
     {
-        return InferenceOutcome::Streamed;
+        return InferenceOutcome::NoBufferedReply;
     }
     let mut parser = sse.then(SseJsonParser::new);
     loop {
@@ -164,7 +164,7 @@ pub(crate) fn relay(
             }
         }
     }
-    InferenceOutcome::Streamed
+    InferenceOutcome::NoBufferedReply
 }
 
 pub(super) async fn open(

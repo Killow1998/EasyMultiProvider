@@ -177,6 +177,22 @@ async fn receive<T>(
 }
 
 #[cfg(unix)]
+fn stream_handoff(fixture: &Fixture) -> oneshot::Receiver<()> {
+    let (handoff, reached) = oneshot::channel();
+    *fixture
+        .server
+        .state
+        .lifecycle
+        .test_hooks
+        .on_stream_handoff
+        .lock()
+        .unwrap() = Some(Box::new(move || {
+        let _ = handoff.send(());
+    }));
+    reached
+}
+
+#[cfg(unix)]
 #[test]
 fn external_route_stays_busy_until_the_terminal_frame_is_written() {
     use super::{
@@ -209,6 +225,7 @@ fn external_route_stays_busy_until_the_terminal_frame_is_written() {
                     Some(Box::new(move || written.terminal_written())),
                 )),
             );
+            let at_handoff = (!websocket).then(|| stream_handoff(fixture));
             let session = fixture.session();
             let wire = if websocket {
                 upgrade(fixture.port(), "/v1/responses", &session, &[], b"")
@@ -230,9 +247,15 @@ fn external_route_stays_busy_until_the_terminal_frame_is_written() {
             }
             let (reached, release) = probe.write.unwrap();
             receive(reached, "terminal frame blocked in downstream write").await;
+            if let Some(at_handoff) = at_handoff {
+                receive(at_handoff, "SSE producer handed off the terminal frame").await;
+            }
             let (_, headers, _) = upstream.observed();
             let id = &headers["x-emp-request-id"];
             let blocked = publications.latest();
+            assert_eq!(blocked["routes"][0]["in_flight"], 1, "{blocked}");
+            assert_eq!(blocked["requests"][0]["request_id"], *id);
+            assert_eq!(blocked["requests"][0]["state"], "completed", "{blocked}");
             release.send(()).unwrap();
 
             let terminal = if websocket {
@@ -258,11 +281,167 @@ fn external_route_stays_busy_until_the_terminal_frame_is_written() {
             .await
             .expect("route can become idle after downstream delivery");
             publications.assert_intervals(&[id], true);
-            assert_eq!(blocked["routes"][0]["in_flight"], 1, "{blocked}");
-            assert_eq!(blocked["requests"][0]["request_id"], *id);
-            assert_eq!(blocked["requests"][0]["state"], "completed", "{blocked}");
         });
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_cli_sse_half_close_keeps_route_busy_until_the_queued_delta_is_written() {
+    use super::inference::STREAM_REQUEST;
+    use crate::tests::OneShotUpstream;
+    use std::{os::unix::fs::PermissionsExt, process::Command};
+
+    const MODE: &str = "EMP_TEST_CLAUDE_SSE_HALF_CLOSE";
+    const TEST: &str = "server::http::tests::drain::claude_cli_sse_half_close_keeps_route_busy_until_the_queued_delta_is_written";
+    match std::env::var(MODE).as_deref() {
+        Ok("cli") => {
+            claude_cli_fixture_send_text();
+            return;
+        }
+        Ok("server") => {}
+        _ => {
+            let directory = emp_test_support::fixture_dir().unwrap();
+            let executable = directory.path().join("claude");
+            let test_binary = std::env::current_exe().unwrap();
+            std::os::unix::fs::symlink(&test_binary, executable.with_extension("test")).unwrap();
+            std::fs::write(
+                &executable,
+                format!("#!/bin/sh\n{MODE}=cli exec \"$0.test\" --exact '{TEST}'\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut command = Command::new(test_binary);
+            command
+                .args(["--exact", TEST])
+                .env(MODE, "server")
+                .env("PATH", directory.path());
+            let output = emp_test_support::OwnedChild::output(
+                command,
+                Deadline::after(wire_timeout() + wire_timeout()),
+            )
+            .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+    }
+
+    let events = [
+        json!({"type":"message_start","message":{"id":"msg_fixture","role":"assistant","content":[],"usage":{"input_tokens":3}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"fixture delta"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}),
+        json!({"type":"message_stop"}),
+    ];
+    let upstream = OneShotUpstream::start_repeated_wire(
+        200,
+        "text/event-stream",
+        None,
+        1,
+        events
+            .iter()
+            .map(|event| {
+                crate::services::events::sse_frame(event["type"].as_str().unwrap(), event).unwrap()
+            })
+            .collect(),
+    );
+    let directory = emp_test_support::fixture_dir().unwrap();
+    std::fs::write(
+        directory.path().join("config.json"),
+        json!({
+            "providers":[{"id":"demo","base_url":upstream.base_url(),"protocol":"anthropic_messages",
+                "auth_mode":"anthropic_api_key","api_key":"fixture","execution_backend":"claude_cli"}],
+            "models":[{"id":"demo/model","provider":"demo","upstream_id":"upstream","enabled":true}]
+        }).to_string(),
+    ).unwrap();
+    Fixture::with_directory(directory).run_wire(async |fixture, address| {
+        let publications = fixture.server.state.backend.activity.record_publications();
+        let written = publications.clone();
+        let probe = Probe::arm(
+            fixture,
+            "/v1/responses",
+            Some(WriteTrigger::Bytes(
+                b"event: response.output_text.delta\n",
+                Some(Box::new(move || written.terminal_written())),
+            )),
+        );
+        let at_handoff = stream_handoff(fixture);
+        let wire = json_request(
+            fixture.port(),
+            "/v1/responses",
+            &[&fixture.session()],
+            STREAM_REQUEST,
+        );
+        let mut client = RawClient::request(address, &wire).await;
+        assert!(client.head.starts_with("HTTP/1.1 200 "), "{}", client.head);
+        let id = receive(probe.id, "Claude HTTP request ID").await;
+        let (reached, release) = probe.write.unwrap();
+        receive(reached, "Claude delta blocked in downstream write").await;
+        client.io.shutdown().await.unwrap();
+        receive(
+            at_handoff,
+            "Claude cancelled and handed off the queued delta",
+        )
+        .await;
+        let blocked = publications.latest();
+        assert_eq!(blocked["routes"][0]["in_flight"], 1, "{blocked}");
+        assert_eq!(blocked["requests"][0]["request_id"], id, "{blocked}");
+        assert_eq!(blocked["requests"][0]["state"], "cancelled", "{blocked}");
+        assert_eq!(
+            blocked["requests"][0]["error_class"], "client_disconnect",
+            "{blocked}"
+        );
+        release.send(()).unwrap();
+        let reply = client.rest(&Deadline::after(wire_timeout())).await;
+        assert!(String::from_utf8_lossy(&reply).contains("fixture delta"));
+        timeout(
+            wire_timeout().duration(),
+            publications.wait_for_idle_route(),
+        )
+        .await
+        .expect("Claude route released after delta delivery");
+        publications.assert_intervals(&[&id], true);
+    });
+}
+
+#[cfg(unix)]
+fn claude_cli_fixture_send_text() {
+    let base = std::env::var("ANTHROPIC_BASE_URL").unwrap();
+    let address: SocketAddr = base.strip_prefix("http://").unwrap().parse().unwrap();
+    let token = std::env::var("ANTHROPIC_AUTH_TOKEN").unwrap();
+    let authorization = format!("Authorization: Bearer {token}");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let _relay = runtime.block_on(async {
+        let prompt = json_request(
+            address.port(),
+            "/mcp",
+            &[&authorization],
+            br#"{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"context"}}"#,
+        );
+        let context = json_body(&exchange_wire(address, &prompt, false).await);
+        let block = &context["result"]["messages"][0]["content"];
+        let body = json!({"model":"upstream","max_tokens":32,"stream":true,
+            "messages":[{"role":"user","content":[block]}]})
+        .to_string();
+        let wire = json_request(
+            address.port(),
+            "/v1/messages",
+            &[&authorization],
+            body.as_bytes(),
+        );
+        submit(address, &wire).await
+    });
+    std::io::copy(&mut std::io::stdin(), &mut std::io::sink()).unwrap();
 }
 
 async fn submit(address: SocketAddr, wire: &[u8]) -> TcpStream {

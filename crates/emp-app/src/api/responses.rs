@@ -149,7 +149,7 @@ pub(crate) fn execute<'a>(
                 }
                 Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
                     usage.disconnected();
-                    return InferenceOutcome::Streamed;
+                    return InferenceOutcome::NoBufferedReply;
                 }
                 Err(error) => {
                     if let crate::services::claude_cli::ClaudeCliError::Router(router_error) =
@@ -188,11 +188,8 @@ pub(crate) fn execute<'a>(
         usage.finish();
         save_learned_protocol(state, learned);
         if body.get("stream").is_some_and(json_truthy) {
-            let mut downstream = ObservedSse::new(downstream, observation, &incoming);
-            downstream.hold_request(usage);
-            return serve_generated_response(downstream, compacted, &ids)
-                .err()
-                .map_or(InferenceOutcome::Streamed, Into::into);
+            let downstream = ObservedSse::new(downstream, observation, &incoming);
+            return serve_generated_response(downstream, usage, compacted, &ids);
         }
         let compacted = match serde_json::to_vec(&compacted) {
             Ok(body) => body,
@@ -247,16 +244,21 @@ pub(crate) fn execute<'a>(
             },
         ) {
             Ok(completion) => completion,
-            Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
-                return InferenceOutcome::Streamed;
-            }
             Err(error) => {
+                let disconnected = matches!(
+                    error,
+                    crate::services::claude_cli::ClaudeCliError::Disconnected
+                );
                 if live.started() {
-                    let _ = live.event(&crate::api::claude_response::websocket_value_for_route(
-                        &error, &route,
-                    ));
-                    downstream.hold_request(usage);
-                    return InferenceOutcome::Streamed;
+                    if !disconnected {
+                        let _ = live.event(
+                            &crate::api::claude_response::websocket_value_for_route(&error, &route),
+                        );
+                    }
+                    return downstream.finish(usage, Ok(()));
+                }
+                if disconnected {
+                    return InferenceOutcome::NoBufferedReply;
                 }
                 return crate::api::claude_response::http_response_for_route(&error, &route).into();
             }
@@ -279,8 +281,7 @@ pub(crate) fn execute<'a>(
         save_learned_protocol(state, learned);
         if stream_requested {
             let _ = live.finish(response_value);
-            downstream.hold_request(usage);
-            return InferenceOutcome::Streamed;
+            return downstream.finish(usage, Ok(()));
         }
         let body = serde_json::to_vec(&response_value).expect("validated Claude response");
         return InferenceOutcome::Buffered(
@@ -292,12 +293,11 @@ pub(crate) fn execute<'a>(
     let streaming = body.get("stream").is_some_and(json_truthy);
     if streaming {
         let downstream = ObservedSse::new(downstream, observation, &incoming);
-        let result = if native {
+        return if native {
             serve_native_stream(downstream, state, &route, &config, &body, &incoming, &ids)
         } else {
             serve_external_stream(downstream, state, &route, &body, &incoming, &ids)
         };
-        return result.err().map_or(InferenceOutcome::Streamed, Into::into);
     }
     if native {
         return crate::api::native_response::complete_response(native::complete(
