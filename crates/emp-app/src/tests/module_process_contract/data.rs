@@ -7,7 +7,7 @@ use crate::{
     modules::process::ModuleProcess,
     server::http::tests::json_body,
     server::{
-        http::tests::{assert_status, assert_wire, request},
+        http::tests::{assert_status, assert_wire, read_chunk_data, request},
         raw_tcp::head as read_head,
     },
 };
@@ -16,10 +16,10 @@ use emp_modules::{
     manifest::ModuleManifest,
     peer::Handlers,
 };
-use emp_test_support::test_timeout;
+use emp_test_support::{http::ChunkDecoder, test_timeout};
 use std::{fs::File, future::pending, io, net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpSocket, TcpStream},
     sync::Notify,
     task::JoinSet,
@@ -411,19 +411,18 @@ async fn start_sse(
 }
 
 async fn assert_stream_bytes(client: &mut BufReader<TcpStream>, expected: &[u8]) {
+    let mut decoder = ChunkDecoder::default();
     let mut received = Vec::new();
     while received.len() < expected.len() {
-        let mut length = String::new();
-        client.read_line(&mut length).await.unwrap();
-        let length = usize::from_str_radix(length.trim_end(), 16).unwrap();
-        assert!(length > 0);
-        let start = received.len();
-        received.resize(start + length, 0);
-        client.read_exact(&mut received[start..]).await.unwrap();
-        assert_eq!(
-            client.read_u16().await.unwrap(),
-            u16::from_be_bytes(*b"\r\n")
-        );
+        while !decoder.at_chunk_ending() {
+            read_chunk_data(client, &mut decoder, &mut received)
+                .await
+                .unwrap();
+            assert!(!decoder.is_finished(), "expected a non-empty HTTP chunk");
+        }
+        let mut ending = [0; 2];
+        client.read_exact(&mut ending).await.unwrap();
+        decoder.decode(&mut ending.as_slice()).unwrap();
     }
     assert_eq!(received, expected);
 }

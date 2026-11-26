@@ -221,7 +221,7 @@ fn decode_report_wire(wire: Vec<u8>) -> Vec<u8> {
     decoded
 }
 
-async fn read_chunk_data(
+pub(crate) async fn read_chunk_data(
     io: &mut (impl AsyncBufRead + Unpin),
     decoder: &mut ChunkDecoder,
     output: &mut Vec<u8>,
