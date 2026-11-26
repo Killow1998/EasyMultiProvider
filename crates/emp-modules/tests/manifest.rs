@@ -21,6 +21,31 @@ fn manifest() -> ModuleManifest {
 }
 
 #[test]
+fn route_ids_are_limited_to_nonempty_ascii_header_identifiers() {
+    for id in [
+        "",
+        "line\nbreak",
+        " leading",
+        "trailing ",
+        "route:part",
+        &"x".repeat(65),
+    ] {
+        let mut manifest = manifest();
+        let Contribution::HttpRoute { id: route_id, .. } = &mut manifest.contributions[0] else {
+            panic!("missing HTTP route fixture");
+        };
+        *route_id = id.to_owned();
+        assert_eq!(
+            manifest.validate(HOST_API_V3),
+            Err(vec![ManifestError::InvalidRouteId {
+                index: 0,
+                id: id.to_owned()
+            }])
+        );
+    }
+}
+
+#[test]
 fn manifest_round_trips_the_wire_contract() {
     let manifest = manifest();
     let encoded = serde_json::to_string(&manifest).unwrap();

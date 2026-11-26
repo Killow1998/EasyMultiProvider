@@ -25,8 +25,26 @@ use std::io::{PipeReader as Reader, PipeWriter as Writer};
 pub struct ModuleProcess {
     connection: PeerHandle,
     pub(crate) data_endpoint: Option<DataEndpoint>,
-    tree: Arc<ProcessTree>,
+    generation: Arc<Generation>,
     exit: oneshot::Receiver<io::Result<ExitStatus>>,
+}
+
+struct Generation {
+    tree: ProcessTree,
+    disconnected: watch::Sender<bool>,
+}
+
+impl Generation {
+    fn invalidate(&self) {
+        self.disconnected.send_if_modified(|closed| {
+            if *closed {
+                return false;
+            }
+            *closed = true;
+            self.tree.request_stop();
+            true
+        });
+    }
 }
 
 #[derive(Clone)]
@@ -129,27 +147,28 @@ impl ModuleProcess {
                 return Err(StartError::Io(error));
             }
         };
+        let (signal, disconnected) = watch::channel(false);
+        let generation = Arc::new(Generation {
+            tree,
+            disconnected: signal,
+        });
         let peer = match connect(Side::Host, BufReader::new(reader), writer, handlers) {
             Ok(peer) => peer,
             Err(error) => {
-                tree.request_stop();
-                let _ = tree.wait(&mut child);
+                generation.invalidate();
+                let _ = generation.tree.wait(&mut child);
                 return Err(StartError::Io(error));
             }
         };
         let connection = peer.handle();
-        let (signal, disconnected) = watch::channel(false);
-        let on_disconnect = signal.clone();
-        connection.on_disconnect(move || {
-            on_disconnect.send_replace(true);
-        });
-        let tree = Arc::new(tree);
-        let process_tree = tree.clone();
+        let on_disconnect = generation.clone();
+        connection.on_disconnect(move || on_disconnect.invalidate());
+        let monitored = generation.clone();
         let (finished, exit) = oneshot::channel();
         monitor
             .send(Box::new(move || {
-                let status = process_tree.wait(&mut child);
-                signal.send_replace(true);
+                let status = monitored.tree.wait(&mut child);
+                monitored.invalidate();
                 #[cfg(unix)]
                 drop(close_pipes);
                 process_exited();
@@ -159,7 +178,7 @@ impl ModuleProcess {
         let mut process = Self {
             connection,
             data_endpoint: None,
-            tree,
+            generation,
             exit,
         };
         let connection = process.connection();
@@ -202,13 +221,13 @@ impl ModuleProcess {
     }
 
     pub async fn stop(mut self) -> io::Result<ExitStatus> {
-        self.tree.request_stop();
+        self.generation.invalidate();
         (&mut self.exit).await.map_err(io::Error::other)?
     }
 }
 
 impl Drop for ModuleProcess {
     fn drop(&mut self) {
-        self.tree.request_stop();
+        self.generation.invalidate();
     }
 }

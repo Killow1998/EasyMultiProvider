@@ -142,6 +142,10 @@ pub enum ManifestError {
         index: usize,
         id: String,
     },
+    InvalidRouteId {
+        index: usize,
+        id: String,
+    },
     InvalidRouteMethod {
         index: usize,
         id: String,
@@ -190,6 +194,12 @@ impl fmt::Display for ManifestError {
             ),
             Self::DuplicateContributionId { index, id } => {
                 write!(f, "贡献[{index}] 的 ID {id:?} 已声明")
+            }
+            Self::InvalidRouteId { index, id } => {
+                write!(
+                    f,
+                    "贡献[{index}] 的路由 ID {id:?} 必须匹配 ^[A-Za-z0-9._-]{{1,64}}$"
+                )
             }
             Self::InvalidRouteMethod { index, id, method } => {
                 write!(
@@ -313,6 +323,16 @@ impl ModuleManifest {
                 Contribution::HttpRoute {
                     id, method, path, ..
                 } => {
+                    if !(1..=64).contains(&id.len())
+                        || !id.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                        })
+                    {
+                        errors.push(ManifestError::InvalidRouteId {
+                            index,
+                            id: id.clone(),
+                        });
+                    }
                     if !matches!(method.as_str(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE") {
                         errors.push(ManifestError::InvalidRouteMethod {
                             index,

@@ -3,6 +3,7 @@ use crate::http::{
     auth::SESSION_HEADER,
     request::{MODULE_RUNTIME_PREFIX, REQUEST_VERSION, request_head_end},
 };
+use axum::http::HeaderValue;
 use emp_modules::{
     manifest::{Contribution, HookPhase, ModuleManifest, RouteAuth},
     peer::PeerHandle,
@@ -34,7 +35,7 @@ pub struct Panel {
 }
 
 pub(crate) struct HttpRoute {
-    pub(crate) id: String,
+    pub(crate) id: HeaderValue,
     pub(crate) auth: RouteAuth,
 }
 
@@ -86,6 +87,7 @@ impl ModuleRegistry {
                             "route {id} cannot be represented in an HTTP request"
                         ));
                     }
+                    let id = HeaderValue::try_from(id).expect("validated route ID");
                     module
                         .routes
                         .entry(path)

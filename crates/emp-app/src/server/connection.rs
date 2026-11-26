@@ -38,13 +38,15 @@ use hyper_util::{
 use std::{
     borrow::Cow,
     cell::RefCell,
+    future::pending,
     net::{SocketAddr, TcpStream},
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
-    sync::oneshot,
+    sync::{oneshot, watch},
+    task::JoinSet,
     time::{Duration, Instant},
 };
 use tower::ServiceExt;
@@ -57,6 +59,7 @@ struct HttpRequestContext {
     websocket_probe: Option<WebSocketDisconnect>,
     inference: Option<Arc<InferenceConnection>>,
     stream: Option<Arc<StreamConnection>>,
+    module_read_probe: Option<TcpStream>,
 }
 
 type UpgradeSession = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -80,7 +83,45 @@ struct Connection {
     request_slot: Mutex<Option<Arc<ConnectionSlot>>>,
     request_access: OnceLock<RequestAccess>,
     request_id: Option<String>,
+    module_forwarding: Option<ModuleForwarding>,
     shutdown_after_response: Mutex<Option<oneshot::Receiver<ShutdownReason>>>,
+}
+
+pub(super) struct ModuleForwarding {
+    pub(super) signal: ForwardSignal,
+    pub(super) driver: OnceLock<JoinSet<()>>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ForwardCancellation {
+    Peer,
+    Generation,
+    UploadTimeout,
+    ResponseTimeout,
+}
+
+#[derive(Clone)]
+pub(super) struct ForwardSignal(watch::Sender<Option<ForwardCancellation>>);
+
+impl ForwardSignal {
+    pub(super) fn cancel(&self, reason: ForwardCancellation) {
+        self.0.send_if_modified(|current| {
+            if current.is_some() {
+                return false;
+            }
+            *current = Some(reason);
+            true
+        });
+    }
+
+    pub(super) async fn cancelled(&self) -> ForwardCancellation {
+        let mut receiver = self.0.subscribe();
+        receiver
+            .wait_for(Option::is_some)
+            .await
+            .expect("forwarding owns the cancellation signal")
+            .expect("forwarding cancelled")
+    }
 }
 
 impl ConnectionContext {
@@ -103,6 +144,13 @@ impl ConnectionContext {
 
     pub(super) fn request_id(&self) -> Option<&str> {
         self.0.request_id.as_deref()
+    }
+
+    pub(super) fn module_forwarding(&self) -> &ModuleForwarding {
+        self.0
+            .module_forwarding
+            .as_ref()
+            .expect("module runtime route")
     }
 
     pub(crate) fn shutdown_after_response(&self) -> oneshot::Sender<ShutdownReason> {
@@ -244,6 +292,9 @@ pub(super) async fn drive_http(
         websocket_probe,
         inference,
         stream,
+        module_read_probe: (cfg!(unix) && module_runtime_target(request.raw_path()).is_some())
+            .then(|| io.probe().ok())
+            .flatten(),
     };
     drive_connection(
         io,
@@ -287,6 +338,41 @@ pub(super) async fn drive(
     drive_connection(io, peer, router, control, permit, head, None).await;
 }
 
+async fn wait_for_read_close(socket: Option<TcpStream>) {
+    #[cfg(unix)]
+    if let Some(socket) = socket
+        && let Ok(probe) =
+            tokio::io::unix::AsyncFd::with_interest(socket, tokio::io::Interest::READABLE)
+    {
+        while let Ok(mut event) = probe.readable().await {
+            if event.ready().is_read_closed() {
+                return;
+            }
+            event.clear_ready_matching(tokio::io::Ready::READABLE);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = socket;
+    pending().await
+}
+
+async fn wait_for_forwarding_cancel(
+    forwarding: Option<&ModuleForwarding>,
+    read_probe: Option<TcpStream>,
+) {
+    if let Some(forwarding) = forwarding {
+        tokio::select! {
+            biased;
+            _ = wait_for_read_close(read_probe) => forwarding.signal.cancel(ForwardCancellation::Peer),
+            _ = forwarding.signal.cancelled() => {}
+        }
+        if forwarding.driver.get().is_some() {
+            return;
+        }
+    }
+    pending().await
+}
+
 #[cfg(test)]
 fn recovery_driver_mode(mode: ServerMode) -> ServerMode {
     mode
@@ -313,13 +399,16 @@ async fn drive_connection(
     control: Arc<ServerControl>,
     permit: BusinessToken,
     head: GuardedHead,
-    http_context: Option<HttpRequestContext>,
+    mut http_context: Option<HttpRequestContext>,
 ) {
     let mode = control.mode;
+    let read_probe = http_context
+        .as_mut()
+        .and_then(|request| request.module_read_probe.take());
     let raw_request = head.raw.request();
     let module_runtime = module_runtime_target(raw_request.raw_path()).is_some();
-    let half_close = matches!(mode, ServerMode::Recovery)
-        || (http_context.is_some() && !head.account_events && !module_runtime);
+    let half_close =
+        matches!(mode, ServerMode::Recovery) || (http_context.is_some() && !head.account_events);
     let report_socket = http_context
         .as_ref()
         .and_then(|request| request.report_socket.as_ref());
@@ -354,6 +443,10 @@ async fn drive_connection(
         request_slot: Mutex::new(permit.as_ref().map(|permit| permit.slot().clone())),
         request_access: OnceLock::new(),
         request_id,
+        module_forwarding: module_runtime.then(|| ModuleForwarding {
+            signal: ForwardSignal(watch::Sender::new(None)),
+            driver: OnceLock::new(),
+        }),
         shutdown_after_response: Mutex::default(),
     }));
     let business = Mutex::new(permit);
@@ -452,27 +545,35 @@ async fn drive_connection(
         }
     });
     let websocket = websocket::is_upgrade_route(raw_request);
-    let connection = http1::Builder::new()
-        .keep_alive(websocket)
-        .half_close(half_close)
-        .title_case_headers(stream.is_some() || websocket)
-        .max_buf_size(MAX_HEADER_BYTES + 4)
-        .max_headers(MAX_HEADER_BYTES / 4)
-        .timer(TokioTimer::new())
-        .header_read_timeout(mode.head_timeout())
-        .auto_date_header(false)
-        .serve_connection(
-            TokioIo::new(head.replay(
-                io,
-                transport_target,
-                Arc::clone(&encoded_reply),
-                mode,
-                delivery.clone(),
-            )),
-            TowerToHyperService::new(service),
-        )
-        .with_upgrades();
-    let result = connection.await.map_err(std::io::Error::other);
+    let result = {
+        let connection = http1::Builder::new()
+            .keep_alive(websocket)
+            .half_close(half_close)
+            .title_case_headers(stream.is_some() || websocket)
+            .max_buf_size(MAX_HEADER_BYTES + 4)
+            .max_headers(MAX_HEADER_BYTES / 4)
+            .timer(TokioTimer::new())
+            .header_read_timeout(mode.head_timeout())
+            .auto_date_header(false)
+            .serve_connection(
+                TokioIo::new(head.replay(
+                    io,
+                    transport_target,
+                    Arc::clone(&encoded_reply),
+                    mode,
+                    delivery.clone(),
+                )),
+                TowerToHyperService::new(service),
+            )
+            .with_upgrades();
+        tokio::select! {
+            biased;
+            _ = wait_for_forwarding_cancel(context.0.module_forwarding.as_ref(), read_probe) => {
+                Err(std::io::ErrorKind::ConnectionAborted.into())
+            }
+            result = connection => result.map_err(std::io::Error::other),
+        }
+    };
     let written = result.is_ok();
     let upgrade = context
         .0

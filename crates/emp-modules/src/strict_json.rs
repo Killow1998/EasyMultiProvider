@@ -9,6 +9,10 @@ pub(crate) fn from_slice(bytes: &[u8]) -> serde_json::Result<Value> {
     serde_json::from_slice::<StrictValue>(bytes).map(|value| value.0)
 }
 
+pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Value, D::Error> {
+    StrictValue::deserialize(deserializer).map(|value| value.0)
+}
+
 struct StrictValue(Value);
 
 impl<'de> Deserialize<'de> for StrictValue {

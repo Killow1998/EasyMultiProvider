@@ -35,7 +35,13 @@ mod implementation {
         pub(in crate::server) fn request(&self, _: &str, _: &HttpObservation, _: &ConnectionIo) {}
 
         #[inline]
-        pub(in crate::server) fn module_route(&self, _: &str, _: &ActiveModule, _: &Caller) {}
+        pub(in crate::server) fn module_route(
+            &self,
+            _: &axum::http::HeaderValue,
+            _: &ActiveModule,
+            _: &Caller,
+        ) {
+        }
 
         #[inline]
         pub(in crate::server) async fn health_handler(&self, _: bool) {}
@@ -260,13 +266,13 @@ mod implementation {
 
         pub(in crate::server) fn module_route(
             &self,
-            id: &str,
+            id: &axum::http::HeaderValue,
             module: &ActiveModule,
             caller: &Caller,
         ) {
             self.module_routes.lock().unwrap().push((
                 module.id.to_string(),
-                id.to_owned(),
+                id.to_str().expect("validated route ID").to_owned(),
                 module.generation,
                 caller.id.clone(),
             ));

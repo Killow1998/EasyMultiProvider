@@ -1,10 +1,11 @@
 use super::{
-    SIDEBAND, accept_sideband, budget, fixture_with_sideband, read_control_request, read_request,
+    SIDEBAND, accept_sideband, budget, fixture_with_sideband, read_control_request,
     registry::with_registry_server, write_response,
 };
 use crate::{
     lifecycle::ServerHandle,
     modules::process::ModuleProcess,
+    server::http::tests::json_body,
     server::{
         http::tests::{assert_status, assert_wire, request},
         raw_tcp::head as read_head,
@@ -13,13 +14,14 @@ use crate::{
 use emp_modules::{
     handshake::{INITIALIZE, Initialize, Initialized, ROUTE_ID_HEADER},
     manifest::ModuleManifest,
-    peer::{CallError, Handlers},
+    peer::Handlers,
 };
-use serde_json::Value;
-use std::{fs::File, io, net::Ipv4Addr, path::Path, sync::Arc};
+use emp_test_support::test_timeout;
+use std::{fs::File, future::pending, io, net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpSocket, TcpStream},
+    sync::Notify,
     task::JoinSet,
     time::timeout,
 };
@@ -35,11 +37,14 @@ const MANIFEST: &str = r#"{
         {"type":"http_route","id":"probe","method":"GET","path":"/probe","auth":"management"},
         {"type":"http_route","id":"drop","method":"GET","path":"/drop","auth":"management"},
         {"type":"http_route","id":"redirect","method":"GET","path":"/redirect","auth":"management"},
+        {"type":"http_route","id":"framing","method":"GET","path":"/framing","auth":"management"},
         {"type":"http_route","id":"truncated","method":"GET","path":"/truncated","auth":"management"}
     ]
 }"#;
 const FIRST_EVENT: &[u8] = b"8\r\ndata:a\n\n\r\n";
 const LAST_EVENT: &[u8] = b"8\r\ndata:z\n\n\r\n0\r\nX-Final: hidden\r\n\r\n";
+const LARGE_CHUNK: usize = 64 * 1024;
+const SLOW_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) fn child(mut output: File) {
     tokio::runtime::Builder::new_current_thread()
@@ -47,7 +52,10 @@ pub(super) fn child(mut output: File) {
         .build()
         .unwrap()
         .block_on(async {
-            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let listener = TcpSocket::new_v4().unwrap();
+            listener.set_recv_buffer_size(8 * 1024).unwrap();
+            listener.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+            let listener = listener.listen(16).unwrap();
             let data_port = listener.local_addr().unwrap().port().try_into().unwrap();
             let mut input = io::BufReader::new(io::stdin());
             let initialize = read_control_request(&mut input, INITIALIZE);
@@ -62,17 +70,18 @@ pub(super) fn child(mut output: File) {
                 &initialize["id"],
                 &serde_json::to_string(&initialized).unwrap(),
             );
-            let mut exit =
-                tokio::task::spawn_blocking(move || read_request(&mut input, "module.exit"));
+            let close_control = Arc::new(Notify::new());
+            let mut output = Some(output);
             let mut requests = JoinSet::new();
             loop {
                 tokio::select! {
-                    result = &mut exit => {
-                        result.unwrap();
-                        return;
-                    }
+                    _ = close_control.notified(), if output.is_some() => drop(output.take()),
                     client = listener.accept() => {
-                        requests.spawn(serve(client.unwrap().0, authorization.clone()));
+                        requests.spawn(serve(
+                            client.unwrap().0,
+                            authorization.clone(),
+                            close_control.clone(),
+                        ));
                     }
                     Some(result) = requests.join_next() => result.unwrap(),
                 }
@@ -92,7 +101,7 @@ fn fields<'a>(head: &'a [u8], name: &str) -> Vec<&'a [u8]> {
         .collect()
 }
 
-async fn serve(socket: TcpStream, authorization: Arc<str>) {
+async fn serve(socket: TcpStream, authorization: Arc<str>, close_control: Arc<Notify>) {
     let mut socket = BufReader::new(socket);
     let head = read_head(&mut socket).await.unwrap();
     if fields(&head, "authorization") != [authorization.as_bytes()] {
@@ -119,6 +128,16 @@ async fn serve(socket: TcpStream, authorization: Arc<str>) {
             socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://example.invalid/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
             return;
         }
+        b"/framing" => {
+            let response: &[u8] = match target {
+                b"/framing?te-cl" => b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+                b"/framing?te-chain" => b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+                b"/framing?conflicting-cl" => b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 5\r\n\r\nhello",
+                _ => panic!("unexpected framing fixture"),
+            };
+            socket.write_all(response).await.unwrap();
+            return;
+        }
         _ => {}
     }
 
@@ -134,6 +153,7 @@ async fn serve(socket: TcpStream, authorization: Arc<str>) {
             socket.read_exact(&mut bytes[2..]).await.unwrap();
             socket.write_all(
                 b"HTTP/1.1 201 Created\r\nContent-Length: 6\r\nContent-Type: application/octet-stream\r\n\
+                  Content-Encoding: fixture-encoding\r\n\
                   X-Reply: first\r\nX-Reply: \x80\r\nConnection: close, X-Internal\r\nConnection: X-Another\r\n\
                   X-Internal: hidden\r\nX-Another: hidden\r\nProxy-Authenticate: hidden\r\n\
                   Set-Cookie: module=1\r\nAccess-Control-Allow-Origin: *\r\n\
@@ -158,6 +178,9 @@ async fn serve(socket: TcpStream, authorization: Arc<str>) {
             let mut first = [0];
             socket.read_exact(&mut first).await.unwrap();
             side.write_all(&first).await.unwrap();
+            if target == b"/upload?blocked" {
+                pending::<()>().await;
+            }
         }
         b"/wait" => {}
         _ => panic!("undeclared private request"),
@@ -169,8 +192,26 @@ async fn serve(socket: TcpStream, authorization: Arc<str>) {
             side.write_all(b"x").await.unwrap();
         }
         gate = side.read_u8(), if matches!(path, b"/sse" | b"/truncated") => {
-            assert_eq!(gate.unwrap(), b'r');
+            let gate = gate.unwrap();
+            if target == b"/sse?old" {
+                assert_eq!(gate, b'c');
+                close_control.notify_one();
+                pending::<()>().await;
+            }
+            assert_eq!(gate, b'r');
             if path == b"/sse" {
+                if target == b"/sse?slow" {
+                    let mut chunk = format!("{LARGE_CHUNK:x}\r\n").into_bytes();
+                    chunk.resize(chunk.len() + LARGE_CHUNK, b'x');
+                    chunk.extend_from_slice(b"\r\n");
+                    for index in 0..SLOW_RESPONSE_BYTES / LARGE_CHUNK {
+                        socket.write_all(&chunk).await.unwrap();
+                        if index == 0 {
+                            side.write_all(b"w").await.unwrap();
+                        }
+                    }
+                    side.write_all(b"d").await.unwrap();
+                }
                 socket.write_all(LAST_EVENT).await.unwrap();
             }
         }
@@ -263,9 +304,11 @@ fn data_channel_preserves_body_and_header_bytes_across_the_trust_boundary() {
                     "X-EMP-Route-ID: forged",
                     "X-EMP-Peer-IP: 192.0.2.1",
                     "X-EMP-Caller-ID: forged",
+                    "X-EMP-Request-ID: forged",
                     "X-Forwarded-For: 192.0.2.2",
                     "Forwarded: for=192.0.2.3",
                     "X-Aero-Caller-Key: forged",
+                    "X-Aero-Caller-Id: forged",
                 ],
                 b"\0\xff",
             );
@@ -296,9 +339,14 @@ fn data_channel_preserves_body_and_header_bytes_across_the_trust_boundary() {
                 "x-forwarded-for",
                 "forwarded",
                 "x-aero-caller-key",
+                "x-aero-caller-id",
             ] {
                 assert!(fields(&head, name).is_empty(), "{name}");
             }
+            let request_ids = fields(&head, "x-emp-request-id");
+            assert_eq!(request_ids.len(), 1);
+            assert_eq!(request_ids[0].len(), 16);
+            assert!(request_ids[0].iter().all(u8::is_ascii_hexdigit));
             assert_eq!(fields(&head, "connection"), [b"close".as_slice()]);
             let mut received = [0; 2];
             side.read_exact(&mut received).await.unwrap();
@@ -306,6 +354,10 @@ fn data_channel_preserves_body_and_header_bytes_across_the_trust_boundary() {
             client.write_all(b"\r\n\x80\x01").await.unwrap();
             let head = read_head(&mut client).await.unwrap();
             assert_status(&head, 201);
+            assert_eq!(
+                fields(&head, "content-encoding"),
+                [b"fixture-encoding".as_slice()]
+            );
             assert_eq!(
                 fields(&head, "x-reply"),
                 [b"first".as_slice(), b"\x80".as_slice()]
@@ -385,14 +437,29 @@ async fn finish_sse(mut client: BufReader<TcpStream>, mut side: BufReader<TcpStr
 }
 
 #[test]
-fn data_channel_streams_two_requests_without_waiting_for_either_tail() {
+fn a_backpressured_response_does_not_block_another_stream() {
     with_registry_server(async |server, root| {
         let (process, side) = start(server, root, 1).await;
         timeout(budget(), async {
-            let (slow, hold) = start_sse(server, &side, "/sse?slow").await;
+            let (mut slow, mut hold) = start_sse(server, &side, "/sse?slow").await;
+            hold.write_all(b"r").await.unwrap();
+            assert_eq!(hold.read_u8().await.unwrap(), b'w');
+            assert!(
+                timeout(
+                    test_timeout(Duration::from_secs(1)).duration(),
+                    hold.read_u8()
+                )
+                .await
+                .is_err(),
+                "a paused public reader must backpressure the module producer"
+            );
             let (fast, release) = start_sse(server, &side, "/sse?fast").await;
             finish_sse(fast, release).await;
-            finish_sse(slow, hold).await;
+            let bytes = tokio::io::copy(&mut slow, &mut tokio::io::sink())
+                .await
+                .unwrap();
+            assert!(bytes >= SLOW_RESPONSE_BYTES as u64);
+            assert_eq!(hold.read_u8().await.unwrap(), b'd');
         })
         .await
         .unwrap();
@@ -438,54 +505,132 @@ fn client_disconnect_closes_the_private_upload_and_both_response_phases() {
 }
 
 #[test]
-fn exiting_generation_invalidates_its_bearer_and_keeps_the_replacement() {
+fn losing_control_closes_the_old_listener_and_stream_before_replacement() {
     with_registry_server(async |server, root| {
         let (old, old_side) = start(server, root, 1).await;
         let new = timeout(budget(), async {
-            let (mut old_response, _old_event) = start_sse(server, &old_side, "/sse?old").await;
-            let (new, new_side) = start(server, root, 2).await;
-            let (new_response, new_event) = start_sse(server, &new_side, "/sse?new").await;
-            let old_exit = old
-                .connection()
-                .start_request("module.exit", Value::Null)
-                .unwrap();
-            let status = tokio::task::spawn_blocking(move || old_exit.wait(budget()))
-                .await
-                .unwrap();
-            assert!(matches!(status, Err(CallError::Disconnected)));
-            let old_key = old
-                .data_endpoint
-                .as_ref()
-                .unwrap()
-                .authorization
-                .to_str()
-                .unwrap()
-                .to_owned();
-            assert!(old.stop().await.unwrap().success());
-            server.state.backend.modules.registry.revoke("data", 1);
+            let (mut old_response, mut old_event) = start_sse(server, &old_side, "/sse?old").await;
+            let old_endpoint = old.data_endpoint.as_ref().unwrap();
+            let old_port = old_endpoint.port.get();
+            let old_address = (Ipv4Addr::LOCALHOST, old_port).into();
+            let old_key = old_endpoint.authorization.to_str().unwrap();
+            let bearer = format!("Authorization: {old_key}");
+            let probe = request(old_port, "GET", "/probe", &[&bearer], b"");
+            assert_wire(old_address, &probe, false, 200).await;
+            old_event.write_all(b"c").await.unwrap();
             let mut tail = Vec::new();
             old_response.read_to_end(&mut tail).await.unwrap();
             assert!(tail.is_empty());
+            let mut replay_reply = Vec::new();
+            let replay_result = async {
+                let mut socket = TcpStream::connect(old_address).await?;
+                socket.write_all(&probe).await?;
+                socket.read_to_end(&mut replay_reply).await
+            }
+            .await;
+            if let Err(error) = replay_result {
+                assert!(
+                    matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionRefused
+                            | io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::ConnectionAborted
+                            | io::ErrorKind::BrokenPipe
+                    ),
+                    "{error}"
+                );
+            }
+            assert!(
+                replay_reply.is_empty() || replay_reply.starts_with(b"HTTP/1.1 401 "),
+                "the old listener accepted the revoked bearer: {replay_reply:?}"
+            );
+            assert_eq!(old_event.read(&mut [0]).await.unwrap(), 0);
+            let wire = public_request(server, "GET", "/probe", &[], b"");
+            assert_wire(server.local_addr(), &wire, false, 503).await;
+
+            let (new, new_side) = start(server, root, 2).await;
+            let (new_response, new_event) = start_sse(server, &new_side, "/sse?new").await;
             let endpoint = new.data_endpoint.as_ref().unwrap();
             let address = (Ipv4Addr::LOCALHOST, endpoint.port.get()).into();
-            let replay = request(
-                endpoint.port.get(),
-                "GET",
-                "/probe",
-                &[&format!("Authorization: {old_key}")],
-                b"",
-            );
+            let replay = request(endpoint.port.get(), "GET", "/probe", &[&bearer], b"");
             assert_wire(address, &replay, false, 401).await;
             finish_sse(new_response, new_event).await;
-            let wire = public_request(server, "GET", "/probe", &[], b"");
             assert_wire(server.local_addr(), &wire, false, 200).await;
             new
         })
         .await
         .unwrap();
+        old.stop().await.unwrap();
         new.stop().await.unwrap();
         let wire = public_request(server, "GET", "/probe", &[], b"");
         assert_wire(server.local_addr(), &wire, false, 503).await;
+    });
+}
+
+#[test]
+fn a_disconnected_backpressured_upload_releases_its_admission_slot() {
+    with_registry_server(async |server, root| {
+        let (process, side) = start(server, root, 1).await;
+        let length = 5 * 1024 * 1024;
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.set_send_buffer_size(16 * 1024).unwrap();
+        let mut client = socket.connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(&public_request(
+                server,
+                "POST",
+                "/upload?blocked",
+                &[&format!("Content-Length: {length}")],
+                b"u",
+            ))
+            .await
+            .unwrap();
+        let mut module = BufReader::new(accept_sideband(&side).await);
+        timeout(budget(), async {
+            read_head(&mut module).await.unwrap();
+            assert_eq!(module.read_u8().await.unwrap(), b'u');
+        })
+        .await
+        .unwrap();
+
+        let data = vec![b'u'; length - 2];
+        let mut sent = 0;
+        assert!(
+            timeout(test_timeout(Duration::from_secs(1)).duration(), async {
+                while sent < data.len() {
+                    sent += client.write(&data[sent..]).await.unwrap();
+                }
+            })
+            .await
+            .is_err(),
+            "the upload must reach backpressure while the module pauses"
+        );
+        assert!(sent > 0);
+        let admission = &server.state.lifecycle.admission;
+        assert_eq!(admission.active_requests(), 1);
+        client.set_zero_linger().unwrap();
+        drop(client);
+        assert!(
+            admission.quiesce(0, budget()).is_some(),
+            "the disconnected upload still holds its admission slot"
+        );
+        process.stop().await.unwrap();
+    });
+}
+
+#[test]
+fn invalid_private_response_framing_is_rejected_before_public_success() {
+    with_registry_server(async |server, root| {
+        let (process, _side) = start(server, root, 1).await;
+        for query in ["te-cl", "te-chain", "conflicting-cl"] {
+            let wire = public_request(server, "GET", &format!("/framing?{query}"), &[], b"");
+            let reply = assert_wire(server.local_addr(), &wire, false, 502).await;
+            assert_eq!(
+                json_body(&reply)["error"]["message"],
+                "module data request failed"
+            );
+        }
+        process.stop().await.unwrap();
     });
 }
 

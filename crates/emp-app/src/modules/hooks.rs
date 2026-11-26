@@ -34,9 +34,7 @@ enum Reply<T> {
 
 impl<T: DeserializeOwned> Reply<T> {
     fn decode(reply: Value) -> Result<Self, Failure> {
-        let Value::Object(mut reply) = reply else {
-            return Err(Failure::InvalidReply);
-        };
+        let mut reply = emp_modules::reply_object(reply).map_err(|_| Failure::InvalidReply)?;
         match reply.remove("status").as_ref().and_then(Value::as_str) {
             Some("claimed") if reply.len() == 1 => reply
                 .remove("value")

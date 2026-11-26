@@ -55,6 +55,44 @@ fn module_routes_match_literal_paths_and_authorize_before_handoff() {
     with_registry_server(check_routes);
 }
 
+#[test]
+fn half_closed_requests_receive_complete_module_route_errors() {
+    with_registry_server(async |server, state_dir| {
+        let (process, manifest) = start(
+            state_dir,
+            "fixture-module",
+            json!([
+                {"type":"http_route","id":"root","method":"GET","path":"/","auth":"management"},
+            ]),
+        )
+        .await;
+        let address = server.local_addr();
+        let port = address.port();
+        let backend = &server.state.backend;
+        backend
+            .modules
+            .registry
+            .publish(manifest, 1, &process, port, backend.gateway_key.len())
+            .unwrap();
+        let session = format!("X-EMP-Session: {}", server.session_token());
+        for (path, headers, status, message) in [
+            ("/missing", [].as_slice(), 404, "not found"),
+            ("/", [].as_slice(), 401, "management session is required"),
+            (
+                "/",
+                [session.as_str()].as_slice(),
+                503,
+                "module data endpoint is unavailable",
+            ),
+        ] {
+            let wire = request(port, "GET", &format!("{PREFIX}{path}"), headers, b"");
+            let reply = assert_wire(address, &wire, true, status).await;
+            assert_eq!(json_body(&reply)["error"]["message"], message);
+        }
+        process.stop().await.unwrap();
+    });
+}
+
 async fn check_routes(server: &ServerHandle, state_dir: &Path) {
     let address = server.local_addr();
     let port = address.port();

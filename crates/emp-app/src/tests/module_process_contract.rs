@@ -15,10 +15,10 @@ use rustix::{
 use serde_json::{Value, json};
 use std::{
     cell::Cell,
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
     net::Ipv4Addr,
-    os::unix::process::ExitStatusExt,
+    os::{fd::FromRawFd, unix::process::ExitStatusExt},
     process::{Child, Command, Stdio},
     sync::mpsc,
     time::Duration,
@@ -73,6 +73,12 @@ fn module_fixture() {
         let _ = deadline.io(socket).read(&mut [0]);
         return;
     }
+    if mode == "data" {
+        // SAFETY: The fixture shell gives this process ownership of the control writer on fd 3.
+        let output = unsafe { File::from_raw_fd(3) };
+        data::child(output);
+        return;
+    }
     let mut output = OpenOptions::new().write(true).open("/dev/fd/3").unwrap();
     if mode.starts_with("escape-") {
         let mut descendant = Command::new("sh")
@@ -120,10 +126,6 @@ fn module_fixture() {
         hooks::child(output);
         return;
     }
-    if mode == "data" {
-        data::child(output);
-        return;
-    }
     if matches!(mode.as_str(), "exit" | "exit-tree" | "duplicate-manifest") {
         let mut input = BufReader::new(io::stdin());
         let initialize = read_request(&mut input, "module.initialize");
@@ -167,6 +169,9 @@ fn module_fixture() {
         }
         if mode == "incompatible" {
             manifest.host_api.min_minor = 1;
+        }
+        if mode == "array-reply" {
+            return Ok(json!([manifest, 12345]));
         }
         Ok(serde_json::to_value(Initialized {
             manifest,
@@ -241,6 +246,15 @@ async fn connect_passes_the_host_api_and_state_dir_and_accepts_a_valid_manifest(
     assert!(initialize.module_bearer != initialize.core_bearer);
     assert_eq!(manifest.id, "fixture-module");
     process.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn handshake_rejects_a_positional_reply_with_a_valid_manifest_and_port() {
+    let state_dir = fixture_dir().unwrap();
+    let (handlers, _report) = host_handlers();
+    let outcome =
+        ModuleProcess::start(fixture("array-reply"), state_dir.path(), handlers, budget()).await;
+    assert!(matches!(outcome, Err(StartError::InvalidManifest(_))));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
