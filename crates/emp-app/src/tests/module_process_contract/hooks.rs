@@ -5,30 +5,30 @@ use crate::{
 };
 use emp_modules::{
     manifest::HookPhase::{self, CallFinished, CheckAccess, ProjectCatalog, ResolveRoute},
-    peer::{CallError, Handlers, Peer, Side},
+    peer::{CallError, Handlers, Message, Peer, Side},
 };
 use emp_storage::diagnostics::ServiceOwner;
 use emp_test_support::{fixture_dir, test_timeout};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs::File,
     io::{self, BufReader},
+    ops::RangeInclusive,
     sync::{Arc, Mutex, mpsc},
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 use tempfile::TempDir;
 use tokio::{
     sync::{mpsc as events, oneshot},
     task::JoinHandle,
-    time::{sleep_until, timeout},
+    time::{sleep_until, timeout, timeout_at},
 };
 
-#[derive(Default, Deserialize, Serialize)]
-struct NotificationReceipts {
-    call_finished: usize,
-    cancellations: Vec<SystemTime>,
-}
+const PHASE_BUDGET: Duration = Duration::from_secs(5);
+const CANCEL_REQUEST: &str = "$/cancelRequest";
+const RECEIVED_FRAME: &str = "host.received_frame";
+type FrameReceipt = (String, Value);
+type ReceivedFrame = (String, FrameReceipt, Instant);
 
 pub(super) fn child(output: File) {
     let manifest: Value =
@@ -37,6 +37,7 @@ pub(super) fn child(output: File) {
         serde_json::from_str(&std::env::var("EMP_TEST_HOOK_BEHAVIORS").unwrap()).unwrap();
     let (release, gated) = mpsc::channel();
     let gated = Arc::new(Mutex::new(gated));
+    let gate_budget = PHASE_BUDGET + test_timeout(Duration::from_secs(25)).duration();
     let mut handlers = Handlers::default();
     for phase in [CallFinished, CheckAccess, ProjectCatalog, ResolveRoute] {
         let method = phase.method();
@@ -50,11 +51,7 @@ pub(super) fn child(output: File) {
             )
             .unwrap();
             if matches!(behavior.as_str(), Some("exit" | "block")) {
-                gated
-                    .lock()
-                    .unwrap()
-                    .recv_timeout(test_timeout(Duration::from_secs(25)).duration())
-                    .unwrap();
+                gated.lock().unwrap().recv_timeout(gate_budget).unwrap();
                 if behavior == "exit" {
                     std::process::exit(0);
                 }
@@ -79,25 +76,34 @@ pub(super) fn child(output: File) {
         release.send(()).unwrap();
         Ok(Value::Null)
     });
-    let receipts = Arc::new(Mutex::new(NotificationReceipts::default()));
+    let receipts = Arc::new(Mutex::new(Vec::<FrameReceipt>::new()));
     let reported = receipts.clone();
     handlers.register("module.receipts", move |_, _, _| {
         Ok(serde_json::to_value(&*reported.lock().unwrap()).unwrap())
     });
-    Peer::connect_recording_notifications(
+    Peer::connect_observing_frames(
         Side::Module,
         BufReader::new(io::stdin()),
         output,
         handlers,
-        move |method| match method {
-            "$/cancelRequest" => {
-                let received = SystemTime::now();
-                receipts.lock().unwrap().cancellations.push(received);
-            }
-            method if method == CallFinished.method() => {
-                receipts.lock().unwrap().call_finished += 1;
-            }
-            _ => {}
+        move |message, peer| {
+            let receipt = match message {
+                Message::Request(request) if request.method == ProjectCatalog.method() => {
+                    (request.method.clone(), json!(request.id))
+                }
+                Message::Notification(notification) if notification.method == CANCEL_REQUEST => (
+                    notification.method.clone(),
+                    notification.params["id"].clone(),
+                ),
+                Message::Notification(notification)
+                    if notification.method == CallFinished.method() =>
+                {
+                    (notification.method.clone(), Value::Null)
+                }
+                _ => return,
+            };
+            peer.notify(RECEIVED_FRAME, json!(receipt)).unwrap();
+            receipts.lock().unwrap().push(receipt);
         },
     )
     .unwrap()
@@ -110,6 +116,8 @@ struct Fixture {
     diagnostics: Arc<Diagnostics>,
     report: events::UnboundedSender<Value>,
     seen: events::UnboundedReceiver<Value>,
+    record: events::UnboundedSender<ReceivedFrame>,
+    frames: events::UnboundedReceiver<ReceivedFrame>,
     root: TempDir,
 }
 
@@ -122,11 +130,14 @@ impl Fixture {
             .journal
             .attach(Arc::new(ServiceOwner::acquire(&state_root).unwrap()));
         let (report, seen) = events::unbounded_channel();
+        let (record, frames) = events::unbounded_channel();
         Self {
             registry: Arc::default(),
             diagnostics: Arc::new(diagnostics),
             report,
             seen,
+            record,
+            frames,
             root,
         }
     }
@@ -157,12 +168,26 @@ impl Fixture {
         });
         let registry = self.registry.clone();
         let module = id.to_owned();
+        let recorded_module = module.clone();
+        let record = self.record.clone();
         let (process, manifest) = ModuleProcess::start_with_connector(
             command,
             self.root.path(),
             handlers,
             budget(),
-            Peer::connect,
+            |side, reader, writer, handlers| {
+                Peer::connect_observing_frames(side, reader, writer, handlers, move |frame, _| {
+                    if let Message::Notification(notification) = frame
+                        && notification.method == RECEIVED_FRAME
+                    {
+                        let received_at = Instant::now();
+                        let receipt = serde_json::from_value(notification.params.clone()).unwrap();
+                        record
+                            .send((recorded_module.clone(), receipt, received_at))
+                            .unwrap();
+                    }
+                })
+            },
             move || registry.revoke(&module, generation),
         )
         .await
@@ -223,7 +248,7 @@ async fn fixture_call(process: &ModuleProcess, method: &'static str) -> Result<V
         .unwrap()
 }
 
-async fn receipts(process: &ModuleProcess) -> NotificationReceipts {
+async fn receipts(process: &ModuleProcess) -> Vec<FrameReceipt> {
     serde_json::from_value(fixture_call(process, "module.receipts").await.unwrap()).unwrap()
 }
 
@@ -287,7 +312,17 @@ async fn call_finished_reaches_a_live_subscriber_after_the_first_exits() {
     first.stop().await.unwrap();
 
     operation.notify_finished(json!({"result":"success"}));
-    assert_eq!(receipts(&unsubscribed).await.call_finished, 0);
+    for (process, expected) in [(&unsubscribed, 0), (&later, 1)] {
+        assert_eq!(
+            receipts(process)
+                .await
+                .iter()
+                .filter(|(method, _)| method == CallFinished.method())
+                .count(),
+            expected,
+            "expected {expected} CallFinished frames"
+        );
+    }
     assert_eq!(
         fixture.event().await,
         json!({
@@ -303,8 +338,24 @@ async fn call_finished_reaches_a_live_subscriber_after_the_first_exits() {
     later.stop().await.unwrap();
 }
 
+fn phase_observation_window(
+    started: Instant,
+    parent_deadline: Option<Instant>,
+) -> (Instant, RangeInclusive<Instant>) {
+    let phase_end = started + PHASE_BUDGET;
+    let expected_end = phase_end.min(parent_deadline.unwrap_or(phase_end));
+    let margin = test_timeout(Duration::from_millis(750)).duration();
+    (expected_end, expected_end - margin..=expected_end + margin)
+}
+
 #[tokio::test]
 async fn hooks_share_a_phase_deadline_and_report_timeout() {
+    for parent_budget in [None, Some(Duration::from_secs(2))] {
+        check_shared_phase_deadline(parent_budget).await;
+    }
+}
+
+async fn check_shared_phase_deadline(parent_budget: Option<Duration>) {
     let mut fixture = Fixture::new();
     let first = fixture
         .install(
@@ -322,42 +373,75 @@ async fn hooks_share_a_phase_deadline_and_report_timeout() {
             json!({(ProjectCatalog.method()):"block"}),
         )
         .await;
-    let phase_budget = Duration::from_secs(5);
-    let operation = fixture.capture("deadline");
+    let registry = fixture.registry.clone();
+    let diagnostics = fixture.diagnostics.clone();
     let (start, started) = oneshot::channel();
     let running = tokio::task::spawn_blocking(move || {
-        start.send((Instant::now(), SystemTime::now())).unwrap();
-        operation.dispatch::<bool, _>(ProjectCatalog, || Value::Null, |_, value| Ok(Some(value)))
+        let parent_deadline = parent_budget.map(|budget| Instant::now() + budget);
+        let operation =
+            HookOperation::capture(&registry, &diagnostics, Some("deadline"), parent_deadline)
+                .unwrap();
+        start.send((Instant::now(), parent_deadline)).unwrap();
+        let result = operation.dispatch::<bool, _>(
+            ProjectCatalog,
+            || Value::Null,
+            |_, value| Ok(Some(value)),
+        );
+        (result, Instant::now())
     });
-    let (started, wall_started) = started.await.unwrap();
-    let entered = fixture.event().await;
-    assert_eq!(entered["module_id"], "alpha");
-    assert_eq!(entered["method"], ProjectCatalog.method());
-    sleep_until((started + phase_budget / 2).into()).await;
-    fixture_call(&first, "module.release").await.unwrap();
+    let (started, parent_deadline) = started.await.unwrap();
+    let (expected_end, cancel_window) = phase_observation_window(started, parent_deadline);
+    let cutoff = *cancel_window.end();
+    let (request_id, (module, cancellation, received_at)) = timeout_at(cutoff.into(), async {
+        let (module, (method, _), _) = fixture.frames.recv().await.unwrap();
+        assert_eq!(
+            (module.as_str(), method.as_str()),
+            ("alpha", ProjectCatalog.method())
+        );
+        sleep_until((started + (expected_end - started) / 2).into()).await;
+        fixture_call(&first, "module.release").await.unwrap();
+        let entered = fixture.seen.recv().await.unwrap();
+        assert_eq!(entered["module_id"], "alpha");
+        assert_eq!(entered["method"], ProjectCatalog.method());
+        assert_eq!(
+            fixture.seen.recv().await.unwrap(),
+            json!({"module_id":"alpha","method":"cancelled","params":false})
+        );
+        let (module, (method, request_id), _) = fixture.frames.recv().await.unwrap();
+        assert_eq!(
+            (module.as_str(), method.as_str()),
+            ("zeta", ProjectCatalog.method())
+        );
+        (request_id, fixture.frames.recv().await.unwrap())
+    })
+    .await
+    .expect("expected the zeta cancellation receipt by the observation deadline");
+    assert_eq!(module, "zeta");
     assert_eq!(
-        fixture.event().await,
-        json!({"module_id":"alpha","method":"cancelled","params":false})
+        cancellation,
+        (CANCEL_REQUEST.to_owned(), request_id),
+        "expected cancellation for the zeta ProjectCatalog request"
     );
-    let entered = fixture.event().await;
-    assert_eq!(entered["module_id"], "zeta");
-    assert_eq!(entered["method"], ProjectCatalog.method());
-    assert_eq!(
-        timeout(test_timeout(Duration::from_secs(10)).duration(), running)
-            .await
-            .unwrap()
-            .unwrap(),
-        Ok(None)
-    );
-    let received = receipts(&later).await.cancellations;
-    let [received] = received.as_slice() else {
-        panic!("expected exactly one cancellation frame, got {received:?}");
-    };
-    let elapsed = received.duration_since(wall_started).unwrap();
-    let window = phase_budget..=phase_budget + phase_budget / 4;
     assert!(
-        window.contains(&elapsed),
-        "expected a cancellation frame in {window:?}, got {elapsed:?}"
+        cancel_window.contains(&received_at),
+        "expected the cancellation receipt in {cancel_window:?}, got {received_at:?}"
+    );
+    let (result, returned_at) = timeout_at(cutoff.into(), running)
+        .await
+        .expect("expected dispatch to return by the observation deadline")
+        .unwrap();
+    assert!(
+        returned_at <= cutoff,
+        "dispatch returned past {cutoff:?} at {returned_at:?}"
+    );
+    assert_eq!(result, Ok(None));
+    assert_eq!(
+        receipts(&later)
+            .await
+            .iter()
+            .filter(|(method, _)| method == CANCEL_REQUEST)
+            .count(),
+        1
     );
     assert_eq!(
         fixture.failures("deadline"),

@@ -342,12 +342,13 @@ fn timeout_claims_the_request_before_a_late_reply() {
     let Message::Request(request) = outbound_frame(&outbound) else {
         panic!("expected the request that will time out");
     };
-    let (claimed, claim) = mpsc::channel();
+    let (preparing, prepare) = mpsc::channel();
     let (resume, paused) = mpsc::channel();
     let waiter = Observation::spawn(move |probe| {
         probe.observe(|deadline| {
-            pending.wait_observing_timeout(Duration::ZERO, || {
-                claimed.send(()).unwrap();
+            let deadline = *deadline;
+            pending.wait_before_cancel_frame(Duration::ZERO, move || {
+                preparing.send(()).unwrap();
                 paused.recv_timeout(deadline.remaining()).unwrap();
             })
         });
@@ -356,7 +357,7 @@ fn timeout_claims_the_request_before_a_late_reply() {
         Deadline::after(test_timeout(Duration::from_secs(5))),
         "timed out waiter",
     );
-    claim.recv_timeout(budget()).unwrap();
+    prepare.recv_timeout(budget()).unwrap();
 
     let confirmation = host.start_request("module.confirm", Value::Null).unwrap();
     let Message::Request(confirm) = outbound_frame(&outbound) else {

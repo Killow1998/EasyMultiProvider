@@ -1,6 +1,10 @@
 pub use lsp_server::{ErrorCode, ResponseError};
 
-use lsp_server::{Message, Notification, Request, RequestId, Response};
+#[cfg(feature = "test-support")]
+pub use lsp_server::Message;
+#[cfg(not(feature = "test-support"))]
+use lsp_server::Message;
+use lsp_server::{Notification, Request, RequestId, Response};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -18,6 +22,13 @@ use std::{
 
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const CANCEL_REQUEST: &str = "$/cancelRequest";
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static BEFORE_CANCEL_FRAME: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
 
 #[derive(Clone, Copy)]
 pub enum Side {
@@ -229,7 +240,7 @@ impl Peer {
         writer: impl Write + Send + 'static,
         handlers: Handlers,
     ) -> io::Result<Self> {
-        Self::connect_inner(side, reader, writer, handlers, |_| {}, || {}, |_| {})
+        Self::connect_inner(side, reader, writer, handlers, |_| {}, || {}, |_, _| {})
     }
 
     #[cfg(feature = "test-support")]
@@ -248,31 +259,19 @@ impl Peer {
             handlers,
             reader_exiting,
             writer_exiting,
-            |_| {},
+            |_, _| {},
         )
     }
 
     #[cfg(feature = "test-support")]
-    pub fn connect_recording_notifications(
+    pub fn connect_observing_frames(
         side: Side,
         reader: impl BufRead + Send + 'static,
         writer: impl Write + Send + 'static,
         handlers: Handlers,
-        mut record: impl FnMut(&str) + Send + 'static,
+        observe: impl FnMut(&Message, &PeerHandle) + Send + 'static,
     ) -> io::Result<Self> {
-        Self::connect_inner(
-            side,
-            reader,
-            writer,
-            handlers,
-            |_| {},
-            || {},
-            move |message| {
-                if let Message::Notification(notification) = message {
-                    record(&notification.method);
-                }
-            },
-        )
+        Self::connect_inner(side, reader, writer, handlers, |_| {}, || {}, observe)
     }
 
     fn connect_inner(
@@ -282,7 +281,7 @@ impl Peer {
         handlers: Handlers,
         reader_exiting: impl FnOnce(Option<io::ErrorKind>) + Send + 'static,
         writer_exiting: impl FnOnce() + Send + 'static,
-        observe: impl FnMut(&Message) + Send + 'static,
+        observe: impl FnMut(&Message, &PeerHandle) + Send + 'static,
     ) -> io::Result<Self> {
         let (send, frames) = mpsc::channel();
         let (close, closed) = mpsc::channel();
@@ -420,6 +419,12 @@ impl PeerHandle {
             connection.writer()?;
             build(connection)
         };
+        #[cfg(feature = "test-support")]
+        if matches!(&message, Message::Notification(notification) if notification.method == CANCEL_REQUEST)
+            && let Some(before_frame) = BEFORE_CANCEL_FRAME.with_borrow_mut(Option::take)
+        {
+            before_frame();
+        }
         let frame = match Frame::encode(&message) {
             Ok(frame) => frame,
             Err(_) => {
@@ -514,10 +519,10 @@ impl PeerHandle {
         &self,
         reader: &mut impl BufRead,
         handlers: &Handlers,
-        mut observe: impl FnMut(&Message),
+        mut observe: impl FnMut(&Message, &PeerHandle),
     ) -> io::Result<()> {
         while let Some(message) = read_frame(reader)? {
-            observe(&message);
+            observe(&message, self);
             let mut state = self.connection.lock().unwrap();
             let Some(connection) = state.as_mut() else {
                 break;
@@ -663,25 +668,27 @@ impl PendingRequest {
     }
 
     pub fn wait(self, timeout: Duration) -> CallResult {
-        self.wait_inner(timeout, || {}, || {})
+        self.wait_inner(timeout, || {})
     }
 
     #[cfg(feature = "test-support")]
     pub fn wait_registered(self, timeout: Duration, registered: impl FnOnce()) -> CallResult {
-        self.wait_inner(timeout, registered, || {})
+        self.wait_inner(timeout, registered)
     }
 
     #[cfg(feature = "test-support")]
-    pub fn wait_observing_timeout(self, timeout: Duration, claimed: impl FnOnce()) -> CallResult {
-        self.wait_inner(timeout, || {}, claimed)
-    }
-
-    fn wait_inner(
+    pub fn wait_before_cancel_frame(
         self,
         timeout: Duration,
-        registered: impl FnOnce(),
-        claimed: impl FnOnce(),
+        before_frame: impl FnOnce() + 'static,
     ) -> CallResult {
+        BEFORE_CANCEL_FRAME.with_borrow_mut(|pause| *pause = Some(Box::new(before_frame)));
+        let result = self.wait(timeout);
+        BEFORE_CANCEL_FRAME.with_borrow_mut(|pause| *pause = None);
+        result
+    }
+
+    fn wait_inner(self, timeout: Duration, registered: impl FnOnce()) -> CallResult {
         let mut registered = Some(registered);
         let result = self.reply.result.lock().unwrap();
         let (mut result, _) = self
@@ -701,7 +708,7 @@ impl PendingRequest {
             return result;
         }
         drop(result);
-        self.canceller.finish(CallError::TimedOut, claimed);
+        self.canceller.finish(CallError::TimedOut);
         self.reply.result.lock().unwrap().take().unwrap()
     }
 }
@@ -720,10 +727,10 @@ pub struct RequestCanceller {
 
 impl RequestCanceller {
     pub fn cancel(&self) {
-        self.finish(CallError::Cancelled, || {});
+        self.finish(CallError::Cancelled);
     }
 
-    fn finish(&self, error: CallError, claimed: impl FnOnce()) {
+    fn finish(&self, error: CallError) {
         {
             let mut state = self.peer.connection.lock().unwrap();
             let Some(pending) = state
@@ -734,7 +741,6 @@ impl RequestCanceller {
             };
             pending.reply.complete(Err(error));
         }
-        claimed();
         let _ = self.peer.notify(CANCEL_REQUEST, json!({"id": self.id}));
     }
 }
